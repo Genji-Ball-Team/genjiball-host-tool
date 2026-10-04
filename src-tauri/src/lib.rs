@@ -10,7 +10,7 @@ mod uploader;
 mod uploads;
 mod watcher;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -29,15 +29,47 @@ use uploader::{UploadStatus, Uploader};
 struct Store {
     path: PathBuf,
     settings: Mutex<Settings>,
-    /// Why the file couldn't be read at startup, if it couldn't. The defaults are used until the
-    /// host changes a setting, which writes a fresh file.
+    /// Why the file can't be used, while it can't. The window shows the defaults until the host
+    /// changes a setting (which writes a fresh file) or fixes the file, but nothing is uploaded
+    /// with them: they'd be the live server and the detected folder, not what the host chose.
     load_error: Mutex<Option<String>>,
     tokens: Tokens,
 }
 
 impl Store {
+    /// The settings and tokens in `dir`, the app's config folder.
+    fn open(dir: &Path) -> Store {
+        let path = dir.join(config::SETTINGS_FILE);
+        let (settings, load_error) = match settings::load(&path) {
+            Ok(settings) => (settings, None),
+            Err(e) => (Settings::default(), Some(e)),
+        };
+        Store {
+            path,
+            settings: Mutex::new(settings),
+            load_error: Mutex::new(load_error),
+            tokens: Tokens::new(dir.join(config::TOKENS_FALLBACK_FILE)),
+        }
+    }
+
     fn get(&self) -> Settings {
         self.settings.lock().unwrap().clone()
+    }
+
+    /// `load_error`, after reading the file again: a file fixed by hand counts as soon as it's saved.
+    fn load_error(&self) -> Option<String> {
+        let mut settings = self.settings.lock().unwrap();
+        let mut error = self.load_error.lock().unwrap();
+        if error.is_some() {
+            match settings::load(&self.path) {
+                Ok(loaded) => {
+                    *settings = loaded;
+                    *error = None;
+                }
+                Err(e) => *error = Some(e),
+            }
+        }
+        error.clone()
     }
 
     fn update(&self, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
@@ -64,6 +96,7 @@ struct AppState {
 }
 
 fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> {
+    let settings_error = store.load_error();
     let settings = store.get();
     Ok(AppState {
         version: app.package_info().version.to_string(),
@@ -71,7 +104,7 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         default_server_url: config::DEFAULT_SERVER_URL,
         has_token: store.tokens.get(settings.server_url())?.is_some(),
         log_folder: log_folder::current(settings.log_folder.as_deref()),
-        settings_error: store.load_error.lock().unwrap().clone(),
+        settings_error,
     })
 }
 
@@ -232,17 +265,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
-            let path = dir.join(config::SETTINGS_FILE);
-            let (settings, load_error) = match settings::load(&path) {
-                Ok(settings) => (settings, None),
-                Err(e) => (Settings::default(), Some(e)),
-            };
-            app.manage(Store {
-                path,
-                settings: Mutex::new(settings),
-                load_error: Mutex::new(load_error),
-                tokens: Tokens::new(dir.join(config::TOKENS_FALLBACK_FILE)),
-            });
+            app.manage(Store::open(&dir));
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
             uploader::start(app.handle().clone());
             tray(app)?;
@@ -269,4 +292,40 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running the host tool");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn a_settings_error_lasts_until_the_file_is_fixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(config::SETTINGS_FILE);
+        fs::write(&path, r#"{ "serverUrl": "http://192.168.1.20:8787" }"#).unwrap();
+        let store = Store::open(dir.path());
+        assert!(store.load_error().is_some());
+        assert!(store.load_error().is_some(), "still");
+        // The defaults stand in meanwhile.
+        assert_eq!(store.get(), Settings::default());
+
+        fs::write(&path, r#"{ "serverUrl": "http://localhost:8787" }"#).unwrap();
+        assert_eq!(store.load_error(), None);
+        assert_eq!(store.get().server_url(), "http://localhost:8787");
+    }
+
+    #[test]
+    fn changing_a_setting_writes_a_fresh_file_and_clears_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(config::SETTINGS_FILE);
+        fs::write(&path, "{ broken").unwrap();
+        let store = Store::open(dir.path());
+        assert!(store.load_error().is_some());
+        store
+            .update(|s| s.server_url = Some("http://localhost:8787".into()))
+            .unwrap();
+        assert_eq!(store.load_error(), None);
+        assert_eq!(settings::load(&path).unwrap(), store.get());
+    }
 }

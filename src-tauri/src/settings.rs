@@ -30,13 +30,19 @@ impl Settings {
 
 /// The settings in `path`, or the defaults when the file doesn't exist yet. A file that can't be
 /// read as settings is an error rather than silently reset, so a typo doesn't lose the others.
+/// So is a server URL the window wouldn't take (`normalize_server_url`): the token is sent there.
 pub fn load(path: &Path) -> Result<Settings, String> {
-    match fs::read_to_string(path) {
+    let mut settings: Settings = match fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| format!("{} isn't valid settings: {e}", path.display())),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Settings::default()),
-        Err(e) => Err(format!("Couldn't read {}: {e}", path.display())),
+            .map_err(|e| format!("{} isn't valid settings: {e}", path.display()))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) => return Err(format!("Couldn't read {}: {e}", path.display())),
+    };
+    if let Some(url) = &settings.server_url {
+        settings.server_url = normalize_server_url(url)
+            .map_err(|e| format!("The server URL in {} won't do ({e})", path.display()))?;
     }
+    Ok(settings)
 }
 
 pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
@@ -175,6 +181,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load(&path).unwrap().server_url(), "http://localhost:8787");
+    }
+
+    #[test]
+    fn checks_the_server_url_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Edited by hand: plain http to another PC would send it the token unencrypted.
+        for bad in [
+            "http://192.168.1.20:8787",
+            "https://user:pass@genjiball.us",
+            "nope",
+        ] {
+            fs::write(&path, format!(r#"{{ "serverUrl": "{bad}" }}"#)).unwrap();
+            assert!(load(&path).is_err(), "{bad}");
+        }
+        // Stored as the window would have: normalized, and the default as `None`.
+        fs::write(&path, r#"{ "serverUrl": "https://test.genjiball.us/" }"#).unwrap();
+        assert_eq!(
+            load(&path).unwrap().server_url.as_deref(),
+            Some("https://test.genjiball.us")
+        );
+        fs::write(&path, r#"{ "serverUrl": "https://genjiball.us" }"#).unwrap();
+        assert_eq!(load(&path).unwrap().server_url, None);
     }
 
     #[test]

@@ -31,7 +31,7 @@ Every tunable lives in `src-tauri/src/config.rs` with its default and a comment 
 
 ## Settings and the host token
 
-- Settings live in `settings.json` in the app's config folder (`%APPDATA%\us.genjiball.hosttool`), through `src-tauri/src/settings.rs`. A setting left at its default is stored as `null`, so a new default reaches every host.
+- Settings live in `settings.json` in the app's config folder (`%APPDATA%\us.genjiball.hosttool`), through `src-tauri/src/settings.rs`. A setting left at its default is stored as `null`, so a new default reaches every host. A file that can't be read, or holds a server URL the window wouldn't take, pauses uploads (the defaults would be the live server and the real log folder) until it's fixed or a setting is changed.
 - The host token, one per server URL, goes through `src-tauri/src/credentials.rs`: Windows Credential Manager first. When that refuses (a Credential Manager filled by the Xbox app's tokens answers "not enough memory", common on gaming PCs), the token goes in `tokens.json`, encrypted with DPAPI for the Windows user (`dpapi.rs`).
 - The token never goes in a plain file, a log, an error message, the window's state or a diagnostics export.
 - The server checks a token with `GET /api/host/me` (genjiball-ranked `docs/api.md`). Only a `401` or `403` means a bad token; anything else is "couldn't check", and the token is saved anyway.

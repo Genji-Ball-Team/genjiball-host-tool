@@ -45,6 +45,7 @@ interface UploadStatus {
 
 /** Mirrors `Problem` in src-tauri/src/uploader.rs. */
 type Problem =
+  | { kind: "settings" }
   | { kind: "noFolder" }
   | { kind: "folderUnreadable"; message: string }
   | { kind: "noToken" }
@@ -132,7 +133,7 @@ function render(): void {
   el("version").textContent = `v${state.version}`;
   const settingsError = el("settings-error");
   settingsError.hidden = !state.settingsError;
-  settingsError.textContent = state.settingsError ? `${state.settingsError}. Using the defaults; changing a setting writes a new file.` : "";
+  settingsError.textContent = state.settingsError ? `${state.settingsError}. Uploads are paused until it's fixed. The defaults are shown; changing a setting writes a new file.` : "";
 
   el("welcome").hidden = state.hasToken;
   el("server").textContent = state.serverUrl;
@@ -166,6 +167,8 @@ function render(): void {
 
 function describeProblem(problem: Problem): string {
   switch (problem.kind) {
+    case "settings":
+      return "Paused until the settings file is fixed (see above).";
     case "noFolder":
       return "Waiting for the Workshop log folder.";
     case "folderUnreadable":
@@ -214,6 +217,8 @@ function describeAnswer(answer: Answer): { text: string; tone: Tone } {
 }
 
 function renderUploads(status: UploadStatus): void {
+  // The settings file was fixed by hand: show what's in it now.
+  if (state.settingsError && status.problem?.kind !== "settings") void refresh();
   if (status.host) showHost(status.host);
   else if (status.problem?.kind === "tokenRejected") showHost(null);
   const line = el("upload-state");
@@ -426,11 +431,11 @@ el("log-folder-reset").addEventListener("click", () => {
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
-void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
-void invoke<UploadStatus>("get_upload_status").then(renderUploads);
-
 void busy(async () => {
   await refresh();
+  // Once the settings are known: an upload status is shown only for them.
+  void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
+  renderUploads(await invoke<UploadStatus>("get_upload_status"));
   if (state.hasToken) await checkSaved();
   else el("token").focus();
 });

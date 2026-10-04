@@ -26,6 +26,8 @@ pub const STATUS_EVENT: &str = "upload-status";
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Problem {
+    /// The settings file can't be used (the window says why). Uploads wait until it's fixed.
+    Settings,
     NoFolder,
     FolderUnreadable {
         message: String,
@@ -229,6 +231,8 @@ impl Run {
     async fn tick(&mut self, app: &AppHandle) -> UploadStatus {
         let store = app.state::<Store>();
         let uploader = app.state::<Uploader>();
+        // First: a settings file fixed by hand is read again here.
+        let settings_error = store.load_error();
         let settings = store.get();
         let server_url = settings.server_url().to_string();
         let mut status = UploadStatus {
@@ -249,6 +253,10 @@ impl Run {
             status
         };
 
+        if settings_error.is_some() {
+            status.problem = Some(Problem::Settings);
+            return finish(self, None, status);
+        }
         // Uploads to a server start once it has a token, folder or not. `save_token` starts them;
         // this is for a token from before the record was (a first run, or a deleted record).
         let token = store.tokens.get(&server_url);

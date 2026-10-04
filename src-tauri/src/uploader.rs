@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -26,6 +26,8 @@ pub const STATUS_EVENT: &str = "upload-status";
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Problem {
+    /// The settings file can't be used (the window says why). Uploads wait until it's fixed.
+    Settings,
     NoFolder,
     FolderUnreadable {
         message: String,
@@ -45,6 +47,10 @@ pub enum Problem {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadStatus {
+    /// The server and log folder this is about, as the settings were when the poll began. The
+    /// window drops a status for others: a poll that was still running when the host changed them.
+    pub server_url: String,
+    pub log_folder: Option<PathBuf>,
     pub problem: Option<Problem>,
     /// Ranked logs not uploaded as they are now: a match being played, or one waiting to retry.
     pub waiting: usize,
@@ -62,6 +68,9 @@ pub struct UploadStatus {
 pub struct Uploader {
     record_path: PathBuf,
     record: Mutex<Record>,
+    /// Why `uploads.json` couldn't be read, while it can't. It holds when uploads started, so
+    /// it isn't written over and nothing is uploaded until it's fixed or deleted.
+    record_error: Mutex<Option<String>>,
     status: Mutex<UploadStatus>,
     /// The ranked files waiting to be uploaded, as of the last poll.
     queue: Mutex<QueueSnapshot>,
@@ -70,25 +79,52 @@ pub struct Uploader {
     wake: Notify,
     /// Ask the server for the host and the listed matches' status at the next poll.
     refresh: AtomicBool,
+    /// A token was saved, or a check found the token works: forget a rejection at the next poll.
+    token_ok: AtomicBool,
+    /// Goes up each time the server, the log folder or the token changes (`changed`): a poll
+    /// that began before stops sending.
+    generation: AtomicU64,
 }
 
 impl Uploader {
-    /// Loads the record of past uploads from `record_path`. A broken record is started afresh: the
-    /// server answers files it already has with `duplicate`.
+    /// Loads the record of past uploads from `record_path`. A missing one is a first run; one that
+    /// can't be read is reported (`save`) until it can.
     pub fn new(record_path: PathBuf) -> Self {
-        let record = uploads::load(&record_path).unwrap_or_else(|e| {
-            eprintln!("{e}. Starting a new upload record");
-            Record::default()
-        });
+        let (record, record_error) = match uploads::load(&record_path) {
+            Ok(record) => (record, None),
+            Err(e) => (Record::default(), Some(e)),
+        };
         Self {
             record_path,
             record: Mutex::new(record),
+            record_error: Mutex::new(record_error),
             status: Mutex::new(UploadStatus::default()),
             queue: Mutex::new(QueueSnapshot::default()),
             retries: Mutex::new(Vec::new()),
             wake: Notify::new(),
             refresh: AtomicBool::new(false),
+            token_ok: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// The server, the log folder or the token changed: what a poll under way still has to send
+    /// waits for the next one, which starts now with the new settings.
+    pub fn changed(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.wake();
+    }
+
+    /// Whether nothing changed (`changed`) since `generation` was read.
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Relaxed) == generation
+    }
+
+    /// The host saved a token, or "Check again" found it works: uploads stopped by the server
+    /// turning it down earlier try again.
+    pub fn token_ok(&self) {
+        self.token_ok.store(true, Ordering::Relaxed);
+        self.wake();
     }
 
     pub fn status(&self) -> UploadStatus {
@@ -139,6 +175,36 @@ impl Uploader {
         self.refresh.store(true, Ordering::Relaxed);
         self.wake();
     }
+
+    /// A token was saved for `server_url`: uploads to it start now, unless they already had.
+    /// Saved at once; if that fails, the loop reports it and tries again before any upload.
+    pub fn start(&self, server_url: &str) {
+        self.record
+            .lock()
+            .unwrap()
+            .start(server_url, SystemTime::now());
+        let _ = self.save();
+        self.wake();
+    }
+
+    /// Writes what changed in the record to `uploads.json`. An error until that works, and while
+    /// the file can't be read (it's read again each time, and never written over meanwhile).
+    fn save(&self) -> Result<(), String> {
+        let mut error = self.record_error.lock().unwrap();
+        if error.is_some() {
+            match uploads::load(&self.record_path) {
+                Ok(record) => *self.record.lock().unwrap() = record,
+                Err(e) => {
+                    *error = Some(e.clone());
+                    return Err(format!(
+                        "{e}. Uploads wait until it's fixed, or deleted to start the record afresh"
+                    ));
+                }
+            }
+            *error = None;
+        }
+        uploads::save(&self.record_path, &mut self.record.lock().unwrap())
+    }
 }
 
 /// Starts the loop. Call once, after `Store` and `Uploader` are managed.
@@ -173,11 +239,32 @@ struct Run {
     /// The server and token the host and the match statuses were last asked with, and when.
     refreshed: Option<(String, String, Instant)>,
     host: Option<Host>,
-    /// A refreshed status that couldn't be saved: saved at the next refresh even if unchanged.
-    unsaved: bool,
+    /// The server that answered "too many uploads" (`429`), and until when nothing is sent to it.
+    held: Option<(String, Instant)>,
 }
 
 impl Run {
+    /// Whether nothing may be uploaded to `server_url` at `now`: it answered `429` and its
+    /// `Retry-After` isn't over yet.
+    fn held(&self, server_url: &str, now: Instant) -> bool {
+        matches!(&self.held, Some((url, until)) if url == server_url && now < *until)
+    }
+
+    /// Whether the server turned this token down (`Some(revoked)`), unless the host has saved a
+    /// token or seen it work since (`Uploader::token_ok`).
+    fn rejection(&mut self, uploader: &Uploader, server_url: &str, token: &str) -> Option<bool> {
+        if uploader.token_ok.swap(false, Ordering::Relaxed) {
+            self.rejected = None;
+        }
+        match &self.rejected {
+            Some((url, bad, revoked)) if url == server_url && bad == token => Some(*revoked),
+            _ => {
+                self.rejected = None;
+                None
+            }
+        }
+    }
+
     /// Whose token it is, only if the server was last asked with this server and token.
     fn known_host(&self, server_url: &str, token: &str) -> Option<Host> {
         match &self.refreshed {
@@ -189,9 +276,15 @@ impl Run {
     async fn tick(&mut self, app: &AppHandle) -> UploadStatus {
         let store = app.state::<Store>();
         let uploader = app.state::<Uploader>();
+        // Before the settings: a change after this stops what's left of this poll's uploads.
+        let generation = uploader.generation.load(Ordering::Relaxed);
+        // First: a settings file fixed by hand is read again here.
+        let settings_error = store.load_error();
         let settings = store.get();
         let server_url = settings.server_url().to_string();
         let mut status = UploadStatus {
+            server_url: server_url.clone(),
+            log_folder: log_folder::current(settings.log_folder.as_deref()).map(|f| f.path),
             retrying: self.retrying.clone(),
             ..UploadStatus::default()
         };
@@ -208,6 +301,23 @@ impl Run {
             status.history_revision = uploader.history_revision();
             status
         };
+
+        if settings_error.is_some() {
+            status.problem = Some(Problem::Settings);
+            return finish(self, None, status);
+        }
+        // Uploads to a server start once it has a token, folder or not. `save_token` starts them;
+        // this is for a token from before the record was (a first run, or a deleted record).
+        let token = store.tokens.get(&server_url);
+        if let Ok(Some(_)) = token {
+            let mut record = uploader.record.lock().unwrap();
+            record.start(&server_url, SystemTime::now());
+        }
+        // Nothing is uploaded until the record, with when uploads started, is saved.
+        if let Err(message) = uploader.save() {
+            status.problem = Some(Problem::Local { message });
+            return finish(self, None, status);
+        }
 
         let Some(folder) = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists)
         else {
@@ -247,7 +357,7 @@ impl Run {
         };
         status.waiting = poll.waiting;
 
-        let token = match store.tokens.get(&server_url) {
+        let token = match token {
             Ok(Some(token)) => token,
             Ok(None) => {
                 // The token was forgotten: whose it was no longer matters.
@@ -262,37 +372,22 @@ impl Run {
             }
         };
         status.host = self.known_host(&server_url, &token);
-        {
-            let mut record = uploader.record.lock().unwrap();
-            if record.start(&server_url, SystemTime::now()) {
-                if let Err(message) = uploads::save(&uploader.record_path, &record) {
-                    status.problem = Some(Problem::Local { message });
-                    drop(record);
-                    return finish(self, polled, status);
-                }
-            }
-        }
-        if let Some((url, bad, revoked)) = &self.rejected {
-            if *url == server_url && *bad == token {
-                status.problem = Some(Problem::TokenRejected { revoked: *revoked });
-                return finish(self, polled, status);
-            }
-            self.rejected = None;
+        if let Some(revoked) = self.rejection(&uploader, &server_url, &token) {
+            status.problem = Some(Problem::TokenRejected { revoked });
+            return finish(self, polled, status);
         }
 
-        for due in poll.due {
-            match self.send(&uploader, &server_url, &token, &due).await {
-                Ok(true) => status.waiting = status.waiting.saturating_sub(1),
-                Ok(false) => {}
-                Err(problem) => {
-                    status.problem = Some(problem);
-                    break;
-                }
-            }
-        }
+        let (done, problem) = self
+            .send_due(&uploader, generation, &server_url, &token, &poll.due)
+            .await;
+        status.waiting = status.waiting.saturating_sub(done);
+        status.problem = problem;
         status.retrying = self.retrying.clone();
-        if status.problem.is_none() {
-            if let Err(problem) = self.refresh(&uploader, &server_url, &token).await {
+        if status.problem.is_none() && uploader.is_current(generation) {
+            if let Err(problem) = self
+                .refresh(&uploader, generation, &server_url, &token)
+                .await
+            {
                 status.problem = Some(problem);
             }
         }
@@ -306,6 +401,7 @@ impl Run {
     async fn refresh(
         &mut self,
         uploader: &Uploader,
+        generation: u64,
         server_url: &str,
         token: &str,
     ) -> Result<(), Problem> {
@@ -341,25 +437,44 @@ impl Run {
             .lock()
             .unwrap()
             .recent_match_keys(server_url, config::MAX_STATUS_KEYS);
-        if !keys.is_empty() {
+        if !keys.is_empty() && uploader.is_current(generation) {
             match server::match_states(server_url, token, &keys).await {
                 Ok(states) => {
                     let mut record = uploader.record.lock().unwrap();
-                    if record.update_states(server_url, &states) {
-                        self.unsaved = true;
-                    }
+                    record.update_states(server_url, &states);
                 }
                 Err(message) => eprintln!("Couldn't refresh the match status: {message}"),
             }
         }
+        // A save that fails is tried again at the next poll, before any upload.
+        uploader
+            .save()
+            .map_err(|message| Problem::Local { message })
+    }
 
-        // Saved last, so a failing save doesn't stop the checks above. It's tried again next time.
-        if self.unsaved {
-            let saved = uploads::save(&uploader.record_path, &uploader.record.lock().unwrap());
-            self.unsaved = saved.is_err();
-            saved.map_err(|message| Problem::Local { message })?;
+    /// Uploads the files `due`, oldest first, until one stops every upload, the server says to
+    /// hold off (`429`), or the settings or token changed since `generation` (the rest waits for
+    /// the next poll, with the new ones). How many are done with, and the problem if one came up.
+    async fn send_due(
+        &mut self,
+        uploader: &Uploader,
+        generation: u64,
+        server_url: &str,
+        token: &str,
+        due: &[Due],
+    ) -> (usize, Option<Problem>) {
+        let mut done = 0;
+        for due in due {
+            if !uploader.is_current(generation) || self.held(server_url, Instant::now()) {
+                break;
+            }
+            match self.send(uploader, server_url, token, due).await {
+                Ok(true) => done += 1,
+                Ok(false) => {}
+                Err(problem) => return (done, Some(problem)),
+            }
         }
-        Ok(())
+        (done, None)
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it
@@ -371,8 +486,12 @@ impl Run {
         token: &str,
         due: &Due,
     ) -> Result<bool, Problem> {
+        // Only its complete lines: the game may be halfway through writing the next one.
         let bytes = match fs::read(&due.path) {
-            Ok(bytes) => bytes,
+            Ok(mut bytes) => {
+                bytes.truncate(log_scan::complete_lines(&bytes).len());
+                bytes
+            }
             Err(e) => {
                 let message = format!("Couldn't read {}: {e}", due.name);
                 self.tracker
@@ -413,12 +532,21 @@ impl Run {
                     self.retrying = Some(message);
                     return Ok(false);
                 }
+                UploadOutcome::RateLimited { message, after } => {
+                    // Every upload to this server waits, not only this file.
+                    let now = Instant::now();
+                    let wait = after.unwrap_or_else(|| watcher::backoff(1));
+                    self.held = Some((server_url.to_string(), watcher::later(now, wait)));
+                    self.tracker
+                        .failed(&due.name, now, Some(wait), message.clone());
+                    self.retrying = Some(message);
+                    return Ok(false);
+                }
             }
         };
         self.tracker.sent(&due.name);
         self.retrying = None;
-        let mut record = uploader.record.lock().unwrap();
-        record.put(
+        uploader.record.lock().unwrap().put(
             server_url,
             &due.name,
             Sent {
@@ -429,7 +557,8 @@ impl Run {
                 answer,
             },
         );
-        uploads::save(&uploader.record_path, &record)
+        uploader
+            .save()
             .map(|()| true)
             .map_err(|message| Problem::Local { message })
     }
@@ -441,4 +570,161 @@ fn started_at(due: &Due) -> Option<String> {
         let created = fs::metadata(&due.path).ok()?.created().ok()?;
         Some(DateTime::<Local>::from(created).to_rfc3339_opts(SecondsFormat::Secs, false))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::async_runtime::block_on;
+
+    const EXAMPLE: &str = include_str!("../tests/fixtures/ranked-log-example.txt");
+
+    /// A log file in `dir` holding `text`, due to upload.
+    fn due(dir: &Path, text: &str) -> Due {
+        let name = "Log-2026-10-02-20-15-33.txt";
+        let path = dir.join(name);
+        fs::write(&path, text).unwrap();
+        Due {
+            name: name.into(),
+            path,
+        }
+    }
+
+    const SERVER: &str = "https://genjiball.us";
+
+    #[test]
+    fn saving_a_token_starts_uploads_to_its_server_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("uploads.json");
+        let uploader = Uploader::new(path.clone());
+        uploader.start(SERVER);
+        let started = uploads::load(&path).unwrap().started(SERVER).unwrap();
+        // Saving a token again (or another one) doesn't move it.
+        std::thread::sleep(Duration::from_millis(1100));
+        uploader.start(SERVER);
+        assert_eq!(uploads::load(&path).unwrap().started(SERVER), Some(started));
+        // Nor does a restart.
+        let uploader = Uploader::new(path.clone());
+        uploader.start(SERVER);
+        assert_eq!(
+            uploader.record.lock().unwrap().started(SERVER),
+            Some(started)
+        );
+    }
+
+    #[test]
+    fn a_record_that_cant_be_read_is_never_written_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("uploads.json");
+        fs::write(&path, "{ broken").unwrap();
+        let uploader = Uploader::new(path.clone());
+        uploader.start(SERVER);
+        let error = uploader.save().unwrap_err();
+        assert!(error.contains("isn't a valid upload record"), "{error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ broken");
+
+        // Fixed by hand: its `started` is kept, not the one from while it couldn't be read.
+        let mut fixed = Record::default();
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        fixed.start(SERVER, then);
+        uploads::save(&path, &mut fixed).unwrap();
+        uploader.save().unwrap();
+        assert_eq!(uploader.record.lock().unwrap().started(SERVER), Some(then));
+    }
+
+    #[test]
+    fn a_deleted_record_that_couldnt_be_read_starts_afresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("uploads.json");
+        fs::write(&path, "{ broken").unwrap();
+        let uploader = Uploader::new(path.clone());
+        assert!(uploader.save().is_err());
+        fs::remove_file(&path).unwrap();
+        uploader.save().unwrap();
+        uploader.start(SERVER);
+        assert!(uploads::load(&path).unwrap().started(SERVER).is_some());
+    }
+
+    #[test]
+    fn a_rejected_token_is_tried_again_once_it_works_or_is_saved_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run {
+            rejected: Some((SERVER.into(), "t".into(), true)),
+            ..Run::default()
+        };
+        assert_eq!(run.rejection(&uploader, SERVER, "t"), Some(true));
+        assert_eq!(run.rejection(&uploader, SERVER, "t"), Some(true), "still");
+        // "Check again" found it works, or the host saved it again.
+        uploader.token_ok();
+        assert_eq!(run.rejection(&uploader, SERVER, "t"), None);
+
+        // Another token, or another server, isn't the one turned down.
+        run.rejected = Some((SERVER.into(), "t".into(), false));
+        assert_eq!(run.rejection(&uploader, SERVER, "other"), None);
+        assert_eq!(run.rejected, None);
+    }
+
+    #[test]
+    fn a_change_of_settings_stops_the_uploads_left_in_a_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        fs::create_dir(&logs).unwrap();
+        let uploader = std::sync::Arc::new(Uploader::new(dir.path().join("uploads.json")));
+        let mut run = Run::default();
+        let generation = uploader.generation.load(Ordering::Relaxed);
+        // The host switches servers while the first upload is on its way.
+        let changed = uploader.clone();
+        let stored = r#"{"result":"stored","matches":[]}"#;
+        let server = server::test_server(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{stored}",
+                stored.len()
+            ),
+            EXAMPLE,
+            move || changed.changed(),
+        );
+        let first = due(&logs, EXAMPLE);
+        let second = Due {
+            name: "Log-2026-10-02-21-00-00.txt".into(),
+            path: logs.join("Log-2026-10-02-21-00-00.txt"),
+        };
+        fs::write(&second.path, EXAMPLE).unwrap();
+        let (done, problem) = block_on(run.send_due(
+            &uploader,
+            generation,
+            &server,
+            "t",
+            &[first.clone(), second.clone()],
+        ));
+        // The first went through; the second wasn't sent (not even tried: nothing failed).
+        assert_eq!((done, problem), (1, None));
+        assert_eq!(run.retrying, None);
+        let record = uploader.record.lock().unwrap();
+        assert!(record.get(&server, &first.name).is_some());
+        assert!(record.get(&server, &second.name).is_none());
+    }
+
+    #[test]
+    fn too_many_uploads_holds_the_whole_server_as_long_as_it_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let server = server::test_server(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7200\r\nContent-Length: 0\r\n\r\n"
+                .into(),
+            EXAMPLE,
+            || {},
+        );
+        let start = Instant::now();
+        let sent = block_on(run.send(&uploader, &server, "t", &due(dir.path(), EXAMPLE)));
+        assert_eq!(sent, Ok(false));
+        // Two hours, past `RETRY_MAX_SECS`, for every file to that server; not another server.
+        assert!(run.held(
+            &server,
+            start + Duration::from_secs(config::RETRY_MAX_SECS + 60)
+        ));
+        assert!(!run.held(&server, Instant::now() + Duration::from_secs(7200)));
+        assert!(!run.held("https://test.genjiball.us", start));
+    }
 }

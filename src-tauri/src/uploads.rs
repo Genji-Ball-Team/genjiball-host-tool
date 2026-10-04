@@ -1,7 +1,10 @@
 //! The record of uploaded log files (`uploads.json`): per server URL and file name, the size that
 //! was sent and what the server said. A file is uploaded again only when it's grown since, so a
 //! restart doesn't send every file again, and a file that couldn't be sent (offline) still is.
-//! Losing the record costs little: the server answers a file it already has with `duplicate`.
+//! It also holds when each server's uploads started (`started`), so a record that can't be read
+//! is never written over: uploads wait until it's fixed or deleted. Deleting it starts afresh: the
+//! server answers a file it already has with `duplicate`, and uploads to a server with a token
+//! start again from then.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -27,6 +30,9 @@ pub struct Record {
     /// asks for the page it shows again. Memory only.
     #[serde(skip)]
     revision: u64,
+    /// Changed since it was last saved: `save` writes it, and tries again until that works.
+    #[serde(skip)]
+    dirty: bool,
 }
 
 /// The same uploads, whatever the revision.
@@ -39,7 +45,8 @@ impl PartialEq for Record {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sent {
-    /// Bytes sent: the file is sent again once it's a different size.
+    /// Bytes sent, the file's complete lines (`log_scan::complete_lines`): the file is sent again
+    /// once those are a different size.
     pub size: u64,
     /// `MATCH_END` lines in what was sent: a new one is sent straight away.
     pub match_ends: usize,
@@ -77,6 +84,7 @@ impl Record {
             .unwrap_or_default()
             .as_secs();
         self.started.insert(server_url.to_string(), secs);
+        self.dirty = true;
         true
     }
 
@@ -90,6 +98,7 @@ impl Record {
             .or_default()
             .insert(file.to_string(), sent);
         self.revision += 1;
+        self.dirty = true;
     }
 
     pub fn revision(&self) -> u64 {
@@ -158,6 +167,7 @@ impl Record {
         }
         if changed {
             self.revision += 1;
+            self.dirty = true;
         }
         changed
     }
@@ -200,8 +210,14 @@ pub fn load(path: &Path) -> Result<Record, String> {
     }
 }
 
-pub fn save(path: &Path, record: &Record) -> Result<(), String> {
-    settings::save_json(path, record)
+/// Writes `record` to `path` if it changed since it was last written. A write that fails leaves
+/// it changed, so the next call tries again.
+pub fn save(path: &Path, record: &mut Record) -> Result<(), String> {
+    if record.dirty {
+        settings::save_json(path, record)?;
+        record.dirty = false;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -443,10 +459,52 @@ mod tests {
             },
         );
         record.start("https://genjiball.us", SystemTime::now());
-        save(&path, &record).unwrap();
+        save(&path, &mut record).unwrap();
         assert_eq!(load(&path).unwrap(), record);
         fs::write(&path, "{ broken").unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn a_failed_save_is_tried_again_until_it_works() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file where the folder should be: every write fails.
+        let folder = dir.path().join("config");
+        fs::write(&folder, "").unwrap();
+        let path = folder.join("uploads.json");
+        let mut record = Record::default();
+        assert!(save(&path, &mut record).is_ok(), "nothing to save");
+
+        record.start("https://genjiball.us", SystemTime::now());
+        assert!(save(&path, &mut record).is_err());
+        // Still not saved: the next try writes it, and only that one.
+        assert!(save(&path, &mut record).is_err());
+        fs::remove_file(&folder).unwrap();
+        save(&path, &mut record).unwrap();
+        assert_eq!(load(&path).unwrap(), record);
+        fs::remove_file(&path).unwrap();
+        save(&path, &mut record).unwrap();
+        assert!(!path.exists(), "saved already");
+
+        // Every change is saved: an upload, and a status the server gave since.
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "review"),
+        );
+        save(&path, &mut record).unwrap();
+        assert_eq!(load(&path).unwrap(), record);
+        let accepted = MatchState {
+            match_key: "1".into(),
+            match_id: Some(3),
+            status: "accepted".into(),
+            rejection: None,
+            review_reasons: vec![],
+        };
+        record.update_states(server, &[accepted]);
+        save(&path, &mut record).unwrap();
+        assert_eq!(load(&path).unwrap(), record);
     }
 
     #[test]

@@ -36,15 +36,12 @@ pub const POLL_INTERVAL_SECS: u64 = 5;
 /// moved to spectator (Overwatch carries on in a new file), closed the lobby or crashed.
 pub const QUIET_SECS: u64 = 60;
 
-/// Log files last written longer ago than this are ignored, so a first run doesn't upload a
-/// folder full of old matches.
-pub const MAX_LOG_AGE_DAYS: u64 = 14;
-
 /// The server refuses bigger uploads (`maxUploadBytes` in genjiball-ranked).
 pub const MAX_UPLOAD_BYTES: u64 = 512 * 1024;
 
 /// The wait before retrying a failed upload (server down, offline), doubled after each failure
-/// of the same file up to `RETRY_MAX_SECS`. A `Retry-After` from the server wins.
+/// of the same file up to `RETRY_MAX_SECS`. A `Retry-After` from the server wins, however long; on
+/// a `429` it holds every upload to that server.
 pub const RETRY_FIRST_SECS: u64 = 30;
 pub const RETRY_MAX_SECS: u64 = 30 * 60;
 

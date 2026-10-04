@@ -153,8 +153,13 @@ pub enum UploadOutcome {
     TokenRejected {
         revoked: bool,
     },
-    /// Try again later: offline, `409`, `429`, `5xx`. `after` is the server's `Retry-After`.
+    /// Try again later: offline, `409`, `5xx`. `after` is the server's `Retry-After`.
     Retry {
+        message: String,
+        after: Option<Duration>,
+    },
+    /// Too many uploads (`429`): no upload to this server until `after` (its `Retry-After`).
+    RateLimited {
         message: String,
         after: Option<Duration>,
     },
@@ -183,12 +188,17 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
                 .map_or_else(|| status.to_string(), |e| e.error.clone()),
             message: message(format!("The server refused the file ({status})")),
         },
-        _ => UploadOutcome::Retry {
-            message: message(format!("The server answered {status}")),
-            after: retry_after
+        _ => {
+            let message = message(format!("The server answered {status}"));
+            let after = retry_after
                 .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(|secs| Duration::from_secs(secs.min(config::RETRY_MAX_SECS))),
-        },
+                .map(Duration::from_secs);
+            if status == 429 {
+                UploadOutcome::RateLimited { message, after }
+            } else {
+                UploadOutcome::Retry { message, after }
+            }
+        }
     }
 }
 
@@ -234,6 +244,8 @@ pub async fn upload(
         .map(str::to_string);
     match response.text().await {
         Ok(body) => read_upload(status, retry_after.as_deref(), &body),
+        // The status alone says the token or the file won't do: the body only explains it.
+        Err(_) if matches!(status, 401 | 403 | 413 | 422) => read_upload(status, None, ""),
         Err(e) => retry(e),
     }
 }
@@ -268,6 +280,8 @@ pub async fn check_token(server_url: &str, token: &str) -> TokenCheck {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(body) => read_token_check(status, &body),
+        // The status alone says the token is turned down.
+        Err(_) if matches!(status, 401 | 403) => read_token_check(status, ""),
         Err(e) => unreachable(e),
     }
 }
@@ -319,6 +333,31 @@ pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String>
         .append_pair("id", &match_id.to_string());
     url.set_fragment(None);
     Ok(url.into())
+}
+
+/// A server on this PC for the tests, at the URL returned: reads one request ending in `body`
+/// (the request body), runs `then`, answers with `response` as it is, and hangs up.
+#[cfg(test)]
+pub fn test_server(response: String, body: &str, then: impl FnOnce() + Send + 'static) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let end = format!("\r\n\r\n{body}");
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0; 4096];
+        while !request.ends_with(end.as_bytes()) {
+            let n = socket.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+        }
+        then();
+        socket.write_all(response.as_bytes()).unwrap();
+    });
+    url
 }
 
 #[cfg(test)]
@@ -448,17 +487,24 @@ mod tests {
                 Some("600"),
                 r#"{"error":"rate_limited","message":"At most 60 uploads an hour"}"#
             ),
-            UploadOutcome::Retry {
+            UploadOutcome::RateLimited {
                 message: "At most 60 uploads an hour".into(),
                 after: Some(Duration::from_secs(600))
             }
         );
-        // No longer than the longest backoff, however far off the server says.
+        // As long as the server says, even past the longest backoff.
         assert_eq!(
             read_upload(503, Some("31536000"), ""),
             UploadOutcome::Retry {
                 message: "The server answered 503".into(),
-                after: Some(Duration::from_secs(config::RETRY_MAX_SECS))
+                after: Some(Duration::from_secs(31_536_000))
+            }
+        );
+        assert_eq!(
+            read_upload(429, None, ""),
+            UploadOutcome::RateLimited {
+                message: "The server answered 429".into(),
+                after: None
             }
         );
         for (status, body) in [
@@ -542,6 +588,39 @@ mod tests {
         );
         assert!(match_page_url("file:///C:/Windows", 3).is_err());
         assert!(match_page_url("not a url", 3).is_err());
+    }
+
+    /// A server that answers with `head` (status line and headers), then hangs up before the body
+    /// it announced.
+    fn cut_off_server(head: &str, body: &str) -> String {
+        test_server(
+            format!("{head}Content-Length: 100\r\n\r\n{{\"error\":"),
+            body,
+            || {},
+        )
+    }
+
+    #[test]
+    fn a_cut_off_answer_still_turns_a_token_down() {
+        use tauri::async_runtime::block_on as run;
+        let revoked = cut_off_server("HTTP/1.1 403 Forbidden\r\n", "");
+        assert_eq!(run(check_token(&revoked, "t")), TokenCheck::Revoked);
+        let unknown = cut_off_server("HTTP/1.1 401 Unauthorized\r\n", "x");
+        assert_eq!(
+            run(upload(&unknown, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::TokenRejected { revoked: false }
+        );
+        let too_big = cut_off_server("HTTP/1.1 413 Payload Too Large\r\n", "x");
+        assert!(matches!(
+            run(upload(&too_big, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::Refused { .. }
+        ));
+        // Any other answer cut off is worth another try.
+        let failing = cut_off_server("HTTP/1.1 500 Internal Server Error\r\n", "x");
+        assert!(matches!(
+            run(upload(&failing, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::Retry { .. }
+        ));
     }
 
     #[test]

@@ -35,6 +35,8 @@ type TokenCheck =
 
 /** Mirrors `UploadStatus` in src-tauri/src/uploader.rs. */
 interface UploadStatus {
+  serverUrl: string;
+  logFolder: string | null;
   problem: Problem | null;
   waiting: number;
   retrying: string | null;
@@ -45,6 +47,7 @@ interface UploadStatus {
 
 /** Mirrors `Problem` in src-tauri/src/uploader.rs. */
 type Problem =
+  | { kind: "settings" }
   | { kind: "noFolder" }
   | { kind: "folderUnreadable"; message: string }
   | { kind: "noToken" }
@@ -92,6 +95,8 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 
 let state: AppState;
+/** Set once `state` is: an upload status is only shown for the settings in it. */
+let ready = false;
 let editingToken = false;
 
 function setStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void {
@@ -132,7 +137,7 @@ function render(): void {
   el("version").textContent = `v${state.version}`;
   const settingsError = el("settings-error");
   settingsError.hidden = !state.settingsError;
-  settingsError.textContent = state.settingsError ? `${state.settingsError}. Using the defaults; changing a setting writes a new file.` : "";
+  settingsError.textContent = state.settingsError ? `${state.settingsError}. Uploads are paused until it's fixed. The defaults are shown; changing a setting writes a new file.` : "";
 
   el("welcome").hidden = state.hasToken;
   el("server").textContent = state.serverUrl;
@@ -166,6 +171,8 @@ function render(): void {
 
 function describeProblem(problem: Problem): string {
   switch (problem.kind) {
+    case "settings":
+      return "Paused until the settings file is fixed (see above).";
     case "noFolder":
       return "Waiting for the Workshop log folder.";
     case "folderUnreadable":
@@ -214,6 +221,9 @@ function describeAnswer(answer: Answer): { text: string; tone: Tone } {
 }
 
 function renderUploads(status: UploadStatus): void {
+  // A poll that began before the host changed the server or folder: not about what's shown.
+  // Dropped before it touches the history, so it can't replace the new server's page.
+  if (status.serverUrl !== state.serverUrl || status.logFolder !== (state.logFolder?.path ?? null)) return;
   if (status.host) showHost(status.host);
   else if (status.problem?.kind === "tokenRejected") showHost(null);
   const line = el("upload-state");
@@ -333,9 +343,16 @@ function showUploadsError(err: unknown): void {
   error.textContent = String(err);
 }
 
-async function refresh(): Promise<void> {
-  state = await invoke<AppState>("get_state");
+/** Shows these settings, then the upload status for them (one sent before they were known was dropped). */
+async function show(next: AppState): Promise<void> {
+  state = next;
+  ready = true;
   render();
+  renderUploads(await invoke<UploadStatus>("get_upload_status"));
+}
+
+async function refresh(): Promise<void> {
+  await show(await invoke<AppState>("get_state"));
 }
 
 /** Runs a button's action with the buttons disabled, and shows its error (next to the token unless told where). */
@@ -398,10 +415,10 @@ el("token-forget").addEventListener("click", () => {
 el("server-form").addEventListener("submit", (e) => {
   e.preventDefault();
   void busy(async () => {
-    state = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
+    const next = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
     showHost(null);
     setStatus("");
-    render();
+    await show(next);
     // Another server's history, from its newest page: drops any page of the old one on its way.
     await showHistoryPage(0);
     if (state.hasToken) await checkSaved();
@@ -412,24 +429,25 @@ el("log-folder-choose").addEventListener("click", () => {
   void busy(async () => {
     const path = await open({ directory: true, defaultPath: state.logFolder?.path, title: "Workshop log folder" });
     if (typeof path !== "string") return;
-    state = await invoke<AppState>("set_log_folder", { path });
-    render();
+    await show(await invoke<AppState>("set_log_folder", { path }));
   });
 });
 el("log-folder-reset").addEventListener("click", () => {
   void busy(async () => {
-    state = await invoke<AppState>("set_log_folder", { path: null });
-    render();
+    await show(await invoke<AppState>("set_log_folder", { path: null }));
   });
 });
 
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
-void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
-void invoke<UploadStatus>("get_upload_status").then(renderUploads);
-
 void busy(async () => {
+  await listen<UploadStatus>("upload-status", (event) => {
+    if (!ready) return; // `show` asks for the status once the settings are known.
+    // The settings file was fixed by hand (the uploader reads it again): show what's in it now.
+    if (state.settingsError && event.payload.problem?.kind !== "settings") void refresh();
+    else renderUploads(event.payload);
+  });
   await refresh();
   if (state.hasToken) await checkSaved();
   else el("token").focus();

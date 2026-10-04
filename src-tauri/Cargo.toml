@@ -27,6 +27,7 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1", features = ["sync", "time"] }
+tauri-plugin-single-instance = "2.5.2"
 
 # Small release binary: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

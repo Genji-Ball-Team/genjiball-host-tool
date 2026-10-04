@@ -172,7 +172,9 @@ function describeMatch(match: UploadedMatch): string {
     case "accepted":
       return "accepted";
     case "review": {
-      const reasons = match.reviewReasons.map((r) => (r in reviewReasons ? reviewReasons[r] : r)).filter((r) => r !== null);
+      const reasons = match.reviewReasons
+        .map((r) => (Object.hasOwn(reviewReasons, r) ? reviewReasons[r] : r))
+        .filter((r): r is string => typeof r === "string");
       return reasons.length ? `waiting for an admin: ${reasons.join(", ")}` : "waiting for an admin";
     }
     case "rejected":

@@ -97,6 +97,34 @@ pub struct UploadAnswer {
     pub matches: Vec<UploadedMatch>,
 }
 
+/// A match's status now, from `GET /api/host/matches`: changes when an admin accepts, rejects or
+/// voids it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchState {
+    pub match_key: String,
+    pub status: String,
+    pub rejection: Option<Rejection>,
+    #[serde(default)]
+    pub review_reasons: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct MatchStates {
+    matches: Vec<MatchState>,
+}
+
+/// What a `GET /api/host/matches` answer means: the states, or why there are none. A bad token
+/// shows up on the next upload, so it's just an error here.
+pub fn read_match_states(status: u16, body: &str) -> Result<Vec<MatchState>, String> {
+    match status {
+        200 => serde_json::from_str::<MatchStates>(body)
+            .map(|s| s.matches)
+            .map_err(|_| "The server's answer wasn't what the host tool expected".into()),
+        _ => Err(format!("The server answered {status}")),
+    }
+}
+
 #[derive(Deserialize)]
 struct ApiError {
     error: String,
@@ -234,6 +262,31 @@ pub async fn check_token(server_url: &str, token: &str) -> TokenCheck {
         Ok(body) => read_token_check(status, &body),
         Err(e) => unreachable(e),
     }
+}
+
+/// Asks the server for the status now of the host's matches with these keys.
+pub async fn match_states(
+    server_url: &str,
+    token: &str,
+    keys: &[String],
+) -> Result<Vec<MatchState>, String> {
+    let url = url::Url::parse_with_params(
+        &format!("{server_url}/api/host/matches"),
+        [("keys", keys.join(","))],
+    )
+    .map_err(|e| e.to_string())?;
+    let response = client()?
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    read_match_states(status, &body)
 }
 
 #[cfg(test)]
@@ -389,6 +442,23 @@ mod tests {
                 "{status}"
             );
         }
+    }
+
+    #[test]
+    fn reads_match_states() {
+        let body = r#"{"matches":[{"matchKey":"482913507226","status":"accepted","rejection":null,"reviewReasons":["untrusted_host"]}]}"#;
+        assert_eq!(
+            read_match_states(200, body).unwrap(),
+            [MatchState {
+                match_key: "482913507226".into(),
+                status: "accepted".into(),
+                rejection: None,
+                review_reasons: vec!["untrusted_host".into()],
+            }]
+        );
+        assert!(read_match_states(200, "<html>").is_err());
+        // An older server without the route.
+        assert!(read_match_states(404, r#"{"error":"not_found"}"#).is_err());
     }
 
     #[test]

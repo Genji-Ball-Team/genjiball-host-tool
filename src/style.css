@@ -31,6 +31,11 @@ dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.5rem; 
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
 .status { margin-left: .5rem; font-size: .85rem; }
+.tag {
+  margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--muted); border-radius: 3px;
+  color: var(--soft); font-size: .75rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+}
+#host-trust-note { margin: -.5rem 0 1rem; }
 
 label { display: block; color: var(--soft); font-size: .85rem; margin-bottom: .35rem; }
 .row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }

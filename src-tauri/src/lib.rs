@@ -80,12 +80,17 @@ fn get_state(app: tauri::AppHandle, store: State<Store>) -> Result<AppState, Str
 
 /// Checks the token saved for the current server.
 #[tauri::command]
-async fn check_saved_token(store: State<'_, Store>) -> Result<TokenCheck, String> {
+async fn check_saved_token(
+    store: State<'_, Store>,
+    uploader: State<'_, Uploader>,
+) -> Result<TokenCheck, String> {
     let server_url = store.get().server_url().to_string();
     let token = store
         .tokens
         .get(&server_url)?
         .ok_or("No host token saved for this server")?;
+    // The listed matches' status too: "Check again" after an admin accepted one.
+    uploader.refresh();
     Ok(server::check_token(&server_url, &token).await)
 }
 

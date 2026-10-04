@@ -19,9 +19,16 @@ interface LogFolder {
   exists: boolean;
 }
 
+/** Mirrors `Host` in src-tauri/src/server.rs. */
+interface Host {
+  id: number;
+  name: string;
+  trust: "trusted" | "untrusted";
+}
+
 /** Mirrors `TokenCheck` in src-tauri/src/server.rs. */
 type TokenCheck =
-  | { result: "ok"; host: { id: number; name: string; trust: "trusted" | "untrusted" } }
+  | { result: "ok"; host: Host }
   | { result: "unknown" }
   | { result: "revoked" }
   | { result: "unreachable"; message: string };
@@ -32,6 +39,7 @@ interface UploadStatus {
   waiting: number;
   retrying: string | null;
   recent: RecentUpload[];
+  host: Host | null;
 }
 
 /** Mirrors `Problem` in src-tauri/src/uploader.rs. */
@@ -74,18 +82,26 @@ function setStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void
   status.className = `status ${tone}`;
 }
 
+/** The host's name and, while they're untrusted, a tag saying so. `null` hides both. */
+function showHost(host: Host | null): void {
+  el("host").textContent = host?.name ?? "";
+  const untrusted = host?.trust === "untrusted";
+  el("host-trust").hidden = !untrusted;
+  el("host-trust-note").hidden = !untrusted;
+}
+
 function showCheck(check: TokenCheck): void {
   switch (check.result) {
     case "ok":
-      el("host").textContent = check.host.name;
-      setStatus(check.host.trust === "trusted" ? "Token works" : "Token works. Untrusted host: an admin reviews your matches", "good");
+      showHost(check.host);
+      setStatus("Token works", "good");
       break;
     case "unknown":
-      el("host").textContent = "";
+      showHost(null);
       setStatus("The server doesn't know this token", "bad");
       break;
     case "revoked":
-      el("host").textContent = "";
+      showHost(null);
       setStatus("This token was revoked. Ask an admin for a new one", "bad");
       break;
     case "unreachable":
@@ -113,7 +129,10 @@ function render(): void {
   el("token-form").hidden = !askToken;
   el("token-cancel").hidden = !state.hasToken;
   el("token-actions").hidden = askToken;
-  if (!state.hasToken) el("host").textContent = "No token yet";
+  if (!state.hasToken) {
+    showHost(null);
+    el("host").textContent = "No token yet";
+  }
 
   const folder = state.logFolder;
   el("log-folder").textContent = folder?.path ?? "No Documents folder found";
@@ -142,12 +161,22 @@ function describeProblem(problem: Problem): string {
   }
 }
 
+/** Why a match waits for an admin. An untrusted host's every match does: the host line says so. */
+const reviewReasons: Record<string, string | null> = {
+  duplicate_name: "two players with the same name",
+  untrusted_host: null,
+};
+
 function describeMatch(match: UploadedMatch): string {
   switch (match.status) {
     case "accepted":
       return "accepted";
-    case "review":
-      return match.reviewReasons.length ? `waiting for an admin (${match.reviewReasons.join(", ")})` : "waiting for an admin";
+    case "review": {
+      const reasons = match.reviewReasons
+        .map((r) => (Object.hasOwn(reviewReasons, r) ? reviewReasons[r] : r))
+        .filter((r): r is string => typeof r === "string");
+      return reasons.length ? `waiting for an admin: ${reasons.join(", ")}` : "waiting for an admin";
+    }
     case "rejected":
       return `rejected: ${match.rejection?.message || match.rejection?.code || "no reason given"}`;
     case "void":
@@ -166,6 +195,8 @@ function describeUpload(upload: RecentUpload): { text: string; tone: "good" | "b
 }
 
 function renderUploads(status: UploadStatus): void {
+  if (status.host) showHost(status.host);
+  else if (status.problem?.kind === "tokenRejected") showHost(null);
   const line = el("upload-state");
   line.className = status.problem ? "bad" : "";
   line.textContent = status.problem
@@ -234,7 +265,11 @@ el("token-form").addEventListener("submit", (e) => {
       await refresh();
     }
     showCheck(check);
-    if (check.result === "unreachable") setStatus(`Saved, but not checked: ${check.message}`, "bad");
+    if (check.result === "unreachable") {
+      // The new token's host isn't known yet: don't show the old one's.
+      showHost(null);
+      setStatus(`Saved, but not checked: ${check.message}`, "bad");
+    }
   });
 });
 
@@ -261,7 +296,7 @@ el("server-form").addEventListener("submit", (e) => {
   e.preventDefault();
   void busy(async () => {
     state = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
-    el("host").textContent = "";
+    showHost(null);
     setStatus("");
     render();
     if (state.hasToken) await checkSaved();

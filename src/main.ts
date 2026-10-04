@@ -35,31 +35,52 @@ type TokenCheck =
 
 /** Mirrors `UploadStatus` in src-tauri/src/uploader.rs. */
 interface UploadStatus {
+  serverUrl: string;
+  logFolder: string | null;
   problem: Problem | null;
   waiting: number;
   retrying: string | null;
-  recent: RecentUpload[];
+  history: HistoryPage;
+  historyRevision: number;
   host: Host | null;
 }
 
 /** Mirrors `Problem` in src-tauri/src/uploader.rs. */
 type Problem =
+  | { kind: "settings" }
   | { kind: "noFolder" }
   | { kind: "folderUnreadable"; message: string }
   | { kind: "noToken" }
   | { kind: "tokenRejected"; revoked: boolean }
   | { kind: "local"; message: string };
 
-/** Mirrors `RecentUpload` and `Answer` in src-tauri/src/uploads.rs. */
-interface RecentUpload {
-  file: string;
-  at: string;
-  answer: { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
+/** Mirrors `Page` in src-tauri/src/history.rs: what `get_upload_history` returns. */
+interface HistoryPage {
+  entries: HistoryEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
+
+/** Mirrors `Entry` in src-tauri/src/history.rs. */
+interface HistoryEntry {
+  file: string;
+  at: string | null;
+  players: string[];
+  answer: Answer | null;
+  queued: QueueState | null;
+}
+
+/** Mirrors `Answer` in src-tauri/src/uploads.rs. */
+type Answer = { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
+
+/** Mirrors `QueueState` in src-tauri/src/watcher.rs. */
+type QueueState = { kind: "playing" } | { kind: "due" } | { kind: "failed"; error: string };
 
 /** Mirrors `UploadedMatch` in src-tauri/src/server.rs. */
 interface UploadedMatch {
   matchKey: string | null;
+  matchId: number | null;
   lineCount: number;
   action: "insert" | "replace" | "repoint" | "skip";
   status: "accepted" | "review" | "rejected" | "void";
@@ -85,6 +106,8 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 
 let state: AppState;
+/** Set once `state` is: an upload status is only shown for the settings in it. */
+let ready = false;
 let editingToken = false;
 
 function setStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void {
@@ -125,7 +148,7 @@ function render(): void {
   el("version").textContent = `v${state.version}`;
   const settingsError = el("settings-error");
   settingsError.hidden = !state.settingsError;
-  settingsError.textContent = state.settingsError ? `${state.settingsError}. Using the defaults; changing a setting writes a new file.` : "";
+  settingsError.textContent = state.settingsError ? `${state.settingsError}. Uploads are paused until it's fixed. The defaults are shown; changing a setting writes a new file.` : "";
 
   el("welcome").hidden = state.hasToken;
   el("server").textContent = state.serverUrl;
@@ -159,6 +182,8 @@ function render(): void {
 
 function describeProblem(problem: Problem): string {
   switch (problem.kind) {
+    case "settings":
+      return "Paused until the settings file is fixed (see above).";
     case "noFolder":
       return "Waiting for the Workshop log folder.";
     case "folderUnreadable":
@@ -195,8 +220,9 @@ function describeMatch(match: UploadedMatch): string {
   }
 }
 
-function describeUpload(upload: RecentUpload): { text: string; tone: "good" | "bad" | "muted" } {
-  const answer = upload.answer;
+type Tone = "good" | "bad" | "muted";
+
+function describeAnswer(answer: Answer): { text: string; tone: Tone } {
   if (answer.kind === "refused") return { text: answer.message, tone: "bad" };
   if (answer.result === "duplicate") return { text: "Already uploaded", tone: "muted" };
   if (!answer.matches.length) return { text: "No match in it", tone: "muted" };
@@ -206,6 +232,9 @@ function describeUpload(upload: RecentUpload): { text: string; tone: "good" | "b
 }
 
 function renderUploads(status: UploadStatus): void {
+  // A poll that began before the host changed the server or folder: not about what's shown.
+  // Dropped before it touches the history, so it can't replace the new server's page.
+  if (status.serverUrl !== state.serverUrl || status.logFolder !== (state.logFolder?.path ?? null)) return;
   if (status.host) showHost(status.host);
   else if (status.problem?.kind === "tokenRejected") showHost(null);
   const line = el("upload-state");
@@ -222,28 +251,119 @@ function renderUploads(status: UploadStatus): void {
   retrying.hidden = !status.retrying;
   retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
 
-  el("uploads").replaceChildren(
-    ...status.recent.map((upload) => {
-      const { text, tone } = describeUpload(upload);
-      const item = document.createElement("li");
-      const file = document.createElement("span");
-      file.className = "path";
-      file.textContent = upload.file;
-      const at = document.createElement("span");
-      at.className = "muted";
-      at.textContent = new Date(upload.at).toLocaleString();
-      const result = document.createElement("span");
-      result.className = tone;
-      result.textContent = text;
-      item.append(file, at, result);
-      return item;
-    }),
-  );
+  // The status carries the newest page. An older one is asked for again when anything in the
+  // history changed, since it may be on that page or have moved it.
+  const changed = status.historyRevision !== historyRevision;
+  historyRevision = status.historyRevision;
+  if (historyPage === 0) {
+    historyRequest++; // Newer than any page 0 still on its way.
+    renderHistory(status.history);
+  } else if (changed) {
+    showHistoryPage(historyPage).catch(showUploadsError);
+  }
+}
+
+function describeQueued(queued: QueueState): { text: string; tone: Tone } {
+  switch (queued.kind) {
+    case "playing":
+      return { text: "Being played: uploaded when the match ends or the log stops growing", tone: "muted" };
+    case "due":
+      return { text: "Waiting to upload", tone: "muted" };
+    case "failed":
+      return { text: `Upload failed: ${queued.error}. Retrying automatically.`, tone: "bad" };
+  }
+}
+
+/** Only accepted and voided matches are on the site (`server::is_public`). */
+function onSite(match: UploadedMatch): match is UploadedMatch & { matchId: number } {
+  return match.matchId !== null && (match.status === "accepted" || match.status === "void");
+}
+
+function span(text: string, className: string): HTMLSpanElement {
+  const found = document.createElement("span");
+  found.className = className;
+  found.textContent = text;
+  return found;
+}
+
+function button(text: string, action: () => Promise<void>): HTMLButtonElement {
+  const found = document.createElement("button");
+  found.type = "button";
+  found.className = "quiet";
+  found.textContent = text;
+  found.addEventListener("click", () => {
+    el("uploads-error").hidden = true;
+    void busy(action, showUploadsError);
+  });
+  return found;
+}
+
+function historyItem(entry: HistoryEntry): HTMLLIElement {
+  const item = document.createElement("li");
+  item.append(span(entry.file, "path"), span(entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet", "muted"));
+  if (entry.players.length) item.append(span(entry.players.join(", "), "soft"));
+
+  const answer = entry.answer && describeAnswer(entry.answer);
+  const now = entry.queued ? describeQueued(entry.queued) : answer;
+  if (now) item.append(span(now.text, now.tone));
+  // A file uploaded before that grew since: what the server said to the shorter copy.
+  if (entry.queued && answer) item.append(span(`Last upload: ${answer.text}`, "muted"));
+
+  const actions = document.createElement("div");
+  actions.className = "row";
+  if (entry.queued?.kind === "failed") {
+    actions.append(button("Retry now", () => invoke<void>("retry_upload", { file: entry.file })));
+  }
+  const matches = entry.answer?.kind === "answered" ? entry.answer.matches.filter(onSite) : [];
+  for (const match of matches) {
+    actions.append(button(matches.length > 1 ? `Match ${match.matchId} on the site` : "View on the site", () => invoke<void>("open_match", { matchId: match.matchId })));
+  }
+  if (actions.childElementCount) item.append(actions);
+  return item;
+}
+
+/** The history page the host asked for, from 0 (the newest). */
+let historyPage = 0;
+/** Counts history requests: the answer to one that a later request replaced is dropped. */
+let historyRequest = 0;
+/** `UploadStatus.historyRevision` last seen. */
+let historyRevision = -1;
+
+function renderHistory(page: HistoryPage): void {
+  // Past the end gives the last page: stay there.
+  historyPage = page.page;
+  el("uploads").replaceChildren(...page.entries.map(historyItem));
+  const first = page.page * page.pageSize;
+  el("uploads-pager").hidden = page.total <= page.pageSize;
+  el("uploads-newer").hidden = page.page === 0;
+  el("uploads-older").hidden = first + page.entries.length >= page.total;
+  el("uploads-range").textContent = page.total ? `${first + 1}–${first + page.entries.length} of ${page.total}` : "";
+}
+
+/** Asks for a page of the history and shows it, unless another page was asked for meanwhile. */
+async function showHistoryPage(page: number): Promise<void> {
+  historyPage = page;
+  const request = ++historyRequest;
+  const found = await invoke<HistoryPage>("get_upload_history", { page });
+  if (request === historyRequest) renderHistory(found);
+}
+
+function showUploadsError(err: unknown): void {
+  const error = el("uploads-error");
+  error.hidden = false;
+  error.textContent = String(err);
+}
+
+/** Shows these settings, then the upload status for them (one sent before they were known was dropped). */
+async function show(next: AppState): Promise<void> {
+  state = next;
+  ready = true;
+  render();
+  renderUploads(await invoke<UploadStatus>("get_upload_status"));
 }
 
 async function refresh(): Promise<void> {
-  state = await invoke<AppState>("get_state");
-  render();
+  await show(await invoke<AppState>("get_state"));
 }
 
 /** Actions running now. The buttons come back only when the last one ends. */
@@ -315,12 +435,14 @@ el("token-forget").addEventListener("click", () => {
 el("server-form").addEventListener("submit", (e) => {
   e.preventDefault();
   void busy(async () => {
-    state = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
+    const next = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
     // A code kept for the old server's tags is no use now.
     uncopied = null;
     showHost(null);
     setStatus("");
-    render();
+    await show(next);
+    // Another server's history, from its newest page: drops any page of the old one on its way.
+    await showHistoryPage(0);
     if (state.hasToken) await checkSaved();
   });
 });
@@ -329,14 +451,12 @@ el("log-folder-choose").addEventListener("click", () => {
   void busy(async () => {
     const path = await open({ directory: true, defaultPath: state.logFolder?.path, title: "Workshop log folder" });
     if (typeof path !== "string") return;
-    state = await invoke<AppState>("set_log_folder", { path });
-    render();
+    await show(await invoke<AppState>("set_log_folder", { path }));
   });
 });
 el("log-folder-reset").addEventListener("click", () => {
   void busy(async () => {
-    state = await invoke<AppState>("set_log_folder", { path: null });
-    render();
+    await show(await invoke<AppState>("set_log_folder", { path: null }));
   });
 });
 
@@ -396,10 +516,16 @@ async function copyRankedCode(): Promise<void> {
 
 el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));
 
-void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
-void invoke<UploadStatus>("get_upload_status").then(renderUploads);
+el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
+el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
 void busy(async () => {
+  await listen<UploadStatus>("upload-status", (event) => {
+    if (!ready) return; // `show` asks for the status once the settings are known.
+    // The settings file was fixed by hand (the uploader reads it again): show what's in it now.
+    if (state.settingsError && event.payload.problem?.kind !== "settings") void refresh();
+    else renderUploads(event.payload);
+  });
   await refresh();
   if (state.hasToken) await checkSaved();
   else el("token").focus();

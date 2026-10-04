@@ -67,4 +67,9 @@ details form { margin-top: .75rem; }
   padding: .5rem 0; border-top: 1px solid var(--line); font-size: .85rem;
 }
 .uploads li:first-child { border-top: 0; }
-.uploads li > :last-child { grid-column: 1 / -1; }
+/* The file and its time on one line; players, status and buttons below. */
+.uploads li > :nth-child(n+3) { grid-column: 1 / -1; }
+.uploads .row { margin-top: .35rem; }
+.uploads button { padding: .2rem .65rem; font-size: .8rem; }
+.soft { color: var(--soft); }
+.pager { align-items: center; font-size: .85rem; }

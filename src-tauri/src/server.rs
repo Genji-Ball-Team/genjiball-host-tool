@@ -70,6 +70,10 @@ pub fn read_token_check(status: u16, body: &str) -> TokenCheck {
 #[serde(rename_all = "camelCase")]
 pub struct UploadedMatch {
     pub match_key: Option<String>,
+    /// The match's id on the site (`/match?id=`). Not in the upload's answer: the status refresh
+    /// (`MatchState`) fills it in.
+    #[serde(default)]
+    pub match_id: Option<i64>,
     pub line_count: u32,
     /// `insert`, `replace`, `repoint` or `skip`.
     pub action: String,
@@ -103,6 +107,10 @@ pub struct UploadAnswer {
 #[serde(rename_all = "camelCase")]
 pub struct MatchState {
     pub match_key: String,
+    /// The match's id on the site (`/match?id=`), which a longer copy keeps. `None` from a server
+    /// that doesn't give it yet.
+    #[serde(default)]
+    pub match_id: Option<i64>,
     pub status: String,
     pub rejection: Option<Rejection>,
     #[serde(default)]
@@ -202,8 +210,13 @@ pub enum UploadOutcome {
     TokenRejected {
         revoked: bool,
     },
-    /// Try again later: offline, `409`, `429`, `5xx`. `after` is the server's `Retry-After`.
+    /// Try again later: offline, `409`, `5xx`. `after` is the server's `Retry-After`.
     Retry {
+        message: String,
+        after: Option<Duration>,
+    },
+    /// Too many uploads (`429`): no upload to this server until `after` (its `Retry-After`).
+    RateLimited {
         message: String,
         after: Option<Duration>,
     },
@@ -232,12 +245,17 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
                 .map_or_else(|| status.to_string(), |e| e.error.clone()),
             message: message(format!("The server refused the file ({status})")),
         },
-        _ => UploadOutcome::Retry {
-            message: message(format!("The server answered {status}")),
-            after: retry_after
+        _ => {
+            let message = message(format!("The server answered {status}"));
+            let after = retry_after
                 .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(|secs| Duration::from_secs(secs.min(config::RETRY_MAX_SECS))),
-        },
+                .map(Duration::from_secs);
+            if status == 429 {
+                UploadOutcome::RateLimited { message, after }
+            } else {
+                UploadOutcome::Retry { message, after }
+            }
+        }
     }
 }
 
@@ -283,6 +301,8 @@ pub async fn upload(
         .map(str::to_string);
     match response.text().await {
         Ok(body) => read_upload(status, retry_after.as_deref(), &body),
+        // The status alone says the token or the file won't do: the body only explains it.
+        Err(_) if matches!(status, 401 | 403 | 413 | 422) => read_upload(status, None, ""),
         Err(e) => retry(e),
     }
 }
@@ -318,6 +338,8 @@ pub async fn check_token(server_url: &str, token: &str) -> TokenCheck {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(body) => read_token_check(status, &body),
+        // The status alone says the token is turned down.
+        Err(_) if matches!(status, 401 | 403) => read_token_check(status, ""),
         Err(e) => unreachable(e),
     }
 }
@@ -345,6 +367,55 @@ pub async fn match_states(
         .await
         .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
     read_match_states(status, &body)
+}
+
+/// Whether the site shows a match with this status: only `accepted` and `void` ones are public.
+pub fn is_public(status: &str) -> bool {
+    matches!(status, "accepted" | "void")
+}
+
+/// The match's page on the site of `server_url`. Only an `http(s)` page under the server: the
+/// host's browser opens it.
+pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String> {
+    let mut url = url::Url::parse(server_url).map_err(|_| "That isn't a server URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("The server URL starts with https://".into());
+    }
+    url.set_path(&format!(
+        "{}{}",
+        url.path().trim_end_matches('/'),
+        config::MATCH_PAGE_PATH
+    ));
+    url.query_pairs_mut()
+        .clear()
+        .append_pair("id", &match_id.to_string());
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+/// A server on this PC for the tests, at the URL returned: reads one request ending in `body`
+/// (the request body), runs `then`, answers with `response` as it is, and hangs up.
+#[cfg(test)]
+pub fn test_server(response: String, body: &str, then: impl FnOnce() + Send + 'static) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let end = format!("\r\n\r\n{body}");
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0; 4096];
+        while !request.ends_with(end.as_bytes()) {
+            let n = socket.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+        }
+        then();
+        socket.write_all(response.as_bytes()).unwrap();
+    });
+    url
 }
 
 #[cfg(test)]
@@ -405,6 +476,7 @@ mod tests {
                 result: "stored".into(),
                 matches: vec![UploadedMatch {
                     match_key: Some("482913507226".into()),
+                    match_id: None,
                     line_count: 57,
                     action: "insert".into(),
                     status: "review".into(),
@@ -473,17 +545,24 @@ mod tests {
                 Some("600"),
                 r#"{"error":"rate_limited","message":"At most 60 uploads an hour"}"#
             ),
-            UploadOutcome::Retry {
+            UploadOutcome::RateLimited {
                 message: "At most 60 uploads an hour".into(),
                 after: Some(Duration::from_secs(600))
             }
         );
-        // No longer than the longest backoff, however far off the server says.
+        // As long as the server says, even past the longest backoff.
         assert_eq!(
             read_upload(503, Some("31536000"), ""),
             UploadOutcome::Retry {
                 message: "The server answered 503".into(),
-                after: Some(Duration::from_secs(config::RETRY_MAX_SECS))
+                after: Some(Duration::from_secs(31_536_000))
+            }
+        );
+        assert_eq!(
+            read_upload(429, None, ""),
+            UploadOutcome::RateLimited {
+                message: "The server answered 429".into(),
+                after: None
             }
         );
         for (status, body) in [
@@ -509,10 +588,17 @@ mod tests {
             read_match_states(200, body).unwrap(),
             [MatchState {
                 match_key: "482913507226".into(),
+                match_id: None,
                 status: "accepted".into(),
                 rejection: None,
                 review_reasons: vec!["untrusted_host".into()],
             }]
+        );
+        // The match's id on the site, from a server that gives it (genjiball-ranked `host-match-id`).
+        let with_id = r#"{"matches":[{"matchKey":"1","matchId":812,"status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
+        assert_eq!(
+            read_match_states(200, with_id).unwrap()[0].match_id,
+            Some(812)
         );
         assert!(read_match_states(200, "<html>").is_err());
         // An older server without the route.
@@ -558,6 +644,82 @@ mod tests {
             .unwrap_err()
             .contains("no rank tags"));
         assert!(read_rank_tags(503, "").unwrap_err().contains("503"));
+    }
+
+    #[test]
+    fn an_upload_answer_has_no_match_id() {
+        // The status refresh brings it later.
+        let body = r#"{"result":"stored","uploadId":12,"matches":[{"matchKey":"1","lineCount":9,"action":"insert","status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
+        let UploadOutcome::Stored(answer) = read_upload(200, None, body) else {
+            panic!()
+        };
+        assert_eq!(answer.matches[0].match_id, None);
+        // Records written before the id was known still load.
+        let old: UploadedMatch = serde_json::from_str(
+            r#"{"matchKey":"1","lineCount":9,"action":"insert","status":"review","rejection":null}"#,
+        )
+        .unwrap();
+        assert_eq!(old.match_id, None);
+    }
+
+    #[test]
+    fn only_accepted_and_void_matches_are_public() {
+        assert!(is_public("accepted"));
+        assert!(is_public("void"));
+        assert!(!is_public("review"));
+        assert!(!is_public("rejected"));
+    }
+
+    #[test]
+    fn builds_the_match_page_url() {
+        assert_eq!(
+            match_page_url("https://genjiball.us", 12).unwrap(),
+            "https://genjiball.us/match?id=12"
+        );
+        assert_eq!(
+            match_page_url("http://127.0.0.1:8787", 3).unwrap(),
+            "http://127.0.0.1:8787/match?id=3"
+        );
+        // A server under a path keeps it.
+        assert_eq!(
+            match_page_url("https://example.com/ranked/", 3).unwrap(),
+            "https://example.com/ranked/match?id=3"
+        );
+        assert!(match_page_url("file:///C:/Windows", 3).is_err());
+        assert!(match_page_url("not a url", 3).is_err());
+    }
+
+    /// A server that answers with `head` (status line and headers), then hangs up before the body
+    /// it announced.
+    fn cut_off_server(head: &str, body: &str) -> String {
+        test_server(
+            format!("{head}Content-Length: 100\r\n\r\n{{\"error\":"),
+            body,
+            || {},
+        )
+    }
+
+    #[test]
+    fn a_cut_off_answer_still_turns_a_token_down() {
+        use tauri::async_runtime::block_on as run;
+        let revoked = cut_off_server("HTTP/1.1 403 Forbidden\r\n", "");
+        assert_eq!(run(check_token(&revoked, "t")), TokenCheck::Revoked);
+        let unknown = cut_off_server("HTTP/1.1 401 Unauthorized\r\n", "x");
+        assert_eq!(
+            run(upload(&unknown, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::TokenRejected { revoked: false }
+        );
+        let too_big = cut_off_server("HTTP/1.1 413 Payload Too Large\r\n", "x");
+        assert!(matches!(
+            run(upload(&too_big, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::Refused { .. }
+        ));
+        // Any other answer cut off is worth another try.
+        let failing = cut_off_server("HTTP/1.1 500 Internal Server Error\r\n", "x");
+        assert!(matches!(
+            run(upload(&failing, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::Retry { .. }
+        ));
     }
 
     #[test]

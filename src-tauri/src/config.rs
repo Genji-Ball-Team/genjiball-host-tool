@@ -36,26 +36,25 @@ pub const POLL_INTERVAL_SECS: u64 = 5;
 /// moved to spectator (Overwatch carries on in a new file), closed the lobby or crashed.
 pub const QUIET_SECS: u64 = 60;
 
-/// Log files last written longer ago than this are ignored, so a first run doesn't upload a
-/// folder full of old matches.
-pub const MAX_LOG_AGE_DAYS: u64 = 14;
-
 /// The server refuses bigger uploads (`maxUploadBytes` in genjiball-ranked).
 pub const MAX_UPLOAD_BYTES: u64 = 512 * 1024;
 
 /// The wait before retrying a failed upload (server down, offline), doubled after each failure
-/// of the same file up to `RETRY_MAX_SECS`. A `Retry-After` from the server wins.
+/// of the same file up to `RETRY_MAX_SECS`. A `Retry-After` from the server wins, however long; on
+/// a `429` it holds every upload to that server.
 pub const RETRY_FIRST_SECS: u64 = 30;
 pub const RETRY_MAX_SECS: u64 = 30 * 60;
 
-/// How many uploads the window lists. The full history is #5.
-pub const RECENT_UPLOADS_SHOWN: usize = 8;
+/// How many uploads the window lists on a page of the upload history, newest first. Older ones are
+/// on the next pages.
+pub const UPLOADS_PAGE_SIZE: usize = 8;
 
-/// How often the listed matches' status (an admin accepting one in review, say) and the host's
-/// trust are asked of the server again.
+/// How often the status of the newest matches (an admin accepting one in review, say) and the
+/// host's trust are asked of the server again.
 pub const STATUS_REFRESH_SECS: u64 = 120;
 
-/// The server answers at most this many match keys at once (`hostMatchKeysMax` in genjiball-ranked).
+/// The server answers at most this many match keys at once (`hostMatchKeysMax` in genjiball-ranked):
+/// the newest this many matches get their status refreshed.
 pub const MAX_STATUS_KEYS: usize = 50;
 
 /// The GitHub API the ranked code's base release is looked up on.
@@ -79,3 +78,7 @@ pub const RELEASES_SEARCHED: u32 = 100;
 /// How long the ranked release found on GitHub is reused before asking GitHub again. Keeps clicks
 /// on "Copy ranked code" well inside GitHub's 60 requests an hour without a token.
 pub const RELEASE_CACHE_SECS: u64 = 10 * 60;
+
+/// A match's page on the ranked site, under the server URL, with its id (`/match?id=12`). Only
+/// `accepted` and `void` matches are public; the site answers any other with "not found".
+pub const MATCH_PAGE_PATH: &str = "/match";

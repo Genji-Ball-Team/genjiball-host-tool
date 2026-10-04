@@ -82,7 +82,13 @@
         <p id="upload-state" role="status"></p>
         <p class="note bad" id="upload-retrying" hidden></p>
         <ul class="uploads" id="uploads"></ul>
-        <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
+        <div class="row pager" id="uploads-pager" hidden>
+          <button type="button" class="quiet" id="uploads-newer">Newer</button>
+          <span class="muted" id="uploads-range"></span>
+          <button type="button" class="quiet" id="uploads-older">Older</button>
+        </div>
+        <p class="note bad" id="uploads-error" hidden></p>
+        <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. A failed upload is retried automatically. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
       </section>
     </main>
   </body>

@@ -1,6 +1,7 @@
 mod config;
 mod credentials;
 mod dpapi;
+mod history;
 mod log_folder;
 mod log_scan;
 mod ranked_code;
@@ -11,7 +12,7 @@ mod uploader;
 mod uploads;
 mod watcher;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -20,6 +21,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, State, WindowEvent};
 
 use credentials::Tokens;
+use history::Page;
 use log_folder::LogFolder;
 use release::ReleaseCache;
 use server::TokenCheck;
@@ -30,15 +32,47 @@ use uploader::{UploadStatus, Uploader};
 struct Store {
     path: PathBuf,
     settings: Mutex<Settings>,
-    /// Why the file couldn't be read at startup, if it couldn't. The defaults are used until the
-    /// host changes a setting, which writes a fresh file.
+    /// Why the file can't be used, while it can't. The window shows the defaults until the host
+    /// changes a setting (which writes a fresh file) or fixes the file, but nothing is uploaded
+    /// with them: they'd be the live server and the detected folder, not what the host chose.
     load_error: Mutex<Option<String>>,
     tokens: Tokens,
 }
 
 impl Store {
+    /// The settings and tokens in `dir`, the app's config folder.
+    fn open(dir: &Path) -> Store {
+        let path = dir.join(config::SETTINGS_FILE);
+        let (settings, load_error) = match settings::load(&path) {
+            Ok(settings) => (settings, None),
+            Err(e) => (Settings::default(), Some(e)),
+        };
+        Store {
+            path,
+            settings: Mutex::new(settings),
+            load_error: Mutex::new(load_error),
+            tokens: Tokens::new(dir.join(config::TOKENS_FALLBACK_FILE)),
+        }
+    }
+
     fn get(&self) -> Settings {
         self.settings.lock().unwrap().clone()
+    }
+
+    /// `load_error`, after reading the file again: a file fixed by hand counts as soon as it's saved.
+    fn load_error(&self) -> Option<String> {
+        let mut settings = self.settings.lock().unwrap();
+        let mut error = self.load_error.lock().unwrap();
+        if error.is_some() {
+            match settings::load(&self.path) {
+                Ok(loaded) => {
+                    *settings = loaded;
+                    *error = None;
+                }
+                Err(e) => *error = Some(e),
+            }
+        }
+        error.clone()
     }
 
     fn update(&self, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
@@ -65,6 +99,7 @@ struct AppState {
 }
 
 fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> {
+    let settings_error = store.load_error();
     let settings = store.get();
     Ok(AppState {
         version: app.package_info().version.to_string(),
@@ -72,7 +107,7 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         default_server_url: config::DEFAULT_SERVER_URL,
         has_token: store.tokens.get(settings.server_url())?.is_some(),
         log_folder: log_folder::current(settings.log_folder.as_deref()),
-        settings_error: store.load_error.lock().unwrap().clone(),
+        settings_error,
     })
 }
 
@@ -94,7 +129,12 @@ async fn check_saved_token(
         .ok_or("No host token saved for this server")?;
     // The listed matches' status too: "Check again" after an admin accepted one.
     uploader.refresh();
-    Ok(server::check_token(&server_url, &token).await)
+    let check = server::check_token(&server_url, &token).await;
+    if matches!(check, TokenCheck::Ok { .. }) {
+        // The server knows it now (an admin fixed it, say): stop holding uploads for it.
+        uploader.token_ok();
+    }
+    Ok(check)
 }
 
 /// Checks a token the host entered, and saves it unless the server turned it down. A server that
@@ -113,7 +153,11 @@ async fn save_token(
     let check = server::check_token(&server_url, token).await;
     if !check.is_rejected() {
         store.tokens.set(&server_url, token)?;
-        uploader.wake();
+        // Uploads to this server start with the logs written from now on. A token saved again,
+        // even the same one, is tried again.
+        uploader.start(&server_url);
+        uploader.token_ok();
+        uploader.changed();
     }
     Ok(check)
 }
@@ -121,13 +165,44 @@ async fn save_token(
 #[tauri::command]
 fn forget_token(store: State<Store>, uploader: State<Uploader>) -> Result<(), String> {
     store.tokens.delete(store.get().server_url())?;
-    uploader.wake();
+    uploader.changed();
     Ok(())
 }
 
 #[tauri::command]
 fn get_upload_status(uploader: State<Uploader>) -> UploadStatus {
     uploader.status()
+}
+
+/// A page of the upload history to the current server, from 0 (the newest).
+#[tauri::command]
+fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader>) -> Page {
+    let settings = store.get();
+    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    uploader.history(
+        settings.server_url(),
+        folder.as_ref().map(|f| f.path.as_path()),
+        page,
+    )
+}
+
+/// Tries a failed upload again now, through the upload queue.
+#[tauri::command]
+fn retry_upload(file: String, uploader: State<Uploader>) {
+    uploader.retry(file);
+}
+
+/// Opens the page of one of the host's public matches on the current server's site, in the host's
+/// browser. The window only gives the id: the URL is built here, so it can't open anything else.
+#[tauri::command]
+fn open_match(match_id: i64, store: State<Store>, uploader: State<Uploader>) -> Result<(), String> {
+    let server_url = store.get().server_url().to_string();
+    if !uploader.has_public_match(&server_url, match_id) {
+        return Err("That match isn't on the site: only accepted and voided matches are".into());
+    }
+    let url = server::match_page_url(&server_url, match_id)?;
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| format!("Couldn't open the browser: {e}"))
 }
 
 /// Empty goes back to the default server.
@@ -140,7 +215,7 @@ fn set_server_url(
 ) -> Result<AppState, String> {
     let url = settings::normalize_server_url(&url)?;
     store.update(|s| s.server_url = url)?;
-    uploader.wake();
+    uploader.changed();
     app_state(&app, &store)
 }
 
@@ -153,7 +228,7 @@ fn set_log_folder(
     uploader: State<Uploader>,
 ) -> Result<AppState, String> {
     store.update(|s| s.log_folder = path)?;
-    uploader.wake();
+    uploader.changed();
     app_state(&app, &store)
 }
 
@@ -239,20 +314,15 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so a second launch stops here: it shows this window (maybe in the tray) rather
+        // than running a second uploader on the same files.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_window(app)
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
-            let path = dir.join(config::SETTINGS_FILE);
-            let (settings, load_error) = match settings::load(&path) {
-                Ok(settings) => (settings, None),
-                Err(e) => (Settings::default(), Some(e)),
-            };
-            app.manage(Store {
-                path,
-                settings: Mutex::new(settings),
-                load_error: Mutex::new(load_error),
-                tokens: Tokens::new(dir.join(config::TOKENS_FALLBACK_FILE)),
-            });
+            app.manage(Store::open(&dir));
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
             app.manage(ReleaseCache::default());
             uploader::start(app.handle().clone());
@@ -274,8 +344,47 @@ pub fn run() {
             set_server_url,
             set_log_folder,
             get_upload_status,
-            build_ranked_code
+            build_ranked_code,
+            get_upload_history,
+            retry_upload,
+            open_match
         ])
         .run(tauri::generate_context!())
         .expect("error while running the host tool");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn a_settings_error_lasts_until_the_file_is_fixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(config::SETTINGS_FILE);
+        fs::write(&path, r#"{ "serverUrl": "http://192.168.1.20:8787" }"#).unwrap();
+        let store = Store::open(dir.path());
+        assert!(store.load_error().is_some());
+        assert!(store.load_error().is_some(), "still");
+        // The defaults stand in meanwhile.
+        assert_eq!(store.get(), Settings::default());
+
+        fs::write(&path, r#"{ "serverUrl": "http://localhost:8787" }"#).unwrap();
+        assert_eq!(store.load_error(), None);
+        assert_eq!(store.get().server_url(), "http://localhost:8787");
+    }
+
+    #[test]
+    fn changing_a_setting_writes_a_fresh_file_and_clears_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(config::SETTINGS_FILE);
+        fs::write(&path, "{ broken").unwrap();
+        let store = Store::open(dir.path());
+        assert!(store.load_error().is_some());
+        store
+            .update(|s| s.server_url = Some("http://localhost:8787".into()))
+            .unwrap();
+        assert_eq!(store.load_error(), None);
+        assert_eq!(settings::load(&path).unwrap(), store.get());
+    }
 }

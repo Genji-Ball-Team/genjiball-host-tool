@@ -1,7 +1,10 @@
 //! The record of uploaded log files (`uploads.json`): per server URL and file name, the size that
 //! was sent and what the server said. A file is uploaded again only when it's grown since, so a
 //! restart doesn't send every file again, and a file that couldn't be sent (offline) still is.
-//! Losing the record costs little: the server answers a file it already has with `duplicate`.
+//! It also holds when each server's uploads started (`started`), so a record that can't be read
+//! is never written over: uploads wait until it's fixed or deleted. Deleting it starts afresh: the
+//! server answers a file it already has with `duplicate`, and uploads to a server with a token
+//! start again from then.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,10 +14,10 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MatchState, UploadAnswer};
+use crate::server::{self, MatchState, UploadAnswer};
 use crate::settings;
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Record {
     /// Server URL → file name → the last upload of that file.
@@ -23,17 +26,35 @@ pub struct Record {
     /// before that aren't uploaded to it, so switching from the test server to the real one
     /// doesn't send the test matches along.
     started: BTreeMap<String, u64>,
+    /// Goes up each time an upload or its status changes, on any page of the history: the window
+    /// asks for the page it shows again. Memory only.
+    #[serde(skip)]
+    revision: u64,
+    /// Changed since it was last saved: `save` writes it, and tries again until that works.
+    #[serde(skip)]
+    dirty: bool,
+}
+
+/// The same uploads, whatever the revision.
+impl PartialEq for Record {
+    fn eq(&self, other: &Self) -> bool {
+        self.servers == other.servers && self.started == other.started
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sent {
-    /// Bytes sent: the file is sent again once it's a different size.
+    /// Bytes sent, the file's complete lines (`log_scan::complete_lines`): the file is sent again
+    /// once those are a different size.
     pub size: u64,
     /// `MATCH_END` lines in what was sent: a new one is sent straight away.
     pub match_ends: usize,
     /// When, RFC 3339 in UTC.
     pub at: String,
+    /// The players' names in what was sent (`JOIN` lines), for the upload history.
+    #[serde(default)]
+    pub players: Vec<String>,
     pub answer: Answer,
 }
 
@@ -44,15 +65,6 @@ pub enum Answer {
     Answered(UploadAnswer),
     /// The server, or the tool before sending, refused the file (`413`, `422`).
     Refused { error: String, message: String },
-}
-
-/// One line of the window's upload list.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecentUpload {
-    pub file: String,
-    pub at: String,
-    pub answer: Answer,
 }
 
 impl Record {
@@ -72,6 +84,7 @@ impl Record {
             .unwrap_or_default()
             .as_secs();
         self.started.insert(server_url.to_string(), secs);
+        self.dirty = true;
         true
     }
 
@@ -84,23 +97,36 @@ impl Record {
             .entry(server_url.to_string())
             .or_default()
             .insert(file.to_string(), sent);
+        self.revision += 1;
+        self.dirty = true;
     }
 
-    /// The keys of the matches in the `count` latest uploads to `server_url`, at most `max`: the
-    /// ones whose status the window shows.
-    pub fn recent_match_keys(&self, server_url: &str, count: usize, max: usize) -> Vec<String> {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The keys of the `max` newest matches uploaded to `server_url`: the ones whose status is
+    /// asked of the server again. Newest file first, and in each file its last match first.
+    pub fn recent_match_keys(&self, server_url: &str, max: usize) -> Vec<String> {
         let mut keys: Vec<String> = Vec::new();
-        for upload in self.recent(server_url, count) {
-            let Answer::Answered(answer) = upload.answer else {
+        for (_, sent) in self.uploads(server_url) {
+            let Answer::Answered(answer) = &sent.answer else {
                 continue;
             };
-            for key in answer.matches.into_iter().filter_map(|m| m.match_key) {
-                if !keys.contains(&key) {
-                    keys.push(key);
+            for key in answer
+                .matches
+                .iter()
+                .rev()
+                .filter_map(|m| m.match_key.as_ref())
+            {
+                if keys.len() == max {
+                    return keys;
+                }
+                if !keys.contains(key) {
+                    keys.push(key.clone());
                 }
             }
         }
-        keys.truncate(max);
         keys
     }
 
@@ -132,24 +158,45 @@ impl Record {
                     m.review_reasons = state.review_reasons.clone();
                     changed = true;
                 }
+                // A server that doesn't give the id yet leaves the one we have.
+                if state.match_id.is_some() && m.match_id != state.match_id {
+                    m.match_id = state.match_id;
+                    changed = true;
+                }
             }
+        }
+        if changed {
+            self.revision += 1;
+            self.dirty = true;
         }
         changed
     }
 
-    /// The `count` latest uploads to `server_url`, newest first.
-    pub fn recent(&self, server_url: &str, count: usize) -> Vec<RecentUpload> {
-        let mut all: Vec<_> = self.servers.get(server_url).into_iter().flatten().collect();
+    /// Whether a match uploaded to `server_url` has this id on the site and is public there.
+    pub fn has_public_match(&self, server_url: &str, match_id: i64) -> bool {
+        self.uploads(server_url)
+            .into_iter()
+            .any(|(_, sent)| match &sent.answer {
+                Answer::Answered(answer) => answer
+                    .matches
+                    .iter()
+                    .any(|m| m.match_id == Some(match_id) && server::is_public(&m.status)),
+                Answer::Refused { .. } => false,
+            })
+    }
+
+    /// Every file uploaded to `server_url` and its last upload, newest first.
+    pub fn uploads(&self, server_url: &str) -> Vec<(&str, &Sent)> {
+        let mut all: Vec<_> = self
+            .servers
+            .get(server_url)
+            .into_iter()
+            .flatten()
+            .map(|(file, sent)| (file.as_str(), sent))
+            .collect();
         // RFC 3339 in UTC sorts as text; the file name breaks ties.
         all.sort_by(|a, b| (&b.1.at, b.0).cmp(&(&a.1.at, a.0)));
-        all.into_iter()
-            .take(count)
-            .map(|(file, sent)| RecentUpload {
-                file: file.clone(),
-                at: sent.at.clone(),
-                answer: sent.answer.clone(),
-            })
-            .collect()
+        all
     }
 }
 
@@ -163,13 +210,20 @@ pub fn load(path: &Path) -> Result<Record, String> {
     }
 }
 
-pub fn save(path: &Path, record: &Record) -> Result<(), String> {
-    settings::save_json(path, record)
+/// Writes `record` to `path` if it changed since it was last written. A write that fails leaves
+/// it changed, so the next call tries again.
+pub fn save(path: &Path, record: &mut Record) -> Result<(), String> {
+    if record.dirty {
+        settings::save_json(path, record)?;
+        record.dirty = false;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config;
     use crate::server::UploadedMatch;
 
     fn sent(size: u64, at: &str) -> Sent {
@@ -177,6 +231,7 @@ mod tests {
             size,
             match_ends: 1,
             at: at.into(),
+            players: vec![],
             answer: Answer::Refused {
                 error: "not_ranked".into(),
                 message: "x".into(),
@@ -221,13 +276,15 @@ mod tests {
         record.put(server, "Log-a.txt", sent(1, "2026-10-03T10:00:00Z"));
         record.put(server, "Log-b.txt", sent(1, "2026-10-03T12:00:00Z"));
         record.put(server, "Log-c.txt", sent(1, "2026-10-03T11:00:00Z"));
+        // The same time: the file name breaks the tie.
+        record.put(server, "Log-d.txt", sent(1, "2026-10-03T11:00:00Z"));
         let files: Vec<_> = record
-            .recent(server, 2)
+            .uploads(server)
             .into_iter()
-            .map(|r| r.file)
+            .map(|(file, _)| file)
             .collect();
-        assert_eq!(files, ["Log-b.txt", "Log-c.txt"]);
-        assert!(record.recent("https://other", 2).is_empty());
+        assert_eq!(files, ["Log-b.txt", "Log-d.txt", "Log-c.txt", "Log-a.txt"]);
+        assert!(record.uploads("https://other").is_empty());
     }
 
     fn answered(at: &str, keys: &[&str], status: &str) -> Sent {
@@ -238,6 +295,7 @@ mod tests {
                     .iter()
                     .map(|key| UploadedMatch {
                         match_key: Some(key.to_string()),
+                        match_id: None,
                         line_count: 10,
                         action: "insert".into(),
                         status: status.into(),
@@ -266,12 +324,53 @@ mod tests {
             answered("2026-10-03T11:00:00Z", &["1", "2"], "review"),
         );
         record.put(server, "Log-c.txt", sent(1, "2026-10-03T12:00:00Z"));
-        assert_eq!(record.recent_match_keys(server, 8, 50), ["1", "2"]);
-        assert_eq!(record.recent_match_keys(server, 8, 1), ["1"]);
+        // Newest first: Log-b's matches before Log-a's, and Log-b's last match first.
+        assert_eq!(record.recent_match_keys(server, 50), ["2", "1"]);
+        assert_eq!(record.recent_match_keys(server, 1), ["2"]);
         assert_eq!(
-            record.recent_match_keys(server, 1, 50),
+            record.recent_match_keys("https://other", 50),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn refreshes_the_newest_matches_of_a_long_file() {
+        let mut record = record_with_many_matches();
+        let server = "https://genjiball.us";
+        let keys = record.recent_match_keys(server, config::MAX_STATUS_KEYS);
+        assert_eq!(keys.len(), config::MAX_STATUS_KEYS);
+        // The newest file's last match first, down to its 11th: its first 10 are left out.
+        assert_eq!(keys[0], "m59");
+        assert_eq!(keys[config::MAX_STATUS_KEYS - 1], "m10");
+        // Spectator copies of the newest matches don't take a place twice.
+        record.put(
+            server,
+            "Log-c.txt",
+            answered("2026-10-03T12:00:00Z", &["m58", "m59"], "review"),
+        );
+        assert_eq!(
+            record.recent_match_keys(server, config::MAX_STATUS_KEYS),
+            keys
+        );
+    }
+
+    /// An older file with match `m0`, then a file with 60 matches, `m0` (a copy) to `m59`.
+    fn record_with_many_matches() -> Record {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["m0"], "review"),
+        );
+        let keys: Vec<String> = (0..60).map(|n| format!("m{n}")).collect();
+        let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &keys, "review"),
+        );
+        record
     }
 
     #[test]
@@ -290,19 +389,25 @@ mod tests {
         );
         let accepted = MatchState {
             match_key: "1".into(),
+            match_id: None,
             status: "accepted".into(),
             rejection: None,
             review_reasons: vec!["untrusted_host".into()],
         };
         assert!(record.update_states(server, std::slice::from_ref(&accepted)));
-        assert!(!record.update_states(server, &[accepted]));
-        let statuses: Vec<_> = record
-            .recent(server, 8)
+        assert!(!record.update_states(server, std::slice::from_ref(&accepted)));
+        let matches = |record: &Record| -> Vec<UploadedMatch> {
+            record
+                .uploads(server)
+                .into_iter()
+                .flat_map(|(_, sent)| match &sent.answer {
+                    Answer::Answered(a) => a.matches.clone(),
+                    Answer::Refused { .. } => vec![],
+                })
+                .collect()
+        };
+        let statuses: Vec<_> = matches(&record)
             .into_iter()
-            .flat_map(|r| match r.answer {
-                Answer::Answered(a) => a.matches,
-                Answer::Refused { .. } => vec![],
-            })
             .map(|m| (m.match_key.unwrap(), m.status))
             .collect();
         assert_eq!(
@@ -313,6 +418,16 @@ mod tests {
                 ("1".to_string(), "accepted".to_string()),
             ]
         );
+
+        // The site's id, once the server gives it, and kept when a server doesn't.
+        let with_id = MatchState {
+            match_id: Some(40),
+            ..accepted.clone()
+        };
+        assert!(record.update_states(server, std::slice::from_ref(&with_id)));
+        assert!(!record.update_states(server, &[accepted]));
+        let ids: Vec<_> = matches(&record).into_iter().map(|m| m.match_id).collect();
+        assert_eq!(ids, [Some(40), None, Some(40)]);
     }
 
     #[test]
@@ -344,9 +459,93 @@ mod tests {
             },
         );
         record.start("https://genjiball.us", SystemTime::now());
-        save(&path, &record).unwrap();
+        save(&path, &mut record).unwrap();
         assert_eq!(load(&path).unwrap(), record);
         fs::write(&path, "{ broken").unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn a_failed_save_is_tried_again_until_it_works() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file where the folder should be: every write fails.
+        let folder = dir.path().join("config");
+        fs::write(&folder, "").unwrap();
+        let path = folder.join("uploads.json");
+        let mut record = Record::default();
+        assert!(save(&path, &mut record).is_ok(), "nothing to save");
+
+        record.start("https://genjiball.us", SystemTime::now());
+        assert!(save(&path, &mut record).is_err());
+        // Still not saved: the next try writes it, and only that one.
+        assert!(save(&path, &mut record).is_err());
+        fs::remove_file(&folder).unwrap();
+        save(&path, &mut record).unwrap();
+        assert_eq!(load(&path).unwrap(), record);
+        fs::remove_file(&path).unwrap();
+        save(&path, &mut record).unwrap();
+        assert!(!path.exists(), "saved already");
+
+        // Every change is saved: an upload, and a status the server gave since.
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "review"),
+        );
+        save(&path, &mut record).unwrap();
+        assert_eq!(load(&path).unwrap(), record);
+        let accepted = MatchState {
+            match_key: "1".into(),
+            match_id: Some(3),
+            status: "accepted".into(),
+            rejection: None,
+            review_reasons: vec![],
+        };
+        record.update_states(server, &[accepted]);
+        save(&path, &mut record).unwrap();
+        assert_eq!(load(&path).unwrap(), record);
+    }
+
+    #[test]
+    fn knows_which_matches_are_on_the_site() {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "review"),
+        );
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &["2"], "accepted"),
+        );
+        let ids = |key: &str, id: i64, status: &str| MatchState {
+            match_key: key.into(),
+            match_id: Some(id),
+            status: status.into(),
+            rejection: None,
+            review_reasons: vec![],
+        };
+        record.update_states(server, &[ids("1", 7, "review"), ids("2", 8, "accepted")]);
+        // In review: not public yet.
+        assert!(!record.has_public_match(server, 7));
+        assert!(record.has_public_match(server, 8));
+        assert!(!record.has_public_match(server, 9));
+        assert!(!record.has_public_match("https://test.genjiball.us", 8));
+    }
+
+    #[test]
+    fn loads_a_record_from_before_the_history() {
+        // No `players` and no `matchId`: written by an older version of the tool.
+        let old = r#"{"servers":{"https://genjiball.us":{"Log-a.txt":{"size":5,"matchEnds":1,"at":"2026-10-03T10:00:00Z","answer":{"kind":"answered","result":"stored","matches":[{"matchKey":"1","lineCount":9,"action":"insert","status":"accepted","rejection":null,"reviewReasons":[]}]}}}},"started":{}}"#;
+        let record: Record = serde_json::from_str(old).unwrap();
+        let sent = record.get("https://genjiball.us", "Log-a.txt").unwrap();
+        assert!(sent.players.is_empty());
+        let Answer::Answered(answer) = &sent.answer else {
+            panic!()
+        };
+        assert_eq!(answer.matches[0].match_id, None);
     }
 }

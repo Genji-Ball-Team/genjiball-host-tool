@@ -9,14 +9,63 @@
   </head>
   <body>
     <main>
-      <h1>Genji Ball Host Tool</h1>
-      <p class="lede">Watches your Workshop log folder and uploads ranked matches. Settings and uploads are coming next.</p>
-      <dl>
-        <dt>Version</dt>
-        <dd id="version">…</dd>
-        <dt>Server</dt>
-        <dd id="server">…</dd>
-      </dl>
+      <header>
+        <h1>Genji Ball Host Tool</h1>
+        <span class="muted" id="version"></span>
+      </header>
+
+      <p class="banner bad" id="settings-error" hidden></p>
+
+      <section id="welcome" hidden>
+        <p class="lede">Paste the host token an admin gave you. The tool checks it with the ranked server, then keeps it on this PC, encrypted for your Windows account.</p>
+      </section>
+
+      <section>
+        <h2>Ranked server</h2>
+        <dl>
+          <dt>Server</dt>
+          <dd id="server"></dd>
+          <dt>Host</dt>
+          <dd><span id="host"></span> <span class="status" id="token-status" role="status"></span></dd>
+        </dl>
+
+        <form id="token-form" hidden>
+          <label for="token">Host token</label>
+          <div class="row">
+            <input id="token" type="password" autocomplete="off" spellcheck="false" />
+            <button type="submit">Check and save</button>
+            <button type="button" class="quiet" id="token-cancel" hidden>Cancel</button>
+          </div>
+        </form>
+
+        <div class="row" id="token-actions" hidden>
+          <button type="button" id="token-check">Check again</button>
+          <button type="button" class="quiet" id="token-change">Change token</button>
+          <button type="button" class="quiet" id="token-forget">Forget token</button>
+        </div>
+
+        <details id="advanced">
+          <summary>Advanced</summary>
+          <form id="server-form">
+            <label for="server-url">Server URL</label>
+            <div class="row">
+              <input id="server-url" type="text" inputmode="url" spellcheck="false" placeholder="https://…" />
+              <button type="submit">Save</button>
+            </div>
+            <p class="note">Leave empty for <span id="default-server"></span>. Each server keeps its own token.</p>
+          </form>
+        </details>
+      </section>
+
+      <section>
+        <h2>Workshop log folder</h2>
+        <p class="path" id="log-folder"></p>
+        <p class="note" id="log-folder-note"></p>
+        <div class="row">
+          <button type="button" id="log-folder-choose">Choose folder…</button>
+          <button type="button" class="quiet" id="log-folder-reset" hidden>Use the detected folder</button>
+        </div>
+      </section>
     </main>
   </body>
 </html>

@@ -8,7 +8,7 @@ How ranked works end to end:
 2. This tool watches the log folder and uploads the matches.
 3. The [ranked server](https://github.com/Genji-Ball-Team/genjiball-ranked) parses the log, rates each round and shows the results on the website.
 
-**Status:** early. The app is set up; settings, uploads and the ranked code generator are next (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues)). There's no release yet.
+**Status:** early. The app checks and saves your host token and finds the log folder; uploads and the ranked code generator are next (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues)). There's no release yet.
 
 - **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
 
@@ -38,6 +38,8 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src/` | The window: TypeScript and CSS, built with Vite |
 | `src-tauri/` | The Rust side: file watching, uploads, settings. Tauri config in `tauri.conf.json` |
 | `src-tauri/src/config.rs` | Every tunable and its default |
+| `src-tauri/src/settings.rs`, `credentials.rs` | The settings file, and the host token (Credential Manager, or a DPAPI-encrypted file) |
+| `src-tauri/src/server.rs` | Requests to the ranked server |
 | `src-tauri/capabilities/` | What the window is allowed to call |
 
 ## Contributing

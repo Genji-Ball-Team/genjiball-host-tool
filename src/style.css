@@ -1,18 +1,54 @@
 :root {
   /* genjiball.us's palette, the same as the ranked site */
-  --bg: #090b10; --panel: #0e1117; --line: #1d222b;
-  --fg: #eef1f7; --soft: #b4bbc7; --muted: #858d9a; --good: #67d49a; --bad: #ef6b6b;
+  --bg: #090b10; --panel: #0e1117; --raised: #151922; --line: #1d222b; --border: #252a34;
+  --fg: #eef1f7; --soft: #b4bbc7; --muted: #858d9a; --faint: #5d6573; --good: #67d49a; --bad: #ef6b6b;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0; min-height: 100vh;
   background: var(--bg); color: var(--fg);
-  font: 400 1rem/1.5 system-ui, sans-serif;
+  font: 400 .95rem/1.5 system-ui, sans-serif;
 }
-main { padding: 2rem 2.25rem; max-width: 40rem; }
-h1 { margin: 0; font-size: 1.6rem; line-height: 1.1; border-left: 4px solid var(--good); padding-left: .75rem; }
-.lede { color: var(--soft); margin: .75rem 0 1.75rem; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1.5rem; margin: 0; padding-top: 1rem; border-top: 1px solid var(--line); }
+main { padding: 1.75rem 2.25rem 2.5rem; max-width: 44rem; }
+
+header { display: flex; align-items: baseline; gap: .75rem; }
+h1 { margin: 0; font-size: 1.5rem; line-height: 1.1; border-left: 4px solid var(--good); padding-left: .75rem; }
+h2 { margin: 0 0 .75rem; font-size: .8rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+section { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+#welcome { border-top: 0; padding-top: 0; margin-top: 1rem; }
+
+.lede { color: var(--soft); margin: 0; max-width: 36rem; }
+.note { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
+.muted { color: var(--muted); }
+.good { color: var(--good); }
+.bad { color: var(--bad); }
+.banner { margin: 1rem 0 0; padding: .6rem .8rem; border-left: 3px solid var(--bad); background: #1c1012; }
+.path { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
+
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.5rem; margin: 0 0 1rem; }
 dt { color: var(--muted); }
-dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.status { margin-left: .5rem; font-size: .85rem; }
+
+label { display: block; color: var(--soft); font-size: .85rem; margin-bottom: .35rem; }
+.row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+form .row { margin-top: 0; }
+input {
+  flex: 1 1 16rem; min-width: 0; padding: .45rem .65rem;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--fg); font: inherit;
+}
+input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
+button {
+  padding: .45rem .9rem; border: 1px solid var(--good); border-radius: 4px;
+  background: var(--good); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer;
+}
+button.quiet { background: transparent; border-color: var(--border); color: var(--soft); font-weight: 500; }
+button.quiet:hover { border-color: var(--muted); color: var(--fg); }
+button:disabled { opacity: .55; cursor: default; }
+
+details { margin-top: 1.25rem; }
+summary { cursor: pointer; color: var(--muted); font-size: .85rem; width: max-content; }
+summary:hover { color: var(--fg); }
+details form { margin-top: .75rem; }

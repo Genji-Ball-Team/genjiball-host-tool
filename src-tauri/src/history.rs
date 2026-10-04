@@ -2,10 +2,63 @@
 //! (a match being played, one due, one that failed and waits to be retried), then every upload in
 //! `uploads.json` to the current server, newest first. One line per file.
 
+use std::path::{Path, PathBuf};
+
 use serde::Serialize;
 
 use crate::uploads::{Answer, Record};
 use crate::watcher::{QueueState, Queued};
+
+/// The watcher's queue as of the last poll, with the server and folder it was polled for: it only
+/// belongs in the history of that server while that folder is the log folder.
+#[derive(Debug, Default)]
+pub struct QueueSnapshot {
+    server_url: String,
+    folder: Option<PathBuf>,
+    queue: Vec<Queued>,
+    /// Goes up each time what the snapshot lists changes.
+    revision: u64,
+}
+
+impl QueueSnapshot {
+    /// The queue a poll of `folder` for `server_url` found.
+    pub fn set(&mut self, server_url: &str, folder: &Path, queue: Vec<Queued>) {
+        if self.server_url != server_url
+            || self.folder.as_deref() != Some(folder)
+            || self.queue != queue
+        {
+            self.server_url = server_url.to_string();
+            self.folder = Some(folder.to_path_buf());
+            self.queue = queue;
+            self.revision += 1;
+        }
+    }
+
+    /// No folder to poll: nothing is queued.
+    pub fn clear(&mut self) {
+        if self.folder.is_some() || !self.queue.is_empty() {
+            self.folder = None;
+            self.queue.clear();
+            self.revision += 1;
+        }
+    }
+
+    /// The queue, if it was polled for `server_url` in `folder`; else nothing.
+    pub fn queue(&self, server_url: &str, folder: Option<&Path>) -> &[Queued] {
+        match folder {
+            Some(folder)
+                if self.server_url == server_url && self.folder.as_deref() == Some(folder) =>
+            {
+                &self.queue
+            }
+            _ => &[],
+        }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+}
 
 /// One line of the history.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -88,7 +141,7 @@ pub fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{UploadAnswer, UploadedMatch};
+    use crate::server::{MatchState, UploadAnswer, UploadedMatch};
     use crate::uploads::Sent;
 
     const SERVER: &str = "https://genjiball.us";
@@ -210,5 +263,69 @@ mod tests {
     #[test]
     fn a_zero_page_size_still_lists() {
         assert_eq!(files(&page(&record(), SERVER, &[], 0, 0)), ["Log-5.txt"]);
+    }
+
+    #[test]
+    fn a_change_past_the_first_page_still_changes_the_revision() {
+        let mut record = record();
+        // Each upload its own match key, Log-1 (the oldest, on the last page) key "k1".
+        for n in 1..=5 {
+            let mut sent = sent(&format!("2026-10-03T1{n}:00:00Z"), "review");
+            if let Answer::Answered(answer) = &mut sent.answer {
+                answer.matches[0].match_key = Some(format!("k{n}"));
+            }
+            record.put(SERVER, &format!("Log-{n}.txt"), sent);
+        }
+        let first = page(&record, SERVER, &[], 0, 2);
+        let before = record.revision();
+        // An admin accepts the oldest match, and the server gives its id.
+        let accepted = MatchState {
+            match_key: "k1".into(),
+            match_id: Some(812),
+            status: "accepted".into(),
+            rejection: None,
+            review_reasons: vec![],
+        };
+        assert!(record.update_states(SERVER, std::slice::from_ref(&accepted)));
+        assert_eq!(page(&record, SERVER, &[], 0, 2), first);
+        assert_ne!(record.revision(), before);
+        // Nothing new: the same revision.
+        let after = record.revision();
+        assert!(!record.update_states(SERVER, &[accepted]));
+        assert_eq!(record.revision(), after);
+    }
+
+    #[test]
+    fn the_queue_only_counts_for_its_server_and_folder() {
+        let folder = Path::new("C:/Workshop");
+        let queue = vec![queued("Log-6.txt", QueueState::Due)];
+        let mut snapshot = QueueSnapshot::default();
+        snapshot.set(SERVER, folder, queue.clone());
+        let revision = snapshot.revision();
+        assert_eq!(snapshot.queue(SERVER, Some(folder)), queue.as_slice());
+        // Another server, another folder, or none: not this queue.
+        assert!(snapshot
+            .queue("https://test.genjiball.us", Some(folder))
+            .is_empty());
+        assert!(snapshot
+            .queue(SERVER, Some(Path::new("D:/Logs")))
+            .is_empty());
+        assert!(snapshot.queue(SERVER, None).is_empty());
+        // The same again changes nothing.
+        snapshot.set(SERVER, folder, queue.clone());
+        assert_eq!(snapshot.revision(), revision);
+        // A poll for another server replaces it.
+        snapshot.set("https://test.genjiball.us", folder, vec![]);
+        assert!(snapshot.queue(SERVER, Some(folder)).is_empty());
+        assert!(snapshot.revision() > revision);
+        // The folder went away: nothing queued, and no Retry for a file that isn't there.
+        snapshot.set(SERVER, folder, queue);
+        let revision = snapshot.revision();
+        snapshot.clear();
+        assert!(snapshot.queue(SERVER, Some(folder)).is_empty());
+        assert!(snapshot.revision() > revision);
+        let revision = snapshot.revision();
+        snapshot.clear();
+        assert_eq!(snapshot.revision(), revision);
     }
 }

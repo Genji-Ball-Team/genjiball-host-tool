@@ -132,7 +132,13 @@ fn get_upload_status(uploader: State<Uploader>) -> UploadStatus {
 /// A page of the upload history to the current server, from 0 (the newest).
 #[tauri::command]
 fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader>) -> Page {
-    uploader.history(store.get().server_url(), page)
+    let settings = store.get();
+    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    uploader.history(
+        settings.server_url(),
+        folder.as_ref().map(|f| f.path.as_path()),
+        page,
+    )
 }
 
 /// Tries a failed upload again now, through the upload queue.

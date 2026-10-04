@@ -39,6 +39,7 @@ interface UploadStatus {
   waiting: number;
   retrying: string | null;
   history: HistoryPage;
+  historyRevision: number;
   host: Host | null;
 }
 
@@ -229,9 +230,16 @@ function renderUploads(status: UploadStatus): void {
   retrying.hidden = !status.retrying;
   retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
 
-  // The status carries the newest page; an older one is asked for again, since it may have moved.
-  if (historyPage === 0) renderHistory(status.history);
-  else showHistoryPage(historyPage).catch(showUploadsError);
+  // The status carries the newest page. An older one is asked for again when anything in the
+  // history changed, since it may be on that page or have moved it.
+  const changed = status.historyRevision !== historyRevision;
+  historyRevision = status.historyRevision;
+  if (historyPage === 0) {
+    historyRequest++; // Newer than any page 0 still on its way.
+    renderHistory(status.history);
+  } else if (changed) {
+    showHistoryPage(historyPage).catch(showUploadsError);
+  }
 }
 
 function describeQueued(queued: QueueState): { text: string; tone: Tone } {
@@ -293,10 +301,15 @@ function historyItem(entry: HistoryEntry): HTMLLIElement {
   return item;
 }
 
-/** The history page shown, from 0 (the newest). */
+/** The history page the host asked for, from 0 (the newest). */
 let historyPage = 0;
+/** Counts history requests: the answer to one that a later request replaced is dropped. */
+let historyRequest = 0;
+/** `UploadStatus.historyRevision` last seen. */
+let historyRevision = -1;
 
 function renderHistory(page: HistoryPage): void {
+  // Past the end gives the last page: stay there.
   historyPage = page.page;
   el("uploads").replaceChildren(...page.entries.map(historyItem));
   const first = page.page * page.pageSize;
@@ -306,8 +319,12 @@ function renderHistory(page: HistoryPage): void {
   el("uploads-range").textContent = page.total ? `${first + 1}–${first + page.entries.length} of ${page.total}` : "";
 }
 
+/** Asks for a page of the history and shows it, unless another page was asked for meanwhile. */
 async function showHistoryPage(page: number): Promise<void> {
-  renderHistory(await invoke<HistoryPage>("get_upload_history", { page }));
+  historyPage = page;
+  const request = ++historyRequest;
+  const found = await invoke<HistoryPage>("get_upload_history", { page });
+  if (request === historyRequest) renderHistory(found);
 }
 
 function showUploadsError(err: unknown): void {
@@ -385,6 +402,8 @@ el("server-form").addEventListener("submit", (e) => {
     showHost(null);
     setStatus("");
     render();
+    // Another server's history, from its newest page: drops any page of the old one on its way.
+    await showHistoryPage(0);
     if (state.hasToken) await checkSaved();
   });
 });

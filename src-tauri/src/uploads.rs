@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::server::{self, MatchState, UploadAnswer};
 use crate::settings;
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Record {
     /// Server URL → file name → the last upload of that file.
@@ -23,6 +23,17 @@ pub struct Record {
     /// before that aren't uploaded to it, so switching from the test server to the real one
     /// doesn't send the test matches along.
     started: BTreeMap<String, u64>,
+    /// Goes up each time an upload or its status changes, on any page of the history: the window
+    /// asks for the page it shows again. Memory only.
+    #[serde(skip)]
+    revision: u64,
+}
+
+/// The same uploads, whatever the revision.
+impl PartialEq for Record {
+    fn eq(&self, other: &Self) -> bool {
+        self.servers == other.servers && self.started == other.started
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,17 +89,27 @@ impl Record {
             .entry(server_url.to_string())
             .or_default()
             .insert(file.to_string(), sent);
+        self.revision += 1;
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// The keys of the `max` newest matches uploaded to `server_url`: the ones whose status is
-    /// asked of the server again.
+    /// asked of the server again. Newest file first, and in each file its last match first.
     pub fn recent_match_keys(&self, server_url: &str, max: usize) -> Vec<String> {
         let mut keys: Vec<String> = Vec::new();
         for (_, sent) in self.uploads(server_url) {
             let Answer::Answered(answer) = &sent.answer else {
                 continue;
             };
-            for key in answer.matches.iter().filter_map(|m| m.match_key.as_ref()) {
+            for key in answer
+                .matches
+                .iter()
+                .rev()
+                .filter_map(|m| m.match_key.as_ref())
+            {
                 if keys.len() == max {
                     return keys;
                 }
@@ -134,6 +155,9 @@ impl Record {
                     changed = true;
                 }
             }
+        }
+        if changed {
+            self.revision += 1;
         }
         changed
     }
@@ -183,6 +207,7 @@ pub fn save(path: &Path, record: &Record) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config;
     use crate::server::UploadedMatch;
 
     fn sent(size: u64, at: &str) -> Sent {
@@ -283,13 +308,53 @@ mod tests {
             answered("2026-10-03T11:00:00Z", &["1", "2"], "review"),
         );
         record.put(server, "Log-c.txt", sent(1, "2026-10-03T12:00:00Z"));
-        // Newest first: Log-b's matches before Log-a's.
-        assert_eq!(record.recent_match_keys(server, 50), ["1", "2"]);
-        assert_eq!(record.recent_match_keys(server, 1), ["1"]);
+        // Newest first: Log-b's matches before Log-a's, and Log-b's last match first.
+        assert_eq!(record.recent_match_keys(server, 50), ["2", "1"]);
+        assert_eq!(record.recent_match_keys(server, 1), ["2"]);
         assert_eq!(
             record.recent_match_keys("https://other", 50),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn refreshes_the_newest_matches_of_a_long_file() {
+        let mut record = record_with_many_matches();
+        let server = "https://genjiball.us";
+        let keys = record.recent_match_keys(server, config::MAX_STATUS_KEYS);
+        assert_eq!(keys.len(), config::MAX_STATUS_KEYS);
+        // The newest file's last match first, down to its 11th: its first 10 are left out.
+        assert_eq!(keys[0], "m59");
+        assert_eq!(keys[config::MAX_STATUS_KEYS - 1], "m10");
+        // Spectator copies of the newest matches don't take a place twice.
+        record.put(
+            server,
+            "Log-c.txt",
+            answered("2026-10-03T12:00:00Z", &["m58", "m59"], "review"),
+        );
+        assert_eq!(
+            record.recent_match_keys(server, config::MAX_STATUS_KEYS),
+            keys
+        );
+    }
+
+    /// An older file with match `m0`, then a file with 60 matches, `m0` (a copy) to `m59`.
+    fn record_with_many_matches() -> Record {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["m0"], "review"),
+        );
+        let keys: Vec<String> = (0..60).map(|n| format!("m{n}")).collect();
+        let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &keys, "review"),
+        );
+        record
     }
 
     #[test]

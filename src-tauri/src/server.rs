@@ -70,7 +70,8 @@ pub fn read_token_check(status: u16, body: &str) -> TokenCheck {
 #[serde(rename_all = "camelCase")]
 pub struct UploadedMatch {
     pub match_key: Option<String>,
-    /// The match's id on the site (`/match?id=`), once the server gives it.
+    /// The match's id on the site (`/match?id=`). Not in the upload's answer: the status refresh
+    /// (`MatchState`) fills it in.
     #[serde(default)]
     pub match_id: Option<i64>,
     pub line_count: u32,
@@ -106,6 +107,8 @@ pub struct UploadAnswer {
 #[serde(rename_all = "camelCase")]
 pub struct MatchState {
     pub match_key: String,
+    /// The match's id on the site (`/match?id=`), which a longer copy keeps. `None` from a server
+    /// that doesn't give it yet.
     #[serde(default)]
     pub match_id: Option<i64>,
     pub status: String,
@@ -487,11 +490,11 @@ mod tests {
                 review_reasons: vec!["untrusted_host".into()],
             }]
         );
-        // A server that gives the match's id on the site.
-        let with_id = r#"{"matches":[{"matchKey":"1","matchId":12,"status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
+        // The match's id on the site, from a server that gives it (genjiball-ranked `host-match-id`).
+        let with_id = r#"{"matches":[{"matchKey":"1","matchId":812,"status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
         assert_eq!(
             read_match_states(200, with_id).unwrap()[0].match_id,
-            Some(12)
+            Some(812)
         );
         assert!(read_match_states(200, "<html>").is_err());
         // An older server without the route.
@@ -499,12 +502,13 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_match_id_when_the_server_gives_it() {
-        let body = r#"{"result":"stored","uploadId":12,"matches":[{"matchKey":"1","matchId":40,"lineCount":9,"action":"insert","status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
+    fn an_upload_answer_has_no_match_id() {
+        // The status refresh brings it later.
+        let body = r#"{"result":"stored","uploadId":12,"matches":[{"matchKey":"1","lineCount":9,"action":"insert","status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
         let UploadOutcome::Stored(answer) = read_upload(200, None, body) else {
             panic!()
         };
-        assert_eq!(answer.matches[0].match_id, Some(40));
+        assert_eq!(answer.matches[0].match_id, None);
         // Records written before the id was known still load.
         let old: UploadedMatch = serde_json::from_str(
             r#"{"matchKey":"1","lineCount":9,"action":"insert","status":"review","rejection":null}"#,

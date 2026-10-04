@@ -57,7 +57,7 @@ pub fn read_token_check(status: u16, body: &str) -> TokenCheck {
         403 => TokenCheck::Revoked,
         // An older server without the route, or the wrong URL.
         404 => TokenCheck::Unreachable {
-            message: "That server doesn't know the host tool. Is the server URL right?".into(),
+            message: "This server can't check host tokens yet (it may need updating), or the server URL is wrong".into(),
         },
         _ => TokenCheck::Unreachable {
             message: format!("The server answered {status}"),

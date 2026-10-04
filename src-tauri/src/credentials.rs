@@ -39,10 +39,8 @@ impl Tokens {
 
 impl<S: CredentialStore> Tokens<S> {
     pub fn get(&self, server_url: &str) -> Result<Option<String>, String> {
-        // A read error in the credential store falls through to the file: the save may have gone there.
-        if let Ok(Some(token)) = self.store.get(server_url) {
-            return Ok(Some(token));
-        }
+        // A fallback entry is authoritative until a native save removes it. The credential
+        // store may have refused both a replacement and deletion of its older token.
         match read_file(&self.fallback)?.get(server_url) {
             Some(hex) => {
                 let sealed =
@@ -54,7 +52,9 @@ impl<S: CredentialStore> Tokens<S> {
                     .map(Some)
                     .map_err(|_| "The saved host token is damaged. Enter it again".into())
             }
-            None => Ok(None),
+            // A native read error still falls through to no token, as it does when the
+            // credential store cannot be reached from a non-interactive session.
+            None => Ok(self.store.get(server_url).ok().flatten()),
         }
     }
 
@@ -67,8 +67,8 @@ impl<S: CredentialStore> Tokens<S> {
                 let mut tokens = read_file(&self.fallback)?;
                 tokens.insert(server_url.to_string(), to_hex(&sealed));
                 write_file(&self.fallback, &tokens)?;
-                // `get` reads the credential store first: an older token left there would hide
-                // this one. It may refuse this too; there's nothing more to do then.
+                // Clean up the older native token if possible. The saved fallback takes
+                // precedence even when the credential store refuses deletion too.
                 let _ = self.store.delete(server_url);
                 Ok(())
             }
@@ -225,6 +225,7 @@ mod tests {
     struct FakeStore {
         tokens: std::sync::Mutex<BTreeMap<String, String>>,
         full: bool,
+        delete_fails: bool,
     }
 
     #[cfg(windows)]
@@ -243,6 +244,9 @@ mod tests {
         }
 
         fn delete(&self, server_url: &str) -> Result<(), String> {
+            if self.delete_fails {
+                return Err("the credential store refused deletion".into());
+            }
             self.tokens.lock().unwrap().remove(server_url);
             Ok(())
         }
@@ -266,6 +270,32 @@ mod tests {
         tokens.set(url, "new-token").unwrap();
         assert_eq!(tokens.get(url).unwrap().as_deref(), Some("new-token"));
         assert_eq!(tokens.store.get(url).unwrap(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_fallback_replacement_wins_even_when_native_deletion_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://genjiball.us";
+        let store = FakeStore::default();
+        store.set(url, "old-token").unwrap();
+        let tokens = Tokens {
+            store: FakeStore {
+                full: true,
+                delete_fails: true,
+                ..store
+            },
+            fallback: dir.path().join("tokens.json"),
+        };
+        tokens.set(url, "new-token").unwrap();
+        assert_eq!(tokens.store.get(url).unwrap().as_deref(), Some("old-token"));
+        assert_eq!(tokens.get(url).unwrap().as_deref(), Some("new-token"));
+        // The choice survives a restart; there is no in-memory backend preference.
+        let restarted = Tokens {
+            store: tokens.store,
+            fallback: tokens.fallback,
+        };
+        assert_eq!(restarted.get(url).unwrap().as_deref(), Some("new-token"));
     }
 
     #[cfg(windows)]

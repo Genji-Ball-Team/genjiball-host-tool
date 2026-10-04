@@ -268,6 +268,9 @@ impl Run {
             return Ok(());
         }
         self.refreshed = Some((server_url.to_string(), token.to_string(), Instant::now()));
+        if self.unsaved {
+            self.save(uploader)?;
+        }
 
         match server::check_token(server_url, token).await {
             TokenCheck::Ok { host } => self.host = Some(host),
@@ -291,16 +294,25 @@ impl Run {
         }
         match server::match_states(server_url, token, &keys).await {
             Ok(states) => {
-                let mut record = uploader.record.lock().unwrap();
-                if record.update_states(server_url, &states) || self.unsaved {
-                    let saved = uploads::save(&uploader.record_path, &record);
-                    self.unsaved = saved.is_err();
-                    saved.map_err(|message| Problem::Local { message })?;
+                let changed = uploader
+                    .record
+                    .lock()
+                    .unwrap()
+                    .update_states(server_url, &states);
+                if changed {
+                    self.save(uploader)?;
                 }
             }
             Err(message) => eprintln!("Couldn't refresh the match status: {message}"),
         }
         Ok(())
+    }
+
+    /// Saves the refreshed statuses. If that fails, the next refresh tries again.
+    fn save(&mut self, uploader: &Uploader) -> Result<(), Problem> {
+        let saved = uploads::save(&uploader.record_path, &uploader.record.lock().unwrap());
+        self.unsaved = saved.is_err();
+        saved.map_err(|message| Problem::Local { message })
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it

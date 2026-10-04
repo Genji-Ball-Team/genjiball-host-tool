@@ -265,7 +265,11 @@ el("token-form").addEventListener("submit", (e) => {
       await refresh();
     }
     showCheck(check);
-    if (check.result === "unreachable") setStatus(`Saved, but not checked: ${check.message}`, "bad");
+    if (check.result === "unreachable") {
+      // The new token's host isn't known yet: don't show the old one's.
+      showHost(null);
+      setStatus(`Saved, but not checked: ${check.message}`, "bad");
+    }
   });
 });
 

@@ -57,6 +57,28 @@ pub const STATUS_REFRESH_SECS: u64 = 120;
 /// the newest this many matches get their status refreshed.
 pub const MAX_STATUS_KEYS: usize = 50;
 
+/// The GitHub API the ranked code's base release is looked up on.
+pub const GITHUB_API_URL: &str = "https://api.github.com";
+
+/// The repo (`owner/name`) whose releases hold the game's Workshop code.
+pub const RELEASE_REPO: &str = "Genji-Ball-Team/GenjiBall-CE";
+
+/// Only releases whose tag ends in this are ranked builds (`1.3.3R`); the latest one is the base
+/// of the ranked code.
+pub const RELEASE_TAG_SUFFIX: &str = "R";
+
+/// The release asset holding the Workshop code is `<prefix><tag><suffix>`: `genjiball-v1.3.3R.txt`,
+/// as GenjiBall-CE's release workflow (`.github/workflows/release.yml`) names it.
+pub const RELEASE_ASSET_PREFIX: &str = "genjiball-v";
+pub const RELEASE_ASSET_SUFFIX: &str = ".txt";
+
+/// How many of the newest releases are searched for a ranked one (GitHub allows at most 100).
+pub const RELEASES_SEARCHED: u32 = 100;
+
+/// How long the ranked release found on GitHub is reused before asking GitHub again. Keeps clicks
+/// on "Copy ranked code" well inside GitHub's 60 requests an hour without a token.
+pub const RELEASE_CACHE_SECS: u64 = 10 * 60;
+
 /// A match's page on the ranked site, under the server URL, with its id (`/match?id=12`). Only
 /// `accepted` and `void` matches are public; the site answers any other with "not found".
 pub const MATCH_PAGE_PATH: &str = "/match";

@@ -4,6 +4,8 @@ mod dpapi;
 mod history;
 mod log_folder;
 mod log_scan;
+mod ranked_code;
+mod release;
 mod server;
 mod settings;
 mod uploader;
@@ -21,6 +23,7 @@ use tauri::{Manager, State, WindowEvent};
 use credentials::Tokens;
 use history::Page;
 use log_folder::LogFolder;
+use release::ReleaseCache;
 use server::TokenCheck;
 use settings::Settings;
 use uploader::{UploadStatus, Uploader};
@@ -229,6 +232,47 @@ fn set_log_folder(
     app_state(&app, &store)
 }
 
+/// The ranked Workshop code, for the window to copy.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RankedCode {
+    code: String,
+    /// The server the rank tags came from: the window drops a code built for a server the host
+    /// has since switched away from.
+    server_url: String,
+    /// The GenjiBall-CE release it's built from (`1.3.3R`).
+    release: String,
+    /// When the server worked the rank tags out (ISO 8601).
+    tags_updated_at: String,
+    names: usize,
+    /// Names the Workshop can't show, left out.
+    skipped_names: usize,
+    /// How long the window may keep a code it couldn't copy for the next click, before building
+    /// a new one: as long as the release found is reused.
+    keep_secs: u64,
+}
+
+/// The latest ranked release's code with the current server's rank tags in it.
+#[tauri::command]
+async fn build_ranked_code(
+    store: State<'_, Store>,
+    releases: State<'_, ReleaseCache>,
+) -> Result<RankedCode, String> {
+    let server_url = store.get().server_url().to_string();
+    let (release, base) = releases.latest().await?;
+    let tags = server::rank_tags(&server_url).await?;
+    let filled = ranked_code::fill(&base, &tags)?;
+    Ok(RankedCode {
+        code: filled.code,
+        server_url,
+        release,
+        tags_updated_at: tags.updated_at,
+        names: filled.names,
+        skipped_names: filled.skipped,
+        keep_secs: config::RELEASE_CACHE_SECS,
+    })
+}
+
 fn show_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -280,6 +324,7 @@ pub fn run() {
             let dir = app.path().app_config_dir()?;
             app.manage(Store::open(&dir));
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
+            app.manage(ReleaseCache::default());
             uploader::start(app.handle().clone());
             tray(app)?;
             Ok(())
@@ -299,6 +344,7 @@ pub fn run() {
             set_server_url,
             set_log_folder,
             get_upload_status,
+            build_ranked_code,
             get_upload_history,
             retry_upload,
             open_match

@@ -242,12 +242,13 @@ impl Tracker {
 
 /// `RETRY_FIRST_SECS`, doubled for each failure after the first, at most `RETRY_MAX_SECS`.
 pub fn backoff(failures: u32) -> Duration {
-    let doublings = failures.saturating_sub(1).min(16);
-    Duration::from_secs(
-        config::RETRY_FIRST_SECS
-            .saturating_mul(1 << doublings)
-            .min(config::RETRY_MAX_SECS),
-    )
+    let secs = 2u64
+        .checked_pow(failures.saturating_sub(1))
+        .and_then(|times| config::RETRY_FIRST_SECS.checked_mul(times))
+        .map_or(config::RETRY_MAX_SECS, |secs| {
+            secs.min(config::RETRY_MAX_SECS)
+        });
+    Duration::from_secs(secs)
 }
 
 #[cfg(test)]
@@ -777,6 +778,16 @@ mod tests {
             Duration::from_secs(config::RETRY_FIRST_SECS * 2)
         );
         assert_eq!(backoff(100), Duration::from_secs(config::RETRY_MAX_SECS));
+        // However many failures: no overflow, and no cap but `RETRY_MAX_SECS`.
+        assert_eq!(
+            backoff(u32::MAX),
+            Duration::from_secs(config::RETRY_MAX_SECS)
+        );
+        assert_eq!(backoff(0), backoff(1));
+        assert_eq!(
+            backoff(20),
+            Duration::from_secs((config::RETRY_FIRST_SECS << 19).min(config::RETRY_MAX_SECS))
+        );
     }
 
     #[test]

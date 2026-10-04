@@ -126,7 +126,12 @@ async fn check_saved_token(
         .ok_or("No host token saved for this server")?;
     // The listed matches' status too: "Check again" after an admin accepted one.
     uploader.refresh();
-    Ok(server::check_token(&server_url, &token).await)
+    let check = server::check_token(&server_url, &token).await;
+    if matches!(check, TokenCheck::Ok { .. }) {
+        // The server knows it now (an admin fixed it, say): stop holding uploads for it.
+        uploader.token_ok();
+    }
+    Ok(check)
 }
 
 /// Checks a token the host entered, and saves it unless the server turned it down. A server that
@@ -145,8 +150,10 @@ async fn save_token(
     let check = server::check_token(&server_url, token).await;
     if !check.is_rejected() {
         store.tokens.set(&server_url, token)?;
-        // Uploads to this server start with the logs written from now on.
+        // Uploads to this server start with the logs written from now on. A token saved again,
+        // even the same one, is tried again.
         uploader.start(&server_url);
+        uploader.token_ok();
     }
     Ok(check)
 }

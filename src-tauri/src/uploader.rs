@@ -75,6 +75,8 @@ pub struct Uploader {
     wake: Notify,
     /// Ask the server for the host and the listed matches' status at the next poll.
     refresh: AtomicBool,
+    /// A token was saved, or a check found the token works: forget a rejection at the next poll.
+    token_ok: AtomicBool,
 }
 
 impl Uploader {
@@ -94,7 +96,15 @@ impl Uploader {
             retries: Mutex::new(Vec::new()),
             wake: Notify::new(),
             refresh: AtomicBool::new(false),
+            token_ok: AtomicBool::new(false),
         }
+    }
+
+    /// The host saved a token, or "Check again" found it works: uploads stopped by the server
+    /// turning it down earlier try again.
+    pub fn token_ok(&self) {
+        self.token_ok.store(true, Ordering::Relaxed);
+        self.wake();
     }
 
     pub fn status(&self) -> UploadStatus {
@@ -220,6 +230,21 @@ impl Run {
         matches!(&self.held, Some((url, until)) if url == server_url && now < *until)
     }
 
+    /// Whether the server turned this token down (`Some(revoked)`), unless the host has saved a
+    /// token or seen it work since (`Uploader::token_ok`).
+    fn rejection(&mut self, uploader: &Uploader, server_url: &str, token: &str) -> Option<bool> {
+        if uploader.token_ok.swap(false, Ordering::Relaxed) {
+            self.rejected = None;
+        }
+        match &self.rejected {
+            Some((url, bad, revoked)) if url == server_url && bad == token => Some(*revoked),
+            _ => {
+                self.rejected = None;
+                None
+            }
+        }
+    }
+
     /// Whose token it is, only if the server was last asked with this server and token.
     fn known_host(&self, server_url: &str, token: &str) -> Option<Host> {
         match &self.refreshed {
@@ -323,12 +348,9 @@ impl Run {
             }
         };
         status.host = self.known_host(&server_url, &token);
-        if let Some((url, bad, revoked)) = &self.rejected {
-            if *url == server_url && *bad == token {
-                status.problem = Some(Problem::TokenRejected { revoked: *revoked });
-                return finish(self, polled, status);
-            }
-            self.rejected = None;
+        if let Some(revoked) = self.rejection(&uploader, &server_url, &token) {
+            status.problem = Some(Problem::TokenRejected { revoked });
+            return finish(self, polled, status);
         }
 
         for due in poll.due {
@@ -576,6 +598,26 @@ mod tests {
         uploader.save().unwrap();
         uploader.start(SERVER);
         assert!(uploads::load(&path).unwrap().started(SERVER).is_some());
+    }
+
+    #[test]
+    fn a_rejected_token_is_tried_again_once_it_works_or_is_saved_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run {
+            rejected: Some((SERVER.into(), "t".into(), true)),
+            ..Run::default()
+        };
+        assert_eq!(run.rejection(&uploader, SERVER, "t"), Some(true));
+        assert_eq!(run.rejection(&uploader, SERVER, "t"), Some(true), "still");
+        // "Check again" found it works, or the host saved it again.
+        uploader.token_ok();
+        assert_eq!(run.rejection(&uploader, SERVER, "t"), None);
+
+        // Another token, or another server, isn't the one turned down.
+        run.rejected = Some((SERVER.into(), "t".into(), false));
+        assert_eq!(run.rejection(&uploader, SERVER, "other"), None);
+        assert_eq!(run.rejected, None);
     }
 
     #[test]

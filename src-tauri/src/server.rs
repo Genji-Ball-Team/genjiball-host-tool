@@ -151,7 +151,7 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
             message: message(format!("The server answered {status}")),
             after: retry_after
                 .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+                .map(|secs| Duration::from_secs(secs.min(config::RETRY_MAX_SECS))),
         },
     }
 }
@@ -359,12 +359,20 @@ mod tests {
         assert_eq!(
             read_upload(
                 429,
-                Some("3600"),
+                Some("600"),
                 r#"{"error":"rate_limited","message":"At most 60 uploads an hour"}"#
             ),
             UploadOutcome::Retry {
                 message: "At most 60 uploads an hour".into(),
-                after: Some(Duration::from_secs(3600))
+                after: Some(Duration::from_secs(600))
+            }
+        );
+        // No longer than the longest backoff, however far off the server says.
+        assert_eq!(
+            read_upload(503, Some("31536000"), ""),
+            UploadOutcome::Retry {
+                message: "The server answered 503".into(),
+                after: Some(Duration::from_secs(config::RETRY_MAX_SECS))
             }
         );
         for (status, body) in [

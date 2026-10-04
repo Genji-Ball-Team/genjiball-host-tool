@@ -85,6 +85,13 @@ impl Tracker {
                 continue;
             }
             let size = meta.len();
+            let last = sent(&name);
+            // Refused once for its size: it can only get bigger, so don't read it again.
+            if size > config::MAX_UPLOAD_BYTES
+                && last.is_some_and(|s| s.size > config::MAX_UPLOAD_BYTES)
+            {
+                continue;
+            }
             let tracked = match self.files.remove(&name) {
                 Some(tracked) if tracked.size == size && tracked.modified == modified => tracked,
                 before => {
@@ -105,7 +112,6 @@ impl Tracker {
                     }
                 }
             };
-            let last = sent(&name);
             if tracked.scan.ranked && last.map(|s| s.size) != Some(size) {
                 poll.waiting += 1;
                 let ended = tracked.scan.match_ends > last.map_or(0, |s| s.match_ends);
@@ -138,12 +144,7 @@ impl Tracker {
     pub fn failed(&mut self, name: &str, now: Instant, after: Option<Duration>) {
         if let Some(t) = self.files.get_mut(name) {
             t.failures += 1;
-            let wait = after.unwrap_or_else(|| backoff(t.failures));
-            // A `Retry-After` too far off to add is treated as the longest backoff.
-            t.retry_at = Some(
-                now.checked_add(wait)
-                    .unwrap_or_else(|| now + Duration::from_secs(config::RETRY_MAX_SECS)),
-            );
+            t.retry_at = Some(now + after.unwrap_or_else(|| backoff(t.failures)));
         }
     }
 }
@@ -406,6 +407,29 @@ mod tests {
             ),
             [NAME]
         );
+    }
+
+    #[test]
+    fn skips_a_file_refused_for_its_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = format!("{EXAMPLE}{}", "x".repeat(config::MAX_UPLOAD_BYTES as usize));
+        write(dir.path(), NAME, &big, Duration::ZERO);
+        // Never sent: due once, so the host sees why it wasn't uploaded.
+        let poll = Tracker::default()
+            .poll(dir.path(), Instant::now(), SystemTime::now(), never_sent)
+            .unwrap();
+        assert_eq!(names(&poll), [NAME]);
+        // Refused at a size over the limit: left alone from then on, even with a new `MATCH_END`.
+        let refused = |_: &str| {
+            Some(Sent {
+                size: config::MAX_UPLOAD_BYTES + 1,
+                match_ends: 0,
+            })
+        };
+        let poll = Tracker::default()
+            .poll(dir.path(), Instant::now(), SystemTime::now(), refused)
+            .unwrap();
+        assert_eq!(poll, Poll::default());
     }
 
     #[test]

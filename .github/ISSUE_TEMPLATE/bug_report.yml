@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in the host tool doesn't work as it should
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The steps, and what you were hosting at the time.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Host tool version
+      description: Shown in the app.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: For an upload problem, attach the Workshop log file of the match. Never paste your host token.

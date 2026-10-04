@@ -1,0 +1,15 @@
+name: Feature / idea
+description: Suggest a feature for the host tool
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What's the idea?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What problem does it solve for hosts?

@@ -83,7 +83,12 @@ impl Tracker {
             };
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             let age = clock.duration_since(modified).unwrap_or_default();
-            if !meta.is_file() || age > max_age || modified < since {
+            // When the file was started, not last written: a match that began before `since` and
+            // is still being played stays out too.
+            let started = log_scan::started_at_time(&name)
+                .or_else(|| meta.created().ok())
+                .unwrap_or(modified);
+            if !meta.is_file() || age > max_age || started < since {
                 continue;
             }
             let size = meta.len();
@@ -469,15 +474,17 @@ mod tests {
     #[test]
     fn leaves_files_from_before_uploads_started() {
         let dir = tempfile::tempdir().unwrap();
-        let old = Duration::from_secs(config::QUIET_SECS + 600);
-        write(dir.path(), "Log-2026-10-02-20-00-00.txt", EXAMPLE, old);
-        write(
-            dir.path(),
-            NAME,
-            EXAMPLE,
-            Duration::from_secs(config::QUIET_SECS + 5),
-        );
-        let since = SystemTime::now() - Duration::from_secs(config::QUIET_SECS + 300);
+        let since = SystemTime::now() - Duration::from_secs(600);
+        let named = |at: SystemTime| {
+            chrono::DateTime::<chrono::Local>::from(at)
+                .format("Log-%Y-%m-%d-%H-%M-%S.txt")
+                .to_string()
+        };
+        let before = named(since - Duration::from_secs(60));
+        let after = named(since + Duration::from_secs(60));
+        // Both just ended; the first started before uploads to this server did.
+        write(dir.path(), &before, EXAMPLE, Duration::ZERO);
+        write(dir.path(), &after, EXAMPLE, Duration::ZERO);
         let poll = Tracker::default()
             .poll(
                 dir.path(),
@@ -487,7 +494,7 @@ mod tests {
                 never_sent,
             )
             .unwrap();
-        assert_eq!(names(&poll), [NAME]);
+        assert_eq!(names(&poll), [after.as_str()]);
     }
 
     #[test]

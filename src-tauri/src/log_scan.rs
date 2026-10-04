@@ -2,6 +2,8 @@
 //! `v1.3.3R`): whether it holds a ranked match, and how many matches in it have ended. The server
 //! does the real parsing.
 
+use std::time::SystemTime;
+
 use chrono::{Local, NaiveDateTime, SecondsFormat, TimeZone};
 
 use crate::config;
@@ -49,6 +51,12 @@ pub fn started_at(name: &str) -> Option<NaiveDateTime> {
         .strip_prefix(config::LOG_FILE_PREFIX)?
         .strip_suffix(config::LOG_FILE_SUFFIX)?;
     NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d-%H-%M-%S").ok()
+}
+
+/// `started_at` as a moment in time.
+pub fn started_at_time(name: &str) -> Option<SystemTime> {
+    let local = Local.from_local_datetime(&started_at(name)?).earliest()?;
+    Some(local.into())
 }
 
 /// `started_at` as the server's `X-Log-Started-At`: ISO 8601 with this PC's time zone.

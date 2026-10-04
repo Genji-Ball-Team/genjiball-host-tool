@@ -1,0 +1,47 @@
+rule ("Ranked log - MATCH_END") {
+    event {
+        Ongoing - Global;
+    }
+    conditions {
+        Value In Array(Global.rankedState, 1) == True;
+        Is Match Complete == True;
+    }
+    actions {
+        "A round still open when the match ends (Tournament's round limit) never got a winner"
+        If(Value In Array(Global.rankedState, 3));
+            Call Subroutine(logRankedRoundAbort);
+        End;
+        Log To Inspector(Custom String("MATCH_END|{0}|TIME", Total Time Elapsed));
+    }
+}
+
+rule ("RANKS - generated") {
+    event {
+        Ongoing - Global;
+    }
+    actions {
+        Set Global Variable(rankTags, Array(Custom String("Ranks update daily"), Array(Custom String("Apprentice"), Custom Color(205, 127, 50, 255), Custom String("Apprentice")), Array(Custom String("Master"), Custom Color(255, 215, 0, 255), Custom String("Master")), Array(Custom String("Grandmaster"), Custom Color(255, 140, 0, 255), Custom String("Grandmaster")), Array(Custom String("Ascendant"), Custom Color(60, 160, 255, 255), Custom String("Ascendant")), Array(Custom String("Champion"), Custom Color(150, 0, 0, 255), Custom String("Champion")), Array(Custom String("God"), Custom Color(160, 160, 160, 255), Custom String("God"))));
+    }
+}
+
+rule ("Rank tags - find tier") {
+    event {
+        Ongoing - Each Player;
+        All;
+        All;
+    }
+    conditions {
+        Has Spawned(Event Player) == True;
+        (Event Player).rankTier == 0;
+    }
+    actions {
+        "As in v1.3.2 RANKED: the name isn't known the moment a bot takes a slot"
+        Wait(0.25, Ignore Condition);
+        Set Player Variable(Event Player, rankTier, Subtract(Count Of(Global.rankTags), 1));
+        While(And(Compare((Event Player).rankTier, >, 0), Not(Array Contains(Array Slice(Value In Array(Global.rankTags, (Event Player).rankTier), 3, Subtract(Count Of(Value In Array(Global.rankTags, (Event Player).rankTier)), 3)), Custom String("{0}", Event Player)))));
+            Modify Player Variable(Event Player, rankTier, Subtract, 1);
+        End;
+        If(Compare((Event Player).rankTier, ==, 0));
+            Set Player Variable(Event Player, rankTier, -1);
+    }
+}

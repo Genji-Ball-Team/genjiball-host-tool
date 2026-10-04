@@ -67,6 +67,15 @@ interface UploadedMatch {
   reviewReasons: string[];
 }
 
+/** Mirrors `RankedCode` in src-tauri/src/lib.rs. */
+interface RankedCode {
+  code: string;
+  release: string;
+  tagsUpdatedAt: string;
+  names: number;
+  skippedNames: number;
+}
+
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
   if (!found) throw new Error(`#${id} is missing from index.html`);
@@ -316,6 +325,40 @@ el("log-folder-reset").addEventListener("click", () => {
     state = await invoke<AppState>("set_log_folder", { path: null });
     render();
   });
+});
+
+function setRankedCodeState(text: string, tone: "good" | "bad" | "muted"): void {
+  const line = el("ranked-code-state");
+  line.hidden = !text;
+  line.textContent = text;
+  line.className = tone;
+}
+
+el("ranked-code-copy").addEventListener("click", () => {
+  const button = el<HTMLButtonElement>("ranked-code-copy");
+  button.disabled = true;
+  setRankedCodeState("Building the code…", "muted");
+  void (async () => {
+    try {
+      const built = await invoke<RankedCode>("build_ranked_code");
+      try {
+        await navigator.clipboard.writeText(built.code);
+      } catch (err) {
+        throw new Error(`Built the code but couldn't copy it: ${String(err)}`, { cause: err });
+      }
+      const names = built.names === 1 ? "1 name" : `${built.names} names`;
+      const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show them)` : "";
+      setRankedCodeState(
+        `Copied. Genji Ball ${built.release}, rank tags from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`,
+        "good",
+      );
+    } catch (err) {
+      // The command's errors are strings.
+      setRankedCodeState(err instanceof Error ? err.message : String(err), "bad");
+    } finally {
+      button.disabled = false;
+    }
+  })();
 });
 
 void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));

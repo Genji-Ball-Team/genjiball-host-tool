@@ -3,6 +3,8 @@ mod credentials;
 mod dpapi;
 mod log_folder;
 mod log_scan;
+mod ranked_code;
+mod release;
 mod server;
 mod settings;
 mod uploader;
@@ -19,6 +21,7 @@ use tauri::{Manager, State, WindowEvent};
 
 use credentials::Tokens;
 use log_folder::LogFolder;
+use release::ReleaseCache;
 use server::TokenCheck;
 use settings::Settings;
 use uploader::{UploadStatus, Uploader};
@@ -154,6 +157,39 @@ fn set_log_folder(
     app_state(&app, &store)
 }
 
+/// The ranked Workshop code, for the window to copy.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RankedCode {
+    code: String,
+    /// The GenjiBall-CE release it's built from (`1.3.3R`).
+    release: String,
+    /// When the server worked the rank tags out (ISO 8601).
+    tags_updated_at: String,
+    names: usize,
+    /// Names the Workshop can't show, left out.
+    skipped_names: usize,
+}
+
+/// The latest ranked release's code with the current server's rank tags in it.
+#[tauri::command]
+async fn build_ranked_code(
+    store: State<'_, Store>,
+    releases: State<'_, ReleaseCache>,
+) -> Result<RankedCode, String> {
+    let server_url = store.get().server_url().to_string();
+    let (release, base) = releases.latest().await?;
+    let tags = server::rank_tags(&server_url).await?;
+    let filled = ranked_code::fill(&base, &tags)?;
+    Ok(RankedCode {
+        code: filled.code,
+        release,
+        tags_updated_at: tags.updated_at,
+        names: filled.names,
+        skipped_names: filled.skipped,
+    })
+}
+
 fn show_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -210,6 +246,7 @@ pub fn run() {
                 tokens: Tokens::new(dir.join(config::TOKENS_FALLBACK_FILE)),
             });
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
+            app.manage(ReleaseCache::default());
             uploader::start(app.handle().clone());
             tray(app)?;
             Ok(())
@@ -228,7 +265,8 @@ pub fn run() {
             forget_token,
             set_server_url,
             set_log_folder,
-            get_upload_status
+            get_upload_status,
+            build_ranked_code
         ])
         .run(tauri::generate_context!())
         .expect("error while running the host tool");

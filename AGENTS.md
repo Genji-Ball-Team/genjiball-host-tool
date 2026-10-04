@@ -35,14 +35,20 @@ Every tunable lives in `src-tauri/src/config.rs` with its default and a comment 
 - The host token, one per server URL, goes through `src-tauri/src/credentials.rs`: Windows Credential Manager first. When that refuses (a Credential Manager filled by the Xbox app's tokens answers "not enough memory", common on gaming PCs), the token goes in `tokens.json`, encrypted with DPAPI for the Windows user (`dpapi.rs`).
 - The token never goes in a plain file, a log, an error message, the window's state or a diagnostics export.
 - The server checks a token with `GET /api/host/me` (genjiball-ranked `docs/api.md`). Only a `401` or `403` means a bad token; anything else is "couldn't check", and the token is saved anyway.
+- What was uploaded is in `uploads.json` (`uploads.rs`): per server URL and file, the size sent and the server's answer. A file is sent again only once it's grown, so a restart or a lost connection never loses or repeats an upload. Deleting it only costs a round of `duplicate` answers.
 - Credential Manager can't be reached from a non-interactive session (SSH, some agent shells: `cmdkey` fails there too), so the tool uses the DPAPI file there. Test the Credential Manager path from a normal desktop session.
 
 ## Contracts with the other repos
 
 - **The log format** is defined in GenjiBall-CE's [`docs/ranked-log.md`](https://github.com/Genji-Ball-Team/GenjiBall-CE/blob/v1.3.3R/docs/ranked-log.md) on the `v1.3.3R` branch. Follow it and never guess past it; if the tool needs a format change, change the spec there first, in its own PR. Its example log (`docs/ranked-log-example.txt`) is the test fixture.
 - **The upload API** is defined in genjiball-ranked's [`docs/api.md`](https://github.com/Genji-Ball-Team/genjiball-ranked/blob/main/docs/api.md): the headers to send, which errors to retry and which to stop on.
-- **One match, several files:** when the host moves to or from spectator, Overwatch starts a new log file that repeats the match so far. Upload every file as it grows; the server keeps the longest copy per host + `matchKey`. The `[hh:mm:ss]` prefix counts from the game start, so take times from the file name or the clock, not from it.
+- **One match, several files:** when the host moves to or from spectator, Overwatch starts a new log file that repeats the match so far. Upload every file once it has a new `MATCH_END` or stops growing (`QUIET_SECS`); the server keeps the longest copy per host + `matchKey`. The `[hh:mm:ss]` prefix counts from the game start, so take times from the file name or the clock, not from it.
 - **The ranked code** is the latest GenjiBall-CE `R` release with the `RANKS - generated` rule replaced from the rank tags endpoint (`docs/rank-tags.md` on `v1.3.3R`).
+
+## Running it
+
+- Closing the window hides it: the tool keeps uploading from the tray, and quits from the tray menu. A `tauri dev` you stop from the shell can leave the app and its `msedgewebview2.exe` processes behind; the next start then fails with "WebView2 error ... requested resource is in use" until they're stopped.
+- To test uploads end to end, run genjiball-ranked locally (`npm run dev`) and point the tool at it (Advanced → Server URL `http://127.0.0.1:<port>`) with a folder of test logs. Don't test with the detected folder: it holds the host's real logs, and the default server is the live one.
 
 ## PR habits
 

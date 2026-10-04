@@ -2,19 +2,26 @@ mod config;
 mod credentials;
 mod dpapi;
 mod log_folder;
+mod log_scan;
 mod server;
 mod settings;
+mod uploader;
+mod uploads;
+mod watcher;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, State, WindowEvent};
 
 use credentials::Tokens;
 use log_folder::LogFolder;
 use server::TokenCheck;
 use settings::Settings;
+use uploader::{UploadStatus, Uploader};
 
 /// The settings file and what's in it. Commands change both together.
 struct Store {
@@ -85,7 +92,11 @@ async fn check_saved_token(store: State<'_, Store>) -> Result<TokenCheck, String
 /// Checks a token the host entered, and saves it unless the server turned it down. A server that
 /// can't be reached doesn't stop the save: the host may be offline, and uploads will retry.
 #[tauri::command]
-async fn save_token(token: String, store: State<'_, Store>) -> Result<TokenCheck, String> {
+async fn save_token(
+    token: String,
+    store: State<'_, Store>,
+    uploader: State<'_, Uploader>,
+) -> Result<TokenCheck, String> {
     let token = token.trim();
     if token.is_empty() {
         return Err("Paste the host token an admin gave you".into());
@@ -94,13 +105,21 @@ async fn save_token(token: String, store: State<'_, Store>) -> Result<TokenCheck
     let check = server::check_token(&server_url, token).await;
     if !check.is_rejected() {
         store.tokens.set(&server_url, token)?;
+        uploader.wake();
     }
     Ok(check)
 }
 
 #[tauri::command]
-fn forget_token(store: State<Store>) -> Result<(), String> {
-    store.tokens.delete(store.get().server_url())
+fn forget_token(store: State<Store>, uploader: State<Uploader>) -> Result<(), String> {
+    store.tokens.delete(store.get().server_url())?;
+    uploader.wake();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_upload_status(uploader: State<Uploader>) -> UploadStatus {
+    uploader.status()
 }
 
 /// Empty goes back to the default server.
@@ -109,9 +128,11 @@ fn set_server_url(
     url: String,
     app: tauri::AppHandle,
     store: State<Store>,
+    uploader: State<Uploader>,
 ) -> Result<AppState, String> {
     let url = settings::normalize_server_url(&url)?;
     store.update(|s| s.server_url = url)?;
+    uploader.wake();
     app_state(&app, &store)
 }
 
@@ -121,9 +142,49 @@ fn set_log_folder(
     path: Option<PathBuf>,
     app: tauri::AppHandle,
     store: State<Store>,
+    uploader: State<Uploader>,
 ) -> Result<AppState, String> {
     store.update(|s| s.log_folder = path)?;
+    uploader.wake();
     app_state(&app, &store)
+}
+
+fn show_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// The tray icon: click it to open the window, or quit from its menu.
+fn tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let mut tray = TrayIconBuilder::new()
+        .tooltip(app.package_info().name.clone())
+        .menu(&Menu::with_items(app, &[&open, &quit])?)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => show_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -143,7 +204,17 @@ pub fn run() {
                 load_error: Mutex::new(load_error),
                 tokens: Tokens::new(dir.join(config::TOKENS_FALLBACK_FILE)),
             });
+            app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
+            uploader::start(app.handle().clone());
+            tray(app)?;
             Ok(())
+        })
+        // Closing the window keeps the tool uploading from the tray; Quit there stops it.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -151,7 +222,8 @@ pub fn run() {
             save_token,
             forget_token,
             set_server_url,
-            set_log_folder
+            set_log_folder,
+            get_upload_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running the host tool");

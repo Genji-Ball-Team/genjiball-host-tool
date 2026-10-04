@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
@@ -24,6 +25,39 @@ type TokenCheck =
   | { result: "unknown" }
   | { result: "revoked" }
   | { result: "unreachable"; message: string };
+
+/** Mirrors `UploadStatus` in src-tauri/src/uploader.rs. */
+interface UploadStatus {
+  problem: Problem | null;
+  waiting: number;
+  retrying: string | null;
+  recent: RecentUpload[];
+}
+
+/** Mirrors `Problem` in src-tauri/src/uploader.rs. */
+type Problem =
+  | { kind: "noFolder" }
+  | { kind: "folderUnreadable"; message: string }
+  | { kind: "noToken" }
+  | { kind: "tokenRejected"; revoked: boolean }
+  | { kind: "local"; message: string };
+
+/** Mirrors `RecentUpload` and `Answer` in src-tauri/src/uploads.rs. */
+interface RecentUpload {
+  file: string;
+  at: string;
+  answer: { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
+}
+
+/** Mirrors `UploadedMatch` in src-tauri/src/server.rs. */
+interface UploadedMatch {
+  matchKey: string | null;
+  lineCount: number;
+  action: "insert" | "replace" | "repoint" | "skip";
+  status: "accepted" | "review" | "rejected" | "void";
+  rejection: { code: string; message: string } | null;
+  reviewReasons: string[];
+}
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -91,6 +125,78 @@ function render(): void {
         ? "Found automatically."
         : "Chosen by you.";
   el("log-folder-reset").hidden = folder?.source !== "custom";
+}
+
+function describeProblem(problem: Problem): string {
+  switch (problem.kind) {
+    case "noFolder":
+      return "Waiting for the Workshop log folder.";
+    case "folderUnreadable":
+      return `Can't read the log folder: ${problem.message}`;
+    case "noToken":
+      return "Paused: there's no host token for this server.";
+    case "tokenRejected":
+      return problem.revoked ? "Paused: this token was revoked. Ask an admin for a new one." : "Paused: the server doesn't know this token.";
+    case "local":
+      return problem.message;
+  }
+}
+
+function describeMatch(match: UploadedMatch): string {
+  switch (match.status) {
+    case "accepted":
+      return "accepted";
+    case "review":
+      return match.reviewReasons.length ? `waiting for an admin (${match.reviewReasons.join(", ")})` : "waiting for an admin";
+    case "rejected":
+      return `rejected: ${match.rejection?.message || match.rejection?.code || "no reason given"}`;
+    case "void":
+      return "voided by an admin";
+  }
+}
+
+function describeUpload(upload: RecentUpload): { text: string; tone: "good" | "bad" | "muted" } {
+  const answer = upload.answer;
+  if (answer.kind === "refused") return { text: answer.message, tone: "bad" };
+  if (answer.result === "duplicate") return { text: "Already uploaded", tone: "muted" };
+  if (!answer.matches.length) return { text: "No match in it", tone: "muted" };
+  const text = answer.matches.map(describeMatch).join("; ");
+  const tone = answer.matches.every((m) => m.status === "accepted") ? "good" : answer.matches.some((m) => m.status === "rejected") ? "bad" : "muted";
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), tone };
+}
+
+function renderUploads(status: UploadStatus): void {
+  const line = el("upload-state");
+  line.className = status.problem ? "bad" : "";
+  line.textContent = status.problem
+    ? describeProblem(status.problem)
+    : status.waiting === 1
+      ? "Watching. 1 ranked log to upload."
+      : status.waiting
+        ? `Watching. ${status.waiting} ranked logs to upload.`
+        : "Watching for ranked matches.";
+
+  const retrying = el("upload-retrying");
+  retrying.hidden = !status.retrying;
+  retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
+
+  el("uploads").replaceChildren(
+    ...status.recent.map((upload) => {
+      const { text, tone } = describeUpload(upload);
+      const item = document.createElement("li");
+      const file = document.createElement("span");
+      file.className = "path";
+      file.textContent = upload.file;
+      const at = document.createElement("span");
+      at.className = "muted";
+      at.textContent = new Date(upload.at).toLocaleString();
+      const result = document.createElement("span");
+      result.className = tone;
+      result.textContent = text;
+      item.append(file, at, result);
+      return item;
+    }),
+  );
 }
 
 async function refresh(): Promise<void> {
@@ -176,6 +282,9 @@ el("log-folder-reset").addEventListener("click", () => {
     render();
   });
 });
+
+void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
+void invoke<UploadStatus>("get_upload_status").then(renderUploads);
 
 void busy(async () => {
   await refresh();

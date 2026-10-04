@@ -65,6 +65,143 @@ pub fn read_token_check(status: u16, body: &str) -> TokenCheck {
     }
 }
 
+/// One match in an upload's answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadedMatch {
+    pub match_key: Option<String>,
+    pub line_count: u32,
+    /// `insert`, `replace`, `repoint` or `skip`.
+    pub action: String,
+    /// `accepted`, `review`, `rejected` or `void`.
+    pub status: String,
+    pub rejection: Option<Rejection>,
+    #[serde(default)]
+    pub review_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Rejection {
+    pub code: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// What the server answered a stored upload (`200`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadAnswer {
+    /// `stored`, `unchanged` or `duplicate`.
+    pub result: String,
+    #[serde(default)]
+    pub matches: Vec<UploadedMatch>,
+}
+
+#[derive(Deserialize)]
+struct ApiError {
+    error: String,
+    #[serde(default)]
+    message: String,
+}
+
+/// What came of an upload.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UploadOutcome {
+    Stored(UploadAnswer),
+    /// The server won't take this file (`413`, `422`): sending it again changes nothing.
+    Refused {
+        error: String,
+        message: String,
+    },
+    /// The token doesn't work (`401`) or was revoked (`403`). Stop until the host changes it.
+    TokenRejected {
+        revoked: bool,
+    },
+    /// Try again later: offline, `409`, `429`, `5xx`. `after` is the server's `Retry-After`.
+    Retry {
+        message: String,
+        after: Option<Duration>,
+    },
+}
+
+/// What a `POST /api/upload` answer means.
+pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> UploadOutcome {
+    let error = serde_json::from_str::<ApiError>(body).ok();
+    let message = |fallback: String| match &error {
+        Some(e) if !e.message.is_empty() => e.message.clone(),
+        _ => fallback,
+    };
+    match status {
+        200 => match serde_json::from_str(body) {
+            Ok(answer) => UploadOutcome::Stored(answer),
+            Err(_) => UploadOutcome::Retry {
+                message: "The server's answer wasn't what the host tool expected".into(),
+                after: None,
+            },
+        },
+        401 => UploadOutcome::TokenRejected { revoked: false },
+        403 => UploadOutcome::TokenRejected { revoked: true },
+        413 | 422 => UploadOutcome::Refused {
+            error: error
+                .as_ref()
+                .map_or_else(|| status.to_string(), |e| e.error.clone()),
+            message: message(format!("The server refused the file ({status})")),
+        },
+        _ => UploadOutcome::Retry {
+            message: message(format!("The server answered {status}")),
+            after: retry_after
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(Duration::from_secs),
+        },
+    }
+}
+
+/// Sends a log file, unchanged, to `POST /api/upload`.
+pub async fn upload(
+    server_url: &str,
+    token: &str,
+    file_name: &str,
+    started_at: Option<&str>,
+    body: Vec<u8>,
+) -> UploadOutcome {
+    let retry = |e: reqwest::Error| UploadOutcome::Retry {
+        message: format!("Couldn't reach the server: {}", e.without_url()),
+        after: None,
+    };
+    let client = match client() {
+        Ok(client) => client,
+        Err(message) => {
+            return UploadOutcome::Retry {
+                message,
+                after: None,
+            }
+        }
+    };
+    let mut request = client
+        .post(format!("{server_url}/api/upload"))
+        .bearer_auth(token)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("X-Log-File", file_name)
+        .body(body);
+    if let Some(started_at) = started_at {
+        request = request.header("X-Log-Started-At", started_at);
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(e) => return retry(e),
+    };
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    match response.text().await {
+        Ok(body) => read_upload(status, retry_after.as_deref(), &body),
+        Err(e) => retry(e),
+    }
+}
+
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(config::REQUEST_TIMEOUT_SECS))
@@ -145,6 +282,104 @@ mod tests {
                 "{status}: {check:?}"
             );
             assert!(!check.is_rejected());
+        }
+    }
+
+    #[test]
+    fn reads_a_stored_upload() {
+        let body = r#"{"result":"stored","uploadId":12,"matches":[{"matchKey":"482913507226","lineCount":57,"action":"insert","status":"review","rejection":null,"reviewReasons":["duplicate_name"]}]}"#;
+        assert_eq!(
+            read_upload(200, None, body),
+            UploadOutcome::Stored(UploadAnswer {
+                result: "stored".into(),
+                matches: vec![UploadedMatch {
+                    match_key: Some("482913507226".into()),
+                    line_count: 57,
+                    action: "insert".into(),
+                    status: "review".into(),
+                    rejection: None,
+                    review_reasons: vec!["duplicate_name".into()],
+                }],
+            })
+        );
+        let rejected = r#"{"result":"stored","uploadId":13,"matches":[{"matchKey":"1","lineCount":9,"action":"insert","status":"rejected","rejection":{"code":"unranked","message":"MAP"},"reviewReasons":[]}]}"#;
+        let UploadOutcome::Stored(answer) = read_upload(200, None, rejected) else {
+            panic!()
+        };
+        assert_eq!(
+            answer.matches[0].rejection.as_ref().unwrap().code,
+            "unranked"
+        );
+        assert_eq!(
+            read_upload(
+                200,
+                None,
+                r#"{"result":"duplicate","uploadId":null,"matches":[]}"#
+            ),
+            UploadOutcome::Stored(UploadAnswer {
+                result: "duplicate".into(),
+                matches: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn stops_on_a_bad_token() {
+        assert_eq!(
+            read_upload(401, None, r#"{"error":"unauthorized","message":"x"}"#),
+            UploadOutcome::TokenRejected { revoked: false }
+        );
+        assert_eq!(
+            read_upload(403, None, r#"{"error":"revoked","message":"x"}"#),
+            UploadOutcome::TokenRejected { revoked: true }
+        );
+    }
+
+    #[test]
+    fn doesnt_retry_a_refused_file() {
+        assert_eq!(
+            read_upload(
+                422,
+                None,
+                r#"{"error":"not_ranked","message":"No GBR line"}"#
+            ),
+            UploadOutcome::Refused {
+                error: "not_ranked".into(),
+                message: "No GBR line".into()
+            }
+        );
+        assert!(matches!(
+            read_upload(413, None, "too big"),
+            UploadOutcome::Refused { error, .. } if error == "413"
+        ));
+    }
+
+    #[test]
+    fn retries_everything_else() {
+        assert_eq!(
+            read_upload(
+                429,
+                Some("3600"),
+                r#"{"error":"rate_limited","message":"At most 60 uploads an hour"}"#
+            ),
+            UploadOutcome::Retry {
+                message: "At most 60 uploads an hour".into(),
+                after: Some(Duration::from_secs(3600))
+            }
+        );
+        for (status, body) in [
+            (409, r#"{"error":"conflict"}"#),
+            (500, ""),
+            (502, "<html>"),
+            (200, "<html>"),
+        ] {
+            assert!(
+                matches!(
+                    read_upload(status, None, body),
+                    UploadOutcome::Retry { after: None, .. }
+                ),
+                "{status}"
+            );
         }
     }
 

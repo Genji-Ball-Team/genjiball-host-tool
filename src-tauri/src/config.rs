@@ -19,3 +19,34 @@ pub const CREDENTIAL_SERVICE: &str = "genjiball-host-tool";
 /// Where the host token goes, encrypted for this Windows user, when the credential store won't
 /// take it. In the app's config folder, next to the settings.
 pub const TOKENS_FALLBACK_FILE: &str = "tokens.json";
+
+/// The record of what was uploaded (per server, per log file), in the app's config folder. It's
+/// what keeps a restart from uploading every file again, and what the window lists.
+pub const UPLOADS_FILE: &str = "uploads.json";
+
+/// Workshop log files are `Log-<date>-<time>.txt`; anything else in the folder is left alone.
+pub const LOG_FILE_PREFIX: &str = "Log-";
+pub const LOG_FILE_SUFFIX: &str = ".txt";
+
+/// How often the log folder is checked for new and growing files. Each check only reads file
+/// sizes; a file is read again only when it changed.
+pub const POLL_INTERVAL_SECS: u64 = 5;
+
+/// How long a ranked log must stop growing before it's uploaded without a `MATCH_END`: the host
+/// moved to spectator (Overwatch carries on in a new file), closed the lobby or crashed.
+pub const QUIET_SECS: u64 = 60;
+
+/// Log files last written longer ago than this are ignored, so a first run doesn't upload a
+/// folder full of old matches.
+pub const MAX_LOG_AGE_DAYS: u64 = 14;
+
+/// The server refuses bigger uploads (`maxUploadBytes` in genjiball-ranked).
+pub const MAX_UPLOAD_BYTES: u64 = 512 * 1024;
+
+/// The wait before retrying a failed upload (server down, offline), doubled after each failure
+/// of the same file up to `RETRY_MAX_SECS`. A `Retry-After` from the server wins.
+pub const RETRY_FIRST_SECS: u64 = 30;
+pub const RETRY_MAX_SECS: u64 = 30 * 60;
+
+/// How many uploads the window lists. The full history is #5.
+pub const RECENT_UPLOADS_SHOWN: usize = 8;

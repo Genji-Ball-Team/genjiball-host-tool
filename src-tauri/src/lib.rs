@@ -1,6 +1,7 @@
 mod config;
 mod credentials;
 mod dpapi;
+mod history;
 mod log_folder;
 mod log_scan;
 mod server;
@@ -18,6 +19,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, State, WindowEvent};
 
 use credentials::Tokens;
+use history::Page;
 use log_folder::LogFolder;
 use server::TokenCheck;
 use settings::Settings;
@@ -127,6 +129,37 @@ fn get_upload_status(uploader: State<Uploader>) -> UploadStatus {
     uploader.status()
 }
 
+/// A page of the upload history to the current server, from 0 (the newest).
+#[tauri::command]
+fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader>) -> Page {
+    let settings = store.get();
+    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    uploader.history(
+        settings.server_url(),
+        folder.as_ref().map(|f| f.path.as_path()),
+        page,
+    )
+}
+
+/// Tries a failed upload again now, through the upload queue.
+#[tauri::command]
+fn retry_upload(file: String, uploader: State<Uploader>) {
+    uploader.retry(file);
+}
+
+/// Opens the page of one of the host's public matches on the current server's site, in the host's
+/// browser. The window only gives the id: the URL is built here, so it can't open anything else.
+#[tauri::command]
+fn open_match(match_id: i64, store: State<Store>, uploader: State<Uploader>) -> Result<(), String> {
+    let server_url = store.get().server_url().to_string();
+    if !uploader.has_public_match(&server_url, match_id) {
+        return Err("That match isn't on the site: only accepted and voided matches are".into());
+    }
+    let url = server::match_page_url(&server_url, match_id)?;
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| format!("Couldn't open the browser: {e}"))
+}
+
 /// Empty goes back to the default server.
 #[tauri::command]
 fn set_server_url(
@@ -228,7 +261,10 @@ pub fn run() {
             forget_token,
             set_server_url,
             set_log_folder,
-            get_upload_status
+            get_upload_status,
+            get_upload_history,
+            retry_upload,
+            open_match
         ])
         .run(tauri::generate_context!())
         .expect("error while running the host tool");

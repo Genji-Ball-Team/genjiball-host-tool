@@ -8,6 +8,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use serde::Serialize;
+
 use crate::config;
 use crate::log_scan::{self, Scan};
 
@@ -32,6 +34,26 @@ pub struct Sent {
     pub match_ends: usize,
 }
 
+/// A ranked file not uploaded as it is now, for the upload history.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Queued {
+    pub file: String,
+    pub players: Vec<String>,
+    pub state: QueueState,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum QueueState {
+    /// Still being written: uploaded once its match ends or it stops growing.
+    Playing,
+    /// Uploaded at the next chance (now, or once uploads aren't paused).
+    Due,
+    /// The last try failed (offline, server down). Tried again after the backoff, or on Retry.
+    Failed { error: String },
+}
+
 struct Tracked {
     size: u64,
     modified: SystemTime,
@@ -40,6 +62,12 @@ struct Tracked {
     scan: Scan,
     failures: u32,
     retry_at: Option<Instant>,
+    /// Why the last try failed, until one works.
+    error: Option<String>,
+    /// Ranked and not uploaded as it is now, at the last poll.
+    waiting: bool,
+    /// Picked to upload at the last poll.
+    due: bool,
 }
 
 #[derive(Default)]
@@ -99,15 +127,15 @@ impl Tracker {
             {
                 continue;
             }
-            let tracked = match self.files.remove(&name) {
+            let mut tracked = match self.files.remove(&name) {
                 Some(tracked) if tracked.size == size && tracked.modified == modified => tracked,
                 before => {
                     // A file still being written may be locked for a moment: try on the next poll.
                     let Ok(bytes) = fs::read(&path) else { continue };
-                    let (failures, retry_at, changed_at) = match before {
-                        Some(t) => (t.failures, t.retry_at, now),
+                    let (failures, retry_at, error, changed_at) = match before {
+                        Some(t) => (t.failures, t.retry_at, t.error, now),
                         // First seen: it's been quiet since it was last written.
-                        None => (0, None, now.checked_sub(age).unwrap_or(now)),
+                        None => (0, None, None, now.checked_sub(age).unwrap_or(now)),
                     };
                     Tracked {
                         size,
@@ -116,15 +144,26 @@ impl Tracker {
                         scan: log_scan::scan(&String::from_utf8_lossy(&bytes)),
                         failures,
                         retry_at,
+                        error,
+                        waiting: false,
+                        due: false,
                     }
                 }
             };
-            if tracked.scan.ranked && last.map(|s| s.size) != Some(size) {
+            tracked.waiting = tracked.scan.ranked && last.map(|s| s.size) != Some(size);
+            tracked.due = false;
+            if !tracked.waiting {
+                // Uploaded as it is: an earlier failure no longer matters.
+                tracked.failures = 0;
+                tracked.retry_at = None;
+                tracked.error = None;
+            } else {
                 poll.waiting += 1;
                 let ended = tracked.scan.match_ends > last.map_or(0, |s| s.match_ends);
                 let stopped = now.saturating_duration_since(tracked.changed_at) >= quiet;
                 let held = tracked.retry_at.is_some_and(|at| now < at);
                 if (ended || stopped) && !held {
+                    tracked.due = true;
                     poll.due.push(Due {
                         name: name.clone(),
                         path,
@@ -139,20 +178,61 @@ impl Tracker {
         Ok(poll)
     }
 
-    /// The upload of `name` worked, or won't work however often it's tried.
+    /// The upload of `name` worked, or won't work however often it's tried. Either way it's in the
+    /// upload record now, so it's no longer waiting.
     pub fn sent(&mut self, name: &str) {
         if let Some(t) = self.files.get_mut(name) {
             t.failures = 0;
             t.retry_at = None;
+            t.error = None;
+            t.waiting = false;
+            t.due = false;
         }
     }
 
-    /// The upload of `name` failed: hold it for `after`, or a backoff that grows with each failure.
-    pub fn failed(&mut self, name: &str, now: Instant, after: Option<Duration>) {
+    /// The upload of `name` failed with `error`: hold it for `after`, or a backoff that grows with
+    /// each failure.
+    pub fn failed(&mut self, name: &str, now: Instant, after: Option<Duration>, error: String) {
         if let Some(t) = self.files.get_mut(name) {
             t.failures += 1;
             t.retry_at = Some(now + after.unwrap_or_else(|| backoff(t.failures)));
+            t.error = Some(error);
         }
+    }
+
+    /// The host asked to retry `name` now: drops the backoff, so the next poll picks it like any
+    /// other file (only if it still isn't uploaded as it is). `false` when it isn't a failed upload.
+    pub fn retry(&mut self, name: &str) -> bool {
+        match self.files.get_mut(name) {
+            Some(t) if t.waiting && t.error.is_some() => {
+                t.failures = 0;
+                t.retry_at = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The ranked files not uploaded as they are now, as of the last poll and the uploads since.
+    pub fn queue(&self) -> Vec<Queued> {
+        let mut queue: Vec<Queued> = self
+            .files
+            .iter()
+            .filter(|(_, t)| t.waiting)
+            .map(|(name, t)| Queued {
+                file: name.clone(),
+                players: t.scan.players.clone(),
+                state: match (&t.error, t.due) {
+                    (Some(error), _) => QueueState::Failed {
+                        error: error.clone(),
+                    },
+                    (None, true) => QueueState::Due,
+                    (None, false) => QueueState::Playing,
+                },
+            })
+            .collect();
+        queue.sort_by(|a, b| a.file.cmp(&b.file));
+        queue
     }
 }
 
@@ -395,7 +475,7 @@ mod tests {
             1
         );
 
-        tracker.failed(NAME, now, None);
+        tracker.failed(NAME, now, None, "offline".into());
         let poll = tracker
             .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
             .unwrap();
@@ -417,7 +497,12 @@ mod tests {
         );
 
         // A `Retry-After` wins over the backoff.
-        tracker.failed(NAME, retry, Some(Duration::from_secs(3600)));
+        tracker.failed(
+            NAME,
+            retry,
+            Some(Duration::from_secs(3600)),
+            "rate limited".into(),
+        );
         let soon = retry + backoff(2);
         assert!(tracker
             .poll(dir.path(), soon, SystemTime::now(), EPOCH, never_sent)
@@ -434,6 +519,140 @@ mod tests {
             ),
             [NAME]
         );
+    }
+
+    fn states(tracker: &Tracker) -> Vec<QueueState> {
+        tracker.queue().into_iter().map(|q| q.state).collect()
+    }
+
+    #[test]
+    fn lists_the_files_waiting_to_upload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        let other = "Log-2026-10-02-21-00-00.txt";
+        write(dir.path(), NAME, &playing(), Duration::ZERO);
+        write(dir.path(), other, EXAMPLE, Duration::ZERO);
+        // A file already uploaded as it is isn't listed.
+        write(
+            dir.path(),
+            "Log-2026-10-01-20-00-00.txt",
+            EXAMPLE,
+            Duration::ZERO,
+        );
+        let sent = |name: &str| {
+            (name == "Log-2026-10-01-20-00-00.txt").then_some(Sent {
+                size: EXAMPLE.len() as u64,
+                match_ends: 1,
+            })
+        };
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, sent)
+            .unwrap();
+        let queue = tracker.queue();
+        assert_eq!(
+            queue.iter().map(|q| q.file.as_str()).collect::<Vec<_>>(),
+            [NAME, other]
+        );
+        assert_eq!(queue[0].state, QueueState::Playing);
+        assert_eq!(queue[1].state, QueueState::Due);
+        assert_eq!(queue[1].players.len(), 5);
+
+        tracker.failed(other, now, None, "offline".into());
+        assert_eq!(
+            states(&tracker)[1],
+            QueueState::Failed {
+                error: "offline".into()
+            }
+        );
+        // Still failed at the next poll, while it's held.
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, sent)
+            .unwrap();
+        assert_eq!(
+            states(&tracker)[1],
+            QueueState::Failed {
+                error: "offline".into()
+            }
+        );
+        tracker.sent(other);
+        assert_eq!(states(&tracker), [QueueState::Playing]);
+    }
+
+    #[test]
+    fn retry_drops_the_backoff_of_a_failed_upload_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        // Not failed: nothing to retry.
+        assert!(!tracker.retry(NAME));
+        assert!(!tracker.retry("Log-unknown.txt"));
+
+        tracker.failed(NAME, now, Some(Duration::from_secs(3600)), "offline".into());
+        assert!(tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap()
+            .due
+            .is_empty());
+        assert!(tracker.retry(NAME));
+        assert_eq!(
+            names(
+                &tracker
+                    .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+                    .unwrap()
+            ),
+            [NAME]
+        );
+        // The backoff starts over: the next failure waits the first step, not a doubled one.
+        tracker.failed(NAME, now, None, "offline".into());
+        assert_eq!(
+            names(
+                &tracker
+                    .poll(
+                        dir.path(),
+                        now + backoff(1),
+                        SystemTime::now(),
+                        EPOCH,
+                        never_sent
+                    )
+                    .unwrap()
+            ),
+            [NAME]
+        );
+    }
+
+    #[test]
+    fn retry_doesnt_send_an_uploaded_file_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        tracker.failed(NAME, now, None, "offline".into());
+        // It was uploaded since (the next try worked, say): it isn't waiting any more.
+        let uploaded = |_: &str| {
+            Some(Sent {
+                size: EXAMPLE.len() as u64,
+                match_ends: 1,
+            })
+        };
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, uploaded)
+            .unwrap();
+        assert!(!tracker.retry(NAME));
+        assert_eq!(
+            tracker
+                .poll(dir.path(), now, SystemTime::now(), EPOCH, uploaded)
+                .unwrap(),
+            Poll::default()
+        );
+        assert!(tracker.queue().is_empty());
     }
 
     #[test]

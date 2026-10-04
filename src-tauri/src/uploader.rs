@@ -3,7 +3,7 @@
 //! does, window open or not.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
@@ -13,8 +13,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
+use crate::history::{self, Page, QueueSnapshot};
 use crate::server::{self, Host, TokenCheck, UploadOutcome};
-use crate::uploads::{self, Answer, RecentUpload, Record, Sent};
+use crate::uploads::{self, Answer, Record, Sent};
 use crate::watcher::{self, Due, Tracker};
 use crate::{config, log_folder, log_scan, Store};
 
@@ -49,7 +50,11 @@ pub struct UploadStatus {
     pub waiting: usize,
     /// Why the last upload failed, while it waits to be retried.
     pub retrying: Option<String>,
-    pub recent: Vec<RecentUpload>,
+    /// The first page of the upload history. The window asks for the others.
+    pub history: Page,
+    /// Goes up whenever any page of the history changes: the window then asks for the page it
+    /// shows again.
+    pub history_revision: u64,
     /// Whose token it is, as the server last said: the window shows an untrusted host.
     pub host: Option<Host>,
 }
@@ -58,6 +63,10 @@ pub struct Uploader {
     record_path: PathBuf,
     record: Mutex<Record>,
     status: Mutex<UploadStatus>,
+    /// The ranked files waiting to be uploaded, as of the last poll.
+    queue: Mutex<QueueSnapshot>,
+    /// Failed uploads the host asked to retry now, by file name.
+    retries: Mutex<Vec<String>>,
     wake: Notify,
     /// Ask the server for the host and the listed matches' status at the next poll.
     refresh: AtomicBool,
@@ -75,6 +84,8 @@ impl Uploader {
             record_path,
             record: Mutex::new(record),
             status: Mutex::new(UploadStatus::default()),
+            queue: Mutex::new(QueueSnapshot::default()),
+            retries: Mutex::new(Vec::new()),
             wake: Notify::new(),
             refresh: AtomicBool::new(false),
         }
@@ -82,6 +93,40 @@ impl Uploader {
 
     pub fn status(&self) -> UploadStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// Page `page` of the upload history for `server_url`, with the files waiting in `folder` (the
+    /// log folder now, `None` when there's none).
+    pub fn history(&self, server_url: &str, folder: Option<&Path>, page: usize) -> Page {
+        let queue = self.queue.lock().unwrap();
+        history::page(
+            &self.record.lock().unwrap(),
+            server_url,
+            queue.queue(server_url, folder),
+            page,
+            config::UPLOADS_PAGE_SIZE,
+        )
+    }
+
+    /// See `UploadStatus::history_revision`. Both parts only go up.
+    fn history_revision(&self) -> u64 {
+        let queue = self.queue.lock().unwrap().revision();
+        queue + self.record.lock().unwrap().revision()
+    }
+
+    /// Whether a match uploaded to `server_url` has this id on the site and is public there.
+    pub fn has_public_match(&self, server_url: &str, match_id: i64) -> bool {
+        self.record
+            .lock()
+            .unwrap()
+            .has_public_match(server_url, match_id)
+    }
+
+    /// Tries a failed upload of `file` again now, through the usual queue: its backoff is dropped
+    /// and the loop woken. A file that isn't a failed upload (it was uploaded since) is left alone.
+    pub fn retry(&self, file: String) {
+        self.retries.lock().unwrap().push(file);
+        self.wake();
     }
 
     /// Polls now rather than at the next interval: a setting or the token changed.
@@ -150,20 +195,30 @@ impl Run {
             retrying: self.retrying.clone(),
             ..UploadStatus::default()
         };
-        let finish = |mut status: UploadStatus| {
-            status.recent = uploader
-                .record
-                .lock()
-                .unwrap()
-                .recent(&server_url, config::RECENT_UPLOADS_SHOWN);
+        // `folder`: the folder just polled, `None` when there's none to poll.
+        let finish = |run: &Run, folder: Option<&Path>, mut status: UploadStatus| {
+            {
+                let mut queue = uploader.queue.lock().unwrap();
+                match folder {
+                    Some(folder) => queue.set(&server_url, folder, run.tracker.queue()),
+                    None => queue.clear(),
+                }
+            }
+            status.history = uploader.history(&server_url, folder, 0);
+            status.history_revision = uploader.history_revision();
             status
         };
 
         let Some(folder) = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists)
         else {
             status.problem = Some(Problem::NoFolder);
-            return finish(status);
+            return finish(self, None, status);
         };
+        let polled = Some(folder.path.as_path());
+        // The retries the host asked for, before the poll picks what's due.
+        for file in std::mem::take(&mut *uploader.retries.lock().unwrap()) {
+            self.tracker.retry(&file);
+        }
         let poll = {
             let record = uploader.record.lock().unwrap();
             // Before the first token for this server, count only what's written from now on.
@@ -187,7 +242,7 @@ impl Run {
                 status.problem = Some(Problem::FolderUnreadable {
                     message: e.to_string(),
                 });
-                return finish(status);
+                return finish(self, None, status);
             }
         };
         status.waiting = poll.waiting;
@@ -199,11 +254,11 @@ impl Run {
                 self.host = None;
                 self.refreshed = None;
                 status.problem = Some(Problem::NoToken);
-                return finish(status);
+                return finish(self, polled, status);
             }
             Err(message) => {
                 status.problem = Some(Problem::Local { message });
-                return finish(status);
+                return finish(self, polled, status);
             }
         };
         status.host = self.known_host(&server_url, &token);
@@ -213,14 +268,14 @@ impl Run {
                 if let Err(message) = uploads::save(&uploader.record_path, &record) {
                     status.problem = Some(Problem::Local { message });
                     drop(record);
-                    return finish(status);
+                    return finish(self, polled, status);
                 }
             }
         }
         if let Some((url, bad, revoked)) = &self.rejected {
             if *url == server_url && *bad == token {
                 status.problem = Some(Problem::TokenRejected { revoked: *revoked });
-                return finish(status);
+                return finish(self, polled, status);
             }
             self.rejected = None;
         }
@@ -242,7 +297,7 @@ impl Run {
             }
         }
         status.host = self.known_host(&server_url, &token);
-        finish(status)
+        finish(self, polled, status)
     }
 
     /// Every `STATUS_REFRESH_SECS`, or when asked: asks the server whose token it is (the trust
@@ -281,11 +336,11 @@ impl Run {
             TokenCheck::Unreachable { .. } => {}
         }
 
-        let keys = uploader.record.lock().unwrap().recent_match_keys(
-            server_url,
-            config::RECENT_UPLOADS_SHOWN,
-            config::MAX_STATUS_KEYS,
-        );
+        let keys = uploader
+            .record
+            .lock()
+            .unwrap()
+            .recent_match_keys(server_url, config::MAX_STATUS_KEYS);
         if !keys.is_empty() {
             match server::match_states(server_url, token, &keys).await {
                 Ok(states) => {
@@ -319,13 +374,15 @@ impl Run {
         let bytes = match fs::read(&due.path) {
             Ok(bytes) => bytes,
             Err(e) => {
-                self.tracker.failed(&due.name, Instant::now(), None);
-                self.retrying = Some(format!("Couldn't read {}: {e}", due.name));
+                let message = format!("Couldn't read {}: {e}", due.name);
+                self.tracker
+                    .failed(&due.name, Instant::now(), None, message.clone());
+                self.retrying = Some(message);
                 return Ok(false);
             }
         };
         let size = bytes.len() as u64;
-        let match_ends = log_scan::scan(&String::from_utf8_lossy(&bytes)).match_ends;
+        let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
         let answer = if size > config::MAX_UPLOAD_BYTES {
             Answer::Refused {
                 error: "too_large".into(),
@@ -337,14 +394,22 @@ impl Run {
         } else {
             let started_at = started_at(due);
             match server::upload(server_url, token, &due.name, started_at.as_deref(), bytes).await {
-                UploadOutcome::Stored(answer) => Answer::Answered(answer),
+                UploadOutcome::Stored(answer) => {
+                    // The answer has no match id on the site: the status refresh brings it, so
+                    // ask for one at the end of this poll rather than in `STATUS_REFRESH_SECS`.
+                    if !answer.matches.is_empty() {
+                        uploader.refresh.store(true, Ordering::Relaxed);
+                    }
+                    Answer::Answered(answer)
+                }
                 UploadOutcome::Refused { error, message } => Answer::Refused { error, message },
                 UploadOutcome::TokenRejected { revoked } => {
                     self.rejected = Some((server_url.to_string(), token.to_string(), revoked));
                     return Err(Problem::TokenRejected { revoked });
                 }
                 UploadOutcome::Retry { message, after } => {
-                    self.tracker.failed(&due.name, Instant::now(), after);
+                    self.tracker
+                        .failed(&due.name, Instant::now(), after, message.clone());
                     self.retrying = Some(message);
                     return Ok(false);
                 }
@@ -358,8 +423,9 @@ impl Run {
             &due.name,
             Sent {
                 size,
-                match_ends,
+                match_ends: scan.match_ends,
                 at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                players: scan.players,
                 answer,
             },
         );

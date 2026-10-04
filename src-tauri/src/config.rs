@@ -50,3 +50,10 @@ pub const RETRY_MAX_SECS: u64 = 30 * 60;
 
 /// How many uploads the window lists. The full history is #5.
 pub const RECENT_UPLOADS_SHOWN: usize = 8;
+
+/// How often the listed matches' status (an admin accepting one in review, say) and the host's
+/// trust are asked of the server again.
+pub const STATUS_REFRESH_SECS: u64 = 120;
+
+/// The server answers at most this many match keys at once (`hostMatchKeysMax` in genjiball-ranked).
+pub const MAX_STATUS_KEYS: usize = 50;

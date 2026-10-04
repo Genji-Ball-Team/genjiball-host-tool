@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::server::UploadAnswer;
+use crate::server::{MatchState, UploadAnswer};
 use crate::settings;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -86,6 +86,57 @@ impl Record {
             .insert(file.to_string(), sent);
     }
 
+    /// The keys of the matches in the `count` latest uploads to `server_url`, at most `max`: the
+    /// ones whose status the window shows.
+    pub fn recent_match_keys(&self, server_url: &str, count: usize, max: usize) -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+        for upload in self.recent(server_url, count) {
+            let Answer::Answered(answer) = upload.answer else {
+                continue;
+            };
+            for key in answer.matches.into_iter().filter_map(|m| m.match_key) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        keys.truncate(max);
+        keys
+    }
+
+    /// Puts the server's status now on every upload of those matches. `true` when one changed.
+    pub fn update_states(&mut self, server_url: &str, states: &[MatchState]) -> bool {
+        let mut changed = false;
+        let uploads = self
+            .servers
+            .get_mut(server_url)
+            .into_iter()
+            .flat_map(|f| f.values_mut());
+        for sent in uploads {
+            let Answer::Answered(answer) = &mut sent.answer else {
+                continue;
+            };
+            for m in &mut answer.matches {
+                let Some(state) = states
+                    .iter()
+                    .find(|s| m.match_key.as_ref() == Some(&s.match_key))
+                else {
+                    continue;
+                };
+                if m.status != state.status
+                    || m.rejection != state.rejection
+                    || m.review_reasons != state.review_reasons
+                {
+                    m.status = state.status.clone();
+                    m.rejection = state.rejection.clone();
+                    m.review_reasons = state.review_reasons.clone();
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// The `count` latest uploads to `server_url`, newest first.
     pub fn recent(&self, server_url: &str, count: usize) -> Vec<RecentUpload> {
         let mut all: Vec<_> = self.servers.get(server_url).into_iter().flatten().collect();
@@ -119,6 +170,7 @@ pub fn save(path: &Path, record: &Record) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::UploadedMatch;
 
     fn sent(size: u64, at: &str) -> Sent {
         Sent {
@@ -176,6 +228,91 @@ mod tests {
             .collect();
         assert_eq!(files, ["Log-b.txt", "Log-c.txt"]);
         assert!(record.recent("https://other", 2).is_empty());
+    }
+
+    fn answered(at: &str, keys: &[&str], status: &str) -> Sent {
+        Sent {
+            answer: Answer::Answered(UploadAnswer {
+                result: "stored".into(),
+                matches: keys
+                    .iter()
+                    .map(|key| UploadedMatch {
+                        match_key: Some(key.to_string()),
+                        line_count: 10,
+                        action: "insert".into(),
+                        status: status.into(),
+                        rejection: None,
+                        review_reasons: vec!["untrusted_host".into()],
+                    })
+                    .collect(),
+            }),
+            ..sent(1, at)
+        }
+    }
+
+    #[test]
+    fn lists_the_recent_match_keys_once() {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "review"),
+        );
+        // A spectator copy of the same match, and another match.
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &["1", "2"], "review"),
+        );
+        record.put(server, "Log-c.txt", sent(1, "2026-10-03T12:00:00Z"));
+        assert_eq!(record.recent_match_keys(server, 8, 50), ["1", "2"]);
+        assert_eq!(record.recent_match_keys(server, 8, 1), ["1"]);
+        assert_eq!(
+            record.recent_match_keys(server, 1, 50),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn takes_the_servers_status_now() {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "review"),
+        );
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &["1", "2"], "review"),
+        );
+        let accepted = MatchState {
+            match_key: "1".into(),
+            status: "accepted".into(),
+            rejection: None,
+            review_reasons: vec!["untrusted_host".into()],
+        };
+        assert!(record.update_states(server, std::slice::from_ref(&accepted)));
+        assert!(!record.update_states(server, &[accepted]));
+        let statuses: Vec<_> = record
+            .recent(server, 8)
+            .into_iter()
+            .flat_map(|r| match r.answer {
+                Answer::Answered(a) => a.matches,
+                Answer::Refused { .. } => vec![],
+            })
+            .map(|m| (m.match_key.unwrap(), m.status))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                ("1".to_string(), "accepted".to_string()),
+                ("2".to_string(), "review".to_string()),
+                ("1".to_string(), "accepted".to_string()),
+            ]
+        );
     }
 
     #[test]

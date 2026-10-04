@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -12,7 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
-use crate::server::{self, UploadOutcome};
+use crate::server::{self, Host, TokenCheck, UploadOutcome};
 use crate::uploads::{self, Answer, RecentUpload, Record, Sent};
 use crate::watcher::{self, Due, Tracker};
 use crate::{config, log_folder, log_scan, Store};
@@ -49,6 +50,8 @@ pub struct UploadStatus {
     /// Why the last upload failed, while it waits to be retried.
     pub retrying: Option<String>,
     pub recent: Vec<RecentUpload>,
+    /// Whose token it is, as the server last said: the window shows an untrusted host.
+    pub host: Option<Host>,
 }
 
 pub struct Uploader {
@@ -56,6 +59,8 @@ pub struct Uploader {
     record: Mutex<Record>,
     status: Mutex<UploadStatus>,
     wake: Notify,
+    /// Ask the server for the host and the listed matches' status at the next poll.
+    refresh: AtomicBool,
 }
 
 impl Uploader {
@@ -71,6 +76,7 @@ impl Uploader {
             record: Mutex::new(record),
             status: Mutex::new(UploadStatus::default()),
             wake: Notify::new(),
+            refresh: AtomicBool::new(false),
         }
     }
 
@@ -81,6 +87,12 @@ impl Uploader {
     /// Polls now rather than at the next interval: a setting or the token changed.
     pub fn wake(&self) {
         self.wake.notify_one();
+    }
+
+    /// Asks the server for the host and the listed matches' status now, not at the next refresh.
+    pub fn refresh(&self) {
+        self.refresh.store(true, Ordering::Relaxed);
+        self.wake();
     }
 }
 
@@ -113,6 +125,9 @@ struct Run {
     /// The server and token that were turned down, so they aren't tried again. Memory only.
     rejected: Option<(String, String, bool)>,
     retrying: Option<String>,
+    /// The server and token the host and the match statuses were last asked with, and when.
+    refreshed: Option<(String, String, Instant)>,
+    host: Option<Host>,
 }
 
 impl Run {
@@ -123,6 +138,11 @@ impl Run {
         let server_url = settings.server_url().to_string();
         let mut status = UploadStatus {
             retrying: self.retrying.clone(),
+            host: self
+                .refreshed
+                .as_ref()
+                .filter(|(url, _, _)| *url == server_url)
+                .and(self.host.clone()),
             ..UploadStatus::default()
         };
         let finish = |mut status: UploadStatus| {
@@ -170,6 +190,10 @@ impl Run {
         let token = match store.tokens.get(&server_url) {
             Ok(Some(token)) => token,
             Ok(None) => {
+                // The token was forgotten: whose it was no longer matters.
+                self.host = None;
+                self.refreshed = None;
+                status.host = None;
                 status.problem = Some(Problem::NoToken);
                 return finish(status);
             }
@@ -207,7 +231,70 @@ impl Run {
             }
         }
         status.retrying = self.retrying.clone();
+        if status.problem.is_none() {
+            if let Err(problem) = self.refresh(&uploader, &server_url, &token).await {
+                status.problem = Some(problem);
+            }
+        }
+        status.host = self.host.clone();
         finish(status)
+    }
+
+    /// Every `STATUS_REFRESH_SECS`, or when asked: asks the server whose token it is (the trust
+    /// may have changed) and the status now of the listed matches (an admin may have accepted
+    /// one), and records it. Failing to ask isn't a problem: it's asked again next time.
+    async fn refresh(
+        &mut self,
+        uploader: &Uploader,
+        server_url: &str,
+        token: &str,
+    ) -> Result<(), Problem> {
+        let asked = uploader.refresh.swap(false, Ordering::Relaxed);
+        let due = match &self.refreshed {
+            Some((url, t, at)) if url == server_url && t == token => {
+                asked || at.elapsed() >= Duration::from_secs(config::STATUS_REFRESH_SECS)
+            }
+            _ => {
+                self.host = None;
+                true
+            }
+        };
+        if !due {
+            return Ok(());
+        }
+        self.refreshed = Some((server_url.to_string(), token.to_string(), Instant::now()));
+
+        match server::check_token(server_url, token).await {
+            TokenCheck::Ok { host } => self.host = Some(host),
+            check @ (TokenCheck::Unknown | TokenCheck::Revoked) => {
+                let revoked = check == TokenCheck::Revoked;
+                self.host = None;
+                self.rejected = Some((server_url.to_string(), token.to_string(), revoked));
+                return Err(Problem::TokenRejected { revoked });
+            }
+            // Keep what the server said last.
+            TokenCheck::Unreachable { .. } => {}
+        }
+
+        let keys = uploader.record.lock().unwrap().recent_match_keys(
+            server_url,
+            config::RECENT_UPLOADS_SHOWN,
+            config::MAX_STATUS_KEYS,
+        );
+        if keys.is_empty() {
+            return Ok(());
+        }
+        match server::match_states(server_url, token, &keys).await {
+            Ok(states) => {
+                let mut record = uploader.record.lock().unwrap();
+                if record.update_states(server_url, &states) {
+                    uploads::save(&uploader.record_path, &record)
+                        .map_err(|message| Problem::Local { message })?;
+                }
+            }
+            Err(message) => eprintln!("Couldn't refresh the match status: {message}"),
+        }
+        Ok(())
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it

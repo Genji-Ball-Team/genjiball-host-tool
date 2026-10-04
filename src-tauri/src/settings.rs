@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use url::{Host, Url};
 
 use crate::config;
 
@@ -49,25 +50,57 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| format!("Couldn't write {}: {e}", path.display()))
 }
 
-/// A server URL as the host typed it, trimmed and without a trailing slash, or why it's not one.
-/// Empty means "use the default" (`None`).
+/// A server URL as the host typed it, as `scheme://host[:port][/path]` without a trailing slash,
+/// or why it's not one. Empty means "use the default" (`None`).
+///
+/// The token is sent to this URL, so it must be `https://`, except `http://` to this PC
+/// (`localhost` or a loopback address) for a local `wrangler dev`. The host is checked on the
+/// parsed URL, so `http://localhost@example.com` (host `example.com`) is refused.
 pub fn normalize_server_url(input: &str) -> Result<Option<String>, String> {
-    let url = input.trim().trim_end_matches('/');
-    if url.is_empty() {
+    let input = input.trim();
+    if input.is_empty() {
         return Ok(None);
     }
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or("The server URL starts with https:// (or http:// for a local server)")?;
-    if rest.is_empty() || rest.contains(char::is_whitespace) {
-        return Err("That isn't a server URL".into());
+    let not_a_url = || "That isn't a server URL".to_string();
+    let url = Url::parse(input).map_err(|_| {
+        if input.contains("://") {
+            not_a_url()
+        } else {
+            "The server URL starts with https://".to_string()
+        }
+    })?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(not_a_url());
     }
-    Ok(if url == config::DEFAULT_SERVER_URL {
+    let host = url.host().ok_or_else(not_a_url)?;
+    match url.scheme() {
+        "https" => {}
+        "http" if is_this_pc(&host) => {}
+        "http" => {
+            return Err(
+                "Use https://. Plain http:// is only for a server on this PC (localhost)".into(),
+            )
+        }
+        _ => return Err("The server URL starts with https://".into()),
+    }
+    let normalized = url.as_str().trim_end_matches('/').to_string();
+    Ok(if normalized == config::DEFAULT_SERVER_URL {
         None
     } else {
-        Some(url.to_string())
+        Some(normalized)
     })
+}
+
+fn is_this_pc(host: &Host<&str>) -> bool {
+    match host {
+        Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(ip) => ip.is_loopback(),
+        Host::Ipv6(ip) => ip.is_loopback(),
+    }
 }
 
 #[cfg(test)]
@@ -130,5 +163,40 @@ mod tests {
         assert!(normalize_server_url("genjiball.us").is_err());
         assert!(normalize_server_url("https://").is_err());
         assert!(normalize_server_url("https://genji ball.us").is_err());
+    }
+
+    #[test]
+    fn allows_plain_http_only_to_this_pc() {
+        for local in [
+            "http://localhost:8787",
+            "http://LOCALHOST:8787",
+            "http://127.0.0.1:8787",
+            "http://[::1]:8787",
+        ] {
+            assert!(normalize_server_url(local).is_ok(), "{local}");
+        }
+        for remote in [
+            "http://genjiball.us",
+            "http://192.168.1.20:8787",
+            "http://localhost.example.com",
+            // The host here is example.com: "localhost" is a user name.
+            "http://localhost@example.com",
+            "http://localhost:secret@example.com",
+        ] {
+            assert!(normalize_server_url(remote).is_err(), "{remote}");
+        }
+    }
+
+    #[test]
+    fn refuses_credentials_queries_and_other_schemes() {
+        for bad in [
+            "https://user:pass@genjiball.us",
+            "https://genjiball.us/?x=1",
+            "https://genjiball.us/#x",
+            "ftp://genjiball.us",
+            "file:///C:/x",
+        ] {
+            assert!(normalize_server_url(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -1039,6 +1039,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "url",
  "windows-sys 0.60.2",
 ]
 

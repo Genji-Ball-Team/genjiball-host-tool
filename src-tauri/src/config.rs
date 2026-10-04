@@ -68,8 +68,9 @@ pub const RELEASE_REPO: &str = "Genji-Ball-Team/GenjiBall-CE";
 /// of the ranked code.
 pub const RELEASE_TAG_SUFFIX: &str = "R";
 
-/// The release asset holding the Workshop code: `genjiball-v1.3.3R.txt`.
-pub const RELEASE_ASSET_PREFIX: &str = "genjiball-";
+/// The release asset holding the Workshop code is `<prefix><tag><suffix>`: `genjiball-v1.3.3R.txt`,
+/// as GenjiBall-CE's release workflow (`.github/workflows/release.yml`) names it.
+pub const RELEASE_ASSET_PREFIX: &str = "genjiball-v";
 pub const RELEASE_ASSET_SUFFIX: &str = ".txt";
 
 /// How many of the newest releases are searched for a ranked one (GitHub allows at most 100).

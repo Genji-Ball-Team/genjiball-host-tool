@@ -162,6 +162,9 @@ fn set_log_folder(
 #[serde(rename_all = "camelCase")]
 struct RankedCode {
     code: String,
+    /// The server the rank tags came from: the window drops a code built for a server the host
+    /// has since switched away from.
+    server_url: String,
     /// The GenjiBall-CE release it's built from (`1.3.3R`).
     release: String,
     /// When the server worked the rank tags out (ISO 8601).
@@ -183,6 +186,7 @@ async fn build_ranked_code(
     let filled = ranked_code::fill(&base, &tags)?;
     Ok(RankedCode {
         code: filled.code,
+        server_url,
         release,
         tags_updated_at: tags.updated_at,
         names: filled.names,

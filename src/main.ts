@@ -70,6 +70,7 @@ interface UploadedMatch {
 /** Mirrors `RankedCode` in src-tauri/src/lib.rs. */
 interface RankedCode {
   code: string;
+  serverUrl: string;
   release: string;
   tagsUpdatedAt: string;
   names: number;
@@ -244,16 +245,25 @@ async function refresh(): Promise<void> {
   render();
 }
 
-/** Runs a button's action with the buttons disabled, and shows its error. */
-async function busy(action: () => Promise<void>): Promise<void> {
-  const buttons = [...document.querySelectorAll("button")];
-  buttons.forEach((b) => (b.disabled = true));
+/** Actions running now. The buttons come back only when the last one ends. */
+let running = 0;
+
+function setButtonsDisabled(disabled: boolean): void {
+  document.querySelectorAll("button").forEach((b) => (b.disabled = disabled));
+}
+
+/** Runs a button's action with the buttons disabled, and shows its error (by default next to the token). */
+async function busy(action: () => Promise<void>, showError: (message: string) => void = (m) => setStatus(m, "bad")): Promise<void> {
+  running += 1;
+  setButtonsDisabled(true);
   try {
     await action();
   } catch (err) {
-    setStatus(String(err), "bad");
+    // Commands fail with strings, the browser with `Error`s.
+    showError(err instanceof Error ? err.message : String(err));
   } finally {
-    buttons.forEach((b) => (b.disabled = false));
+    running -= 1;
+    if (!running) setButtonsDisabled(false);
   }
 }
 
@@ -334,32 +344,39 @@ function setRankedCodeState(text: string, tone: "good" | "bad" | "muted"): void 
   line.className = tone;
 }
 
-el("ranked-code-copy").addEventListener("click", () => {
-  const button = el<HTMLButtonElement>("ranked-code-copy");
-  button.disabled = true;
-  setRankedCodeState("Building the code…", "muted");
-  void (async () => {
-    try {
-      const built = await invoke<RankedCode>("build_ranked_code");
-      try {
-        await navigator.clipboard.writeText(built.code);
-      } catch (err) {
-        throw new Error(`Built the code but couldn't copy it: ${String(err)}`, { cause: err });
-      }
-      const names = built.names === 1 ? "1 name" : `${built.names} names`;
-      const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show them)` : "";
-      setRankedCodeState(
-        `Copied. Genji Ball ${built.release}, rank tags from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`,
-        "good",
-      );
-    } catch (err) {
-      // The command's errors are strings.
-      setRankedCodeState(err instanceof Error ? err.message : String(err), "bad");
-    } finally {
-      button.disabled = false;
+/** Counts builds, so only the latest click's code is copied. */
+let rankedBuild = 0;
+/** The last code built but not copied (the window lost focus while it was built): the next click copies it as is. */
+let uncopied: RankedCode | null = null;
+
+async function copyRankedCode(): Promise<void> {
+  const build = ++rankedBuild;
+  let built = uncopied?.serverUrl === state.serverUrl ? uncopied : null;
+  if (!built) {
+    setRankedCodeState("Building the code…", "muted");
+    built = await invoke<RankedCode>("build_ranked_code");
+    // A newer click, or a server change, while this one ran: its tags may be from the wrong server.
+    if (build !== rankedBuild) return;
+    if (built.serverUrl !== state.serverUrl) {
+      setRankedCodeState("The server changed while the code was built. Click again for this server's.", "bad");
+      return;
     }
-  })();
-});
+  }
+  try {
+    await navigator.clipboard.writeText(built.code);
+  } catch (err) {
+    // Usually "Document is not focused": the host switched windows while it was built.
+    uncopied = built;
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
+  }
+  uncopied = null;
+  const names = built.names === 1 ? "1 name" : `${built.names} names`;
+  const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show them)` : "";
+  setRankedCodeState(`Copied. Genji Ball ${built.release}, rank tags from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`, "good");
+}
+
+el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));
 
 void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
 void invoke<UploadStatus>("get_upload_status").then(renderUploads);

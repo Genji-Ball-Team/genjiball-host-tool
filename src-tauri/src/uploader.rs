@@ -175,9 +175,17 @@ struct Run {
     host: Option<Host>,
     /// A refreshed status that couldn't be saved: saved at the next refresh even if unchanged.
     unsaved: bool,
+    /// The server that answered "too many uploads" (`429`), and until when nothing is sent to it.
+    held: Option<(String, Instant)>,
 }
 
 impl Run {
+    /// Whether nothing may be uploaded to `server_url` at `now`: it answered `429` and its
+    /// `Retry-After` isn't over yet.
+    fn held(&self, server_url: &str, now: Instant) -> bool {
+        matches!(&self.held, Some((url, until)) if url == server_url && now < *until)
+    }
+
     /// Whose token it is, only if the server was last asked with this server and token.
     fn known_host(&self, server_url: &str, token: &str) -> Option<Host> {
         match &self.refreshed {
@@ -281,6 +289,9 @@ impl Run {
         }
 
         for due in poll.due {
+            if self.held(&server_url, Instant::now()) {
+                break;
+            }
             match self.send(&uploader, &server_url, &token, &due).await {
                 Ok(true) => status.waiting = status.waiting.saturating_sub(1),
                 Ok(false) => {}
@@ -417,6 +428,16 @@ impl Run {
                     self.retrying = Some(message);
                     return Ok(false);
                 }
+                UploadOutcome::RateLimited { message, after } => {
+                    // Every upload to this server waits, not only this file.
+                    let now = Instant::now();
+                    let wait = after.unwrap_or_else(|| watcher::backoff(1));
+                    self.held = Some((server_url.to_string(), watcher::later(now, wait)));
+                    self.tracker
+                        .failed(&due.name, now, Some(wait), message.clone());
+                    self.retrying = Some(message);
+                    return Ok(false);
+                }
             }
         };
         self.tracker.sent(&due.name);
@@ -445,4 +466,45 @@ fn started_at(due: &Due) -> Option<String> {
         let created = fs::metadata(&due.path).ok()?.created().ok()?;
         Some(DateTime::<Local>::from(created).to_rfc3339_opts(SecondsFormat::Secs, false))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::async_runtime::block_on;
+
+    const EXAMPLE: &str = include_str!("../tests/fixtures/ranked-log-example.txt");
+
+    /// A log file in `dir` holding `text`, due to upload.
+    fn due(dir: &Path, text: &str) -> Due {
+        let name = "Log-2026-10-02-20-15-33.txt";
+        let path = dir.join(name);
+        fs::write(&path, text).unwrap();
+        Due {
+            name: name.into(),
+            path,
+        }
+    }
+
+    #[test]
+    fn too_many_uploads_holds_the_whole_server_as_long_as_it_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let server = server::test_server(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7200\r\nContent-Length: 0\r\n\r\n"
+                .into(),
+            EXAMPLE,
+        );
+        let start = Instant::now();
+        let sent = block_on(run.send(&uploader, &server, "t", &due(dir.path(), EXAMPLE)));
+        assert_eq!(sent, Ok(false));
+        // Two hours, past `RETRY_MAX_SECS`, for every file to that server; not another server.
+        assert!(run.held(
+            &server,
+            start + Duration::from_secs(config::RETRY_MAX_SECS + 60)
+        ));
+        assert!(!run.held(&server, Instant::now() + Duration::from_secs(7200)));
+        assert!(!run.held("https://test.genjiball.us", start));
+    }
 }

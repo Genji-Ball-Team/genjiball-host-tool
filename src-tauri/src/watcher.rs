@@ -199,7 +199,7 @@ impl Tracker {
     pub fn failed(&mut self, name: &str, now: Instant, after: Option<Duration>, error: String) {
         if let Some(t) = self.files.get_mut(name) {
             t.failures += 1;
-            t.retry_at = Some(now + after.unwrap_or_else(|| backoff(t.failures)));
+            t.retry_at = Some(later(now, after.unwrap_or_else(|| backoff(t.failures))));
             t.error = Some(error);
         }
     }
@@ -238,6 +238,12 @@ impl Tracker {
         queue.sort_by(|a, b| a.file.cmp(&b.file));
         queue
     }
+}
+
+/// `wait` after `now`. A server's `Retry-After` too far off to count to waits `RETRY_MAX_SECS`.
+pub fn later(now: Instant, wait: Duration) -> Instant {
+    now.checked_add(wait)
+        .unwrap_or_else(|| now + Duration::from_secs(config::RETRY_MAX_SECS))
 }
 
 /// `RETRY_FIRST_SECS`, doubled for each failure after the first, at most `RETRY_MAX_SECS`.
@@ -778,6 +784,12 @@ mod tests {
             Duration::from_secs(config::RETRY_FIRST_SECS * 2)
         );
         assert_eq!(backoff(100), Duration::from_secs(config::RETRY_MAX_SECS));
+        let now = Instant::now();
+        assert_eq!(
+            later(now, Duration::from_secs(3600)),
+            now + Duration::from_secs(3600)
+        );
+        assert!(later(now, Duration::MAX) > now);
         // However many failures: no overflow, and no cap but `RETRY_MAX_SECS`.
         assert_eq!(
             backoff(u32::MAX),

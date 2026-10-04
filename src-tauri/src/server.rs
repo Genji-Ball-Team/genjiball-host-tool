@@ -153,8 +153,13 @@ pub enum UploadOutcome {
     TokenRejected {
         revoked: bool,
     },
-    /// Try again later: offline, `409`, `429`, `5xx`. `after` is the server's `Retry-After`.
+    /// Try again later: offline, `409`, `5xx`. `after` is the server's `Retry-After`.
     Retry {
+        message: String,
+        after: Option<Duration>,
+    },
+    /// Too many uploads (`429`): no upload to this server until `after` (its `Retry-After`).
+    RateLimited {
         message: String,
         after: Option<Duration>,
     },
@@ -183,12 +188,17 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
                 .map_or_else(|| status.to_string(), |e| e.error.clone()),
             message: message(format!("The server refused the file ({status})")),
         },
-        _ => UploadOutcome::Retry {
-            message: message(format!("The server answered {status}")),
-            after: retry_after
+        _ => {
+            let message = message(format!("The server answered {status}"));
+            let after = retry_after
                 .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(|secs| Duration::from_secs(secs.min(config::RETRY_MAX_SECS))),
-        },
+                .map(Duration::from_secs);
+            if status == 429 {
+                UploadOutcome::RateLimited { message, after }
+            } else {
+                UploadOutcome::Retry { message, after }
+            }
+        }
     }
 }
 
@@ -325,6 +335,30 @@ pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String>
     Ok(url.into())
 }
 
+/// A server on this PC for the tests, at the URL returned: reads one request ending in `body`
+/// (the request body), answers it with `response` as it is, and hangs up.
+#[cfg(test)]
+pub fn test_server(response: String, body: &str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let end = format!("\r\n\r\n{body}");
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0; 4096];
+        while !request.ends_with(end.as_bytes()) {
+            let n = socket.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+        }
+        socket.write_all(response.as_bytes()).unwrap();
+    });
+    url
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,17 +486,24 @@ mod tests {
                 Some("600"),
                 r#"{"error":"rate_limited","message":"At most 60 uploads an hour"}"#
             ),
-            UploadOutcome::Retry {
+            UploadOutcome::RateLimited {
                 message: "At most 60 uploads an hour".into(),
                 after: Some(Duration::from_secs(600))
             }
         );
-        // No longer than the longest backoff, however far off the server says.
+        // As long as the server says, even past the longest backoff.
         assert_eq!(
             read_upload(503, Some("31536000"), ""),
             UploadOutcome::Retry {
                 message: "The server answered 503".into(),
-                after: Some(Duration::from_secs(config::RETRY_MAX_SECS))
+                after: Some(Duration::from_secs(31_536_000))
+            }
+        );
+        assert_eq!(
+            read_upload(429, None, ""),
+            UploadOutcome::RateLimited {
+                message: "The server answered 429".into(),
+                after: None
             }
         );
         for (status, body) in [
@@ -548,28 +589,13 @@ mod tests {
         assert!(match_page_url("not a url", 3).is_err());
     }
 
-    /// A server on this PC that reads one request ending in `body`, answers it with `head` (status
-    /// line and headers), then hangs up before the body it announced.
-    fn cut_off_server(head: &'static str, body: &'static str) -> String {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let end = format!("\r\n\r\n{body}");
-        std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            let mut request = Vec::new();
-            let mut buf = [0; 4096];
-            while !request.ends_with(end.as_bytes()) {
-                let n = socket.read(&mut buf).unwrap();
-                if n == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buf[..n]);
-            }
-            let response = format!("{head}Content-Length: 100\r\n\r\n{{\"error\":");
-            socket.write_all(response.as_bytes()).unwrap();
-        });
-        url
+    /// A server that answers with `head` (status line and headers), then hangs up before the body
+    /// it announced.
+    fn cut_off_server(head: &str, body: &str) -> String {
+        test_server(
+            format!("{head}Content-Length: 100\r\n\r\n{{\"error\":"),
+            body,
+        )
     }
 
     #[test]

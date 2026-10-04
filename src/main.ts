@@ -355,19 +355,25 @@ let rankedBuild = 0;
  */
 let uncopied: { built: RankedCode; at: number } | null = null;
 
-function takeUncopied(): RankedCode | null {
+function takeUncopied(): { built: RankedCode; at: number } | null {
   const kept = uncopied;
   uncopied = null;
   if (!kept || kept.built.serverUrl !== state.serverUrl) return null;
-  return Date.now() - kept.at < kept.built.keepSecs * 1000 ? kept.built : null;
+  return Date.now() - kept.at < kept.built.keepSecs * 1000 ? kept : null;
 }
 
 async function copyRankedCode(): Promise<void> {
   const build = ++rankedBuild;
-  let built = takeUncopied();
-  if (!built) {
+  const kept = takeUncopied();
+  let built: RankedCode;
+  let builtAt: number;
+  if (kept) {
+    built = kept.built;
+    builtAt = kept.at;
+  } else {
     setRankedCodeState("Building the code…", "muted");
     built = await invoke<RankedCode>("build_ranked_code");
+    builtAt = Date.now();
     // A newer click, or a server change, while this one ran: its tags may be from the wrong server.
     if (build !== rankedBuild) return;
     if (built.serverUrl !== state.serverUrl) {
@@ -379,7 +385,7 @@ async function copyRankedCode(): Promise<void> {
     await navigator.clipboard.writeText(built.code);
   } catch (err) {
     // Usually "Document is not focused": the host switched windows while it was built.
-    uncopied = { built, at: Date.now() };
+    uncopied = { built, at: builtAt };
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
   }

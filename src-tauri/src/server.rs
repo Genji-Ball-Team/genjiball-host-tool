@@ -379,7 +379,7 @@ pub fn is_public(status: &str) -> bool {
 pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String> {
     let mut url = url::Url::parse(server_url).map_err(|_| "That isn't a server URL".to_string())?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err("The server URL starts with https://".into());
+        return Err("The server URL must start with http:// or https://".into());
     }
     url.set_path(&format!(
         "{}{}",

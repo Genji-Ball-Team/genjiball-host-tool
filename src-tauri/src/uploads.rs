@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MatchState, UploadAnswer};
+use crate::server::{self, MatchState, UploadAnswer};
 use crate::settings;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -34,6 +34,9 @@ pub struct Sent {
     pub match_ends: usize,
     /// When, RFC 3339 in UTC.
     pub at: String,
+    /// The players' names in what was sent (`JOIN` lines), for the upload history.
+    #[serde(default)]
+    pub players: Vec<String>,
     pub answer: Answer,
 }
 
@@ -44,15 +47,6 @@ pub enum Answer {
     Answered(UploadAnswer),
     /// The server, or the tool before sending, refused the file (`413`, `422`).
     Refused { error: String, message: String },
-}
-
-/// One line of the window's upload list.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecentUpload {
-    pub file: String,
-    pub at: String,
-    pub answer: Answer,
 }
 
 impl Record {
@@ -86,21 +80,23 @@ impl Record {
             .insert(file.to_string(), sent);
     }
 
-    /// The keys of the matches in the `count` latest uploads to `server_url`, at most `max`: the
-    /// ones whose status the window shows.
-    pub fn recent_match_keys(&self, server_url: &str, count: usize, max: usize) -> Vec<String> {
+    /// The keys of the `max` newest matches uploaded to `server_url`: the ones whose status is
+    /// asked of the server again.
+    pub fn recent_match_keys(&self, server_url: &str, max: usize) -> Vec<String> {
         let mut keys: Vec<String> = Vec::new();
-        for upload in self.recent(server_url, count) {
-            let Answer::Answered(answer) = upload.answer else {
+        for (_, sent) in self.uploads(server_url) {
+            let Answer::Answered(answer) = &sent.answer else {
                 continue;
             };
-            for key in answer.matches.into_iter().filter_map(|m| m.match_key) {
-                if !keys.contains(&key) {
-                    keys.push(key);
+            for key in answer.matches.iter().filter_map(|m| m.match_key.as_ref()) {
+                if keys.len() == max {
+                    return keys;
+                }
+                if !keys.contains(key) {
+                    keys.push(key.clone());
                 }
             }
         }
-        keys.truncate(max);
         keys
     }
 
@@ -132,24 +128,41 @@ impl Record {
                     m.review_reasons = state.review_reasons.clone();
                     changed = true;
                 }
+                // A server that doesn't give the id yet leaves the one we have.
+                if state.match_id.is_some() && m.match_id != state.match_id {
+                    m.match_id = state.match_id;
+                    changed = true;
+                }
             }
         }
         changed
     }
 
-    /// The `count` latest uploads to `server_url`, newest first.
-    pub fn recent(&self, server_url: &str, count: usize) -> Vec<RecentUpload> {
-        let mut all: Vec<_> = self.servers.get(server_url).into_iter().flatten().collect();
+    /// Whether a match uploaded to `server_url` has this id on the site and is public there.
+    pub fn has_public_match(&self, server_url: &str, match_id: i64) -> bool {
+        self.uploads(server_url)
+            .into_iter()
+            .any(|(_, sent)| match &sent.answer {
+                Answer::Answered(answer) => answer
+                    .matches
+                    .iter()
+                    .any(|m| m.match_id == Some(match_id) && server::is_public(&m.status)),
+                Answer::Refused { .. } => false,
+            })
+    }
+
+    /// Every file uploaded to `server_url` and its last upload, newest first.
+    pub fn uploads(&self, server_url: &str) -> Vec<(&str, &Sent)> {
+        let mut all: Vec<_> = self
+            .servers
+            .get(server_url)
+            .into_iter()
+            .flatten()
+            .map(|(file, sent)| (file.as_str(), sent))
+            .collect();
         // RFC 3339 in UTC sorts as text; the file name breaks ties.
         all.sort_by(|a, b| (&b.1.at, b.0).cmp(&(&a.1.at, a.0)));
-        all.into_iter()
-            .take(count)
-            .map(|(file, sent)| RecentUpload {
-                file: file.clone(),
-                at: sent.at.clone(),
-                answer: sent.answer.clone(),
-            })
-            .collect()
+        all
     }
 }
 
@@ -177,6 +190,7 @@ mod tests {
             size,
             match_ends: 1,
             at: at.into(),
+            players: vec![],
             answer: Answer::Refused {
                 error: "not_ranked".into(),
                 message: "x".into(),
@@ -221,13 +235,15 @@ mod tests {
         record.put(server, "Log-a.txt", sent(1, "2026-10-03T10:00:00Z"));
         record.put(server, "Log-b.txt", sent(1, "2026-10-03T12:00:00Z"));
         record.put(server, "Log-c.txt", sent(1, "2026-10-03T11:00:00Z"));
+        // The same time: the file name breaks the tie.
+        record.put(server, "Log-d.txt", sent(1, "2026-10-03T11:00:00Z"));
         let files: Vec<_> = record
-            .recent(server, 2)
+            .uploads(server)
             .into_iter()
-            .map(|r| r.file)
+            .map(|(file, _)| file)
             .collect();
-        assert_eq!(files, ["Log-b.txt", "Log-c.txt"]);
-        assert!(record.recent("https://other", 2).is_empty());
+        assert_eq!(files, ["Log-b.txt", "Log-d.txt", "Log-c.txt", "Log-a.txt"]);
+        assert!(record.uploads("https://other").is_empty());
     }
 
     fn answered(at: &str, keys: &[&str], status: &str) -> Sent {
@@ -238,6 +254,7 @@ mod tests {
                     .iter()
                     .map(|key| UploadedMatch {
                         match_key: Some(key.to_string()),
+                        match_id: None,
                         line_count: 10,
                         action: "insert".into(),
                         status: status.into(),
@@ -266,10 +283,11 @@ mod tests {
             answered("2026-10-03T11:00:00Z", &["1", "2"], "review"),
         );
         record.put(server, "Log-c.txt", sent(1, "2026-10-03T12:00:00Z"));
-        assert_eq!(record.recent_match_keys(server, 8, 50), ["1", "2"]);
-        assert_eq!(record.recent_match_keys(server, 8, 1), ["1"]);
+        // Newest first: Log-b's matches before Log-a's.
+        assert_eq!(record.recent_match_keys(server, 50), ["1", "2"]);
+        assert_eq!(record.recent_match_keys(server, 1), ["1"]);
         assert_eq!(
-            record.recent_match_keys(server, 1, 50),
+            record.recent_match_keys("https://other", 50),
             Vec::<String>::new()
         );
     }
@@ -290,19 +308,25 @@ mod tests {
         );
         let accepted = MatchState {
             match_key: "1".into(),
+            match_id: None,
             status: "accepted".into(),
             rejection: None,
             review_reasons: vec!["untrusted_host".into()],
         };
         assert!(record.update_states(server, std::slice::from_ref(&accepted)));
-        assert!(!record.update_states(server, &[accepted]));
-        let statuses: Vec<_> = record
-            .recent(server, 8)
+        assert!(!record.update_states(server, std::slice::from_ref(&accepted)));
+        let matches = |record: &Record| -> Vec<UploadedMatch> {
+            record
+                .uploads(server)
+                .into_iter()
+                .flat_map(|(_, sent)| match &sent.answer {
+                    Answer::Answered(a) => a.matches.clone(),
+                    Answer::Refused { .. } => vec![],
+                })
+                .collect()
+        };
+        let statuses: Vec<_> = matches(&record)
             .into_iter()
-            .flat_map(|r| match r.answer {
-                Answer::Answered(a) => a.matches,
-                Answer::Refused { .. } => vec![],
-            })
             .map(|m| (m.match_key.unwrap(), m.status))
             .collect();
         assert_eq!(
@@ -313,6 +337,16 @@ mod tests {
                 ("1".to_string(), "accepted".to_string()),
             ]
         );
+
+        // The site's id, once the server gives it, and kept when a server doesn't.
+        let with_id = MatchState {
+            match_id: Some(40),
+            ..accepted.clone()
+        };
+        assert!(record.update_states(server, std::slice::from_ref(&with_id)));
+        assert!(!record.update_states(server, &[accepted]));
+        let ids: Vec<_> = matches(&record).into_iter().map(|m| m.match_id).collect();
+        assert_eq!(ids, [Some(40), None, Some(40)]);
     }
 
     #[test]
@@ -348,5 +382,47 @@ mod tests {
         assert_eq!(load(&path).unwrap(), record);
         fs::write(&path, "{ broken").unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn knows_which_matches_are_on_the_site() {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "review"),
+        );
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &["2"], "accepted"),
+        );
+        let ids = |key: &str, id: i64, status: &str| MatchState {
+            match_key: key.into(),
+            match_id: Some(id),
+            status: status.into(),
+            rejection: None,
+            review_reasons: vec![],
+        };
+        record.update_states(server, &[ids("1", 7, "review"), ids("2", 8, "accepted")]);
+        // In review: not public yet.
+        assert!(!record.has_public_match(server, 7));
+        assert!(record.has_public_match(server, 8));
+        assert!(!record.has_public_match(server, 9));
+        assert!(!record.has_public_match("https://test.genjiball.us", 8));
+    }
+
+    #[test]
+    fn loads_a_record_from_before_the_history() {
+        // No `players` and no `matchId`: written by an older version of the tool.
+        let old = r#"{"servers":{"https://genjiball.us":{"Log-a.txt":{"size":5,"matchEnds":1,"at":"2026-10-03T10:00:00Z","answer":{"kind":"answered","result":"stored","matches":[{"matchKey":"1","lineCount":9,"action":"insert","status":"accepted","rejection":null,"reviewReasons":[]}]}}}},"started":{}}"#;
+        let record: Record = serde_json::from_str(old).unwrap();
+        let sent = record.get("https://genjiball.us", "Log-a.txt").unwrap();
+        assert!(sent.players.is_empty());
+        let Answer::Answered(answer) = &sent.answer else {
+            panic!()
+        };
+        assert_eq!(answer.matches[0].match_id, None);
     }
 }

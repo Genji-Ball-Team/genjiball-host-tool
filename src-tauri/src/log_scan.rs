@@ -1,6 +1,7 @@
 //! What the watcher needs to know about a Workshop log file (GenjiBall-CE `docs/ranked-log.md` on
-//! `v1.3.3R`): whether it holds a ranked match, and how many matches in it have ended. The server
-//! does the real parsing.
+//! `v1.3.3R`): whether it holds a ranked match, how many matches in it have ended, and the players'
+//! names for the upload history. The server does the real parsing (and the match view, #16, will
+//! share its parser).
 
 use std::time::SystemTime;
 
@@ -8,12 +9,14 @@ use chrono::{Local, NaiveDateTime, SecondsFormat, TimeZone};
 
 use crate::config;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Scan {
     /// A `GBR` line: a ranked match starts here. Files without one aren't uploaded.
     pub ranked: bool,
     /// `MATCH_END` lines. A new one means a match just ended, so the file is uploaded then.
     pub match_ends: usize,
+    /// The names in `JOIN` lines, each once, in the order they first joined.
+    pub players: Vec<String>,
 }
 
 /// The event part of a line: the Workshop's `[hh:mm:ss] ` prefix stripped, if it's there.
@@ -35,6 +38,12 @@ pub fn scan(text: &str) -> Scan {
             found.ranked = true;
         } else if line.starts_with("MATCH_END|") {
             found.match_ends += 1;
+        } else if let Some(fields) = line.strip_prefix("JOIN|") {
+            // `JOIN|time|id|name`, and maybe fields a newer game appends.
+            let name = fields.split('|').nth(2).unwrap_or_default();
+            if !name.is_empty() && !found.players.iter().any(|p| p == name) {
+                found.players.push(name.to_string());
+            }
         }
     }
     found
@@ -77,9 +86,19 @@ mod tests {
             scan(EXAMPLE),
             Scan {
                 ranked: true,
-                match_ends: 1
+                match_ends: 1,
+                // Two players named Ghost, and Nova joining after round 1.
+                players: ["Sparrow", "Tidal", "Mochi", "Ghost", "Nova"]
+                    .map(String::from)
+                    .to_vec(),
             }
         );
+    }
+
+    #[test]
+    fn reads_names_only_from_join_lines() {
+        let text = "GBR|1|1|1.3.3R|1\nJOIN|1|1|Kenzo|extra\nJOIN|2|2|\nJOIN|3\n[00:00:04] JOIN|4|3|Kenzo\nKILL|5|Ash|Kenzo|4|1\n";
+        assert_eq!(scan(text).players, ["Kenzo"]);
     }
 
     #[test]
@@ -89,13 +108,9 @@ mod tests {
             .take_while(|line| !line.contains("MATCH_END|"))
             .map(|line| format!("{line}\r\n"))
             .collect();
-        assert_eq!(
-            scan(&start),
-            Scan {
-                ranked: true,
-                match_ends: 0
-            }
-        );
+        let found = scan(&start);
+        assert!(found.ranked);
+        assert_eq!(found.match_ends, 0);
     }
 
     #[test]

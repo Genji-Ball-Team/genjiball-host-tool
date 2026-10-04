@@ -70,6 +70,9 @@ pub fn read_token_check(status: u16, body: &str) -> TokenCheck {
 #[serde(rename_all = "camelCase")]
 pub struct UploadedMatch {
     pub match_key: Option<String>,
+    /// The match's id on the site (`/match?id=`), once the server gives it.
+    #[serde(default)]
+    pub match_id: Option<i64>,
     pub line_count: u32,
     /// `insert`, `replace`, `repoint` or `skip`.
     pub action: String,
@@ -103,6 +106,8 @@ pub struct UploadAnswer {
 #[serde(rename_all = "camelCase")]
 pub struct MatchState {
     pub match_key: String,
+    #[serde(default)]
+    pub match_id: Option<i64>,
     pub status: String,
     pub rejection: Option<Rejection>,
     #[serde(default)]
@@ -289,6 +294,30 @@ pub async fn match_states(
     read_match_states(status, &body)
 }
 
+/// Whether the site shows a match with this status: only `accepted` and `void` ones are public.
+pub fn is_public(status: &str) -> bool {
+    matches!(status, "accepted" | "void")
+}
+
+/// The match's page on the site of `server_url`. Only an `http(s)` page under the server: the
+/// host's browser opens it.
+pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String> {
+    let mut url = url::Url::parse(server_url).map_err(|_| "That isn't a server URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("The server URL starts with https://".into());
+    }
+    url.set_path(&format!(
+        "{}{}",
+        url.path().trim_end_matches('/'),
+        config::MATCH_PAGE_PATH
+    ));
+    url.query_pairs_mut()
+        .clear()
+        .append_pair("id", &match_id.to_string());
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +376,7 @@ mod tests {
                 result: "stored".into(),
                 matches: vec![UploadedMatch {
                     match_key: Some("482913507226".into()),
+                    match_id: None,
                     line_count: 57,
                     action: "insert".into(),
                     status: "review".into(),
@@ -451,14 +481,63 @@ mod tests {
             read_match_states(200, body).unwrap(),
             [MatchState {
                 match_key: "482913507226".into(),
+                match_id: None,
                 status: "accepted".into(),
                 rejection: None,
                 review_reasons: vec!["untrusted_host".into()],
             }]
         );
+        // A server that gives the match's id on the site.
+        let with_id = r#"{"matches":[{"matchKey":"1","matchId":12,"status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
+        assert_eq!(
+            read_match_states(200, with_id).unwrap()[0].match_id,
+            Some(12)
+        );
         assert!(read_match_states(200, "<html>").is_err());
         // An older server without the route.
         assert!(read_match_states(404, r#"{"error":"not_found"}"#).is_err());
+    }
+
+    #[test]
+    fn reads_the_match_id_when_the_server_gives_it() {
+        let body = r#"{"result":"stored","uploadId":12,"matches":[{"matchKey":"1","matchId":40,"lineCount":9,"action":"insert","status":"accepted","rejection":null,"reviewReasons":[]}]}"#;
+        let UploadOutcome::Stored(answer) = read_upload(200, None, body) else {
+            panic!()
+        };
+        assert_eq!(answer.matches[0].match_id, Some(40));
+        // Records written before the id was known still load.
+        let old: UploadedMatch = serde_json::from_str(
+            r#"{"matchKey":"1","lineCount":9,"action":"insert","status":"review","rejection":null}"#,
+        )
+        .unwrap();
+        assert_eq!(old.match_id, None);
+    }
+
+    #[test]
+    fn only_accepted_and_void_matches_are_public() {
+        assert!(is_public("accepted"));
+        assert!(is_public("void"));
+        assert!(!is_public("review"));
+        assert!(!is_public("rejected"));
+    }
+
+    #[test]
+    fn builds_the_match_page_url() {
+        assert_eq!(
+            match_page_url("https://genjiball.us", 12).unwrap(),
+            "https://genjiball.us/match?id=12"
+        );
+        assert_eq!(
+            match_page_url("http://127.0.0.1:8787", 3).unwrap(),
+            "http://127.0.0.1:8787/match?id=3"
+        );
+        // A server under a path keeps it.
+        assert_eq!(
+            match_page_url("https://example.com/ranked/", 3).unwrap(),
+            "https://example.com/ranked/match?id=3"
+        );
+        assert!(match_page_url("file:///C:/Windows", 3).is_err());
+        assert!(match_page_url("not a url", 3).is_err());
     }
 
     #[test]

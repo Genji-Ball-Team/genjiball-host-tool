@@ -38,7 +38,7 @@ interface UploadStatus {
   problem: Problem | null;
   waiting: number;
   retrying: string | null;
-  recent: RecentUpload[];
+  history: HistoryPage;
   host: Host | null;
 }
 
@@ -50,16 +50,33 @@ type Problem =
   | { kind: "tokenRejected"; revoked: boolean }
   | { kind: "local"; message: string };
 
-/** Mirrors `RecentUpload` and `Answer` in src-tauri/src/uploads.rs. */
-interface RecentUpload {
-  file: string;
-  at: string;
-  answer: { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
+/** Mirrors `Page` in src-tauri/src/history.rs: what `get_upload_history` returns. */
+interface HistoryPage {
+  entries: HistoryEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
+
+/** Mirrors `Entry` in src-tauri/src/history.rs. */
+interface HistoryEntry {
+  file: string;
+  at: string | null;
+  players: string[];
+  answer: Answer | null;
+  queued: QueueState | null;
+}
+
+/** Mirrors `Answer` in src-tauri/src/uploads.rs. */
+type Answer = { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
+
+/** Mirrors `QueueState` in src-tauri/src/watcher.rs. */
+type QueueState = { kind: "playing" } | { kind: "due" } | { kind: "failed"; error: string };
 
 /** Mirrors `UploadedMatch` in src-tauri/src/server.rs. */
 interface UploadedMatch {
   matchKey: string | null;
+  matchId: number | null;
   lineCount: number;
   action: "insert" | "replace" | "repoint" | "skip";
   status: "accepted" | "review" | "rejected" | "void";
@@ -184,8 +201,9 @@ function describeMatch(match: UploadedMatch): string {
   }
 }
 
-function describeUpload(upload: RecentUpload): { text: string; tone: "good" | "bad" | "muted" } {
-  const answer = upload.answer;
+type Tone = "good" | "bad" | "muted";
+
+function describeAnswer(answer: Answer): { text: string; tone: Tone } {
   if (answer.kind === "refused") return { text: answer.message, tone: "bad" };
   if (answer.result === "duplicate") return { text: "Already uploaded", tone: "muted" };
   if (!answer.matches.length) return { text: "No match in it", tone: "muted" };
@@ -211,23 +229,91 @@ function renderUploads(status: UploadStatus): void {
   retrying.hidden = !status.retrying;
   retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
 
-  el("uploads").replaceChildren(
-    ...status.recent.map((upload) => {
-      const { text, tone } = describeUpload(upload);
-      const item = document.createElement("li");
-      const file = document.createElement("span");
-      file.className = "path";
-      file.textContent = upload.file;
-      const at = document.createElement("span");
-      at.className = "muted";
-      at.textContent = new Date(upload.at).toLocaleString();
-      const result = document.createElement("span");
-      result.className = tone;
-      result.textContent = text;
-      item.append(file, at, result);
-      return item;
-    }),
-  );
+  // The status carries the newest page; an older one is asked for again, since it may have moved.
+  if (historyPage === 0) renderHistory(status.history);
+  else showHistoryPage(historyPage).catch(showUploadsError);
+}
+
+function describeQueued(queued: QueueState): { text: string; tone: Tone } {
+  switch (queued.kind) {
+    case "playing":
+      return { text: "Being played: uploaded when the match ends or the log stops growing", tone: "muted" };
+    case "due":
+      return { text: "Waiting to upload", tone: "muted" };
+    case "failed":
+      return { text: `Upload failed: ${queued.error}. Retrying automatically.`, tone: "bad" };
+  }
+}
+
+/** Only accepted and voided matches are on the site (`server::is_public`). */
+function onSite(match: UploadedMatch): match is UploadedMatch & { matchId: number } {
+  return match.matchId !== null && (match.status === "accepted" || match.status === "void");
+}
+
+function span(text: string, className: string): HTMLSpanElement {
+  const found = document.createElement("span");
+  found.className = className;
+  found.textContent = text;
+  return found;
+}
+
+function button(text: string, action: () => Promise<void>): HTMLButtonElement {
+  const found = document.createElement("button");
+  found.type = "button";
+  found.className = "quiet";
+  found.textContent = text;
+  found.addEventListener("click", () => {
+    el("uploads-error").hidden = true;
+    void busy(action, showUploadsError);
+  });
+  return found;
+}
+
+function historyItem(entry: HistoryEntry): HTMLLIElement {
+  const item = document.createElement("li");
+  item.append(span(entry.file, "path"), span(entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet", "muted"));
+  if (entry.players.length) item.append(span(entry.players.join(", "), "soft"));
+
+  const answer = entry.answer && describeAnswer(entry.answer);
+  const now = entry.queued ? describeQueued(entry.queued) : answer;
+  if (now) item.append(span(now.text, now.tone));
+  // A file uploaded before that grew since: what the server said to the shorter copy.
+  if (entry.queued && answer) item.append(span(`Last upload: ${answer.text}`, "muted"));
+
+  const actions = document.createElement("div");
+  actions.className = "row";
+  if (entry.queued?.kind === "failed") {
+    actions.append(button("Retry now", () => invoke<void>("retry_upload", { file: entry.file })));
+  }
+  const matches = entry.answer?.kind === "answered" ? entry.answer.matches.filter(onSite) : [];
+  for (const match of matches) {
+    actions.append(button(matches.length > 1 ? `Match ${match.matchId} on the site` : "View on the site", () => invoke<void>("open_match", { matchId: match.matchId })));
+  }
+  if (actions.childElementCount) item.append(actions);
+  return item;
+}
+
+/** The history page shown, from 0 (the newest). */
+let historyPage = 0;
+
+function renderHistory(page: HistoryPage): void {
+  historyPage = page.page;
+  el("uploads").replaceChildren(...page.entries.map(historyItem));
+  const first = page.page * page.pageSize;
+  el("uploads-pager").hidden = page.total <= page.pageSize;
+  el("uploads-newer").hidden = page.page === 0;
+  el("uploads-older").hidden = first + page.entries.length >= page.total;
+  el("uploads-range").textContent = page.total ? `${first + 1}–${first + page.entries.length} of ${page.total}` : "";
+}
+
+async function showHistoryPage(page: number): Promise<void> {
+  renderHistory(await invoke<HistoryPage>("get_upload_history", { page }));
+}
+
+function showUploadsError(err: unknown): void {
+  const error = el("uploads-error");
+  error.hidden = false;
+  error.textContent = String(err);
 }
 
 async function refresh(): Promise<void> {
@@ -235,14 +321,14 @@ async function refresh(): Promise<void> {
   render();
 }
 
-/** Runs a button's action with the buttons disabled, and shows its error. */
-async function busy(action: () => Promise<void>): Promise<void> {
+/** Runs a button's action with the buttons disabled, and shows its error (next to the token unless told where). */
+async function busy(action: () => Promise<void>, showError: (err: unknown) => void = (err) => setStatus(String(err), "bad")): Promise<void> {
   const buttons = [...document.querySelectorAll("button")];
   buttons.forEach((b) => (b.disabled = true));
   try {
     await action();
   } catch (err) {
-    setStatus(String(err), "bad");
+    showError(err);
   } finally {
     buttons.forEach((b) => (b.disabled = false));
   }
@@ -317,6 +403,9 @@ el("log-folder-reset").addEventListener("click", () => {
     render();
   });
 });
+
+el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
+el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
 void listen<UploadStatus>("upload-status", (event) => renderUploads(event.payload));
 void invoke<UploadStatus>("get_upload_status").then(renderUploads);

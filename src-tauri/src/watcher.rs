@@ -59,6 +59,8 @@ struct Tracked {
     modified: SystemTime,
     /// When the file last grew, as far as we know.
     changed_at: Instant,
+    /// Bytes in its complete lines (`log_scan::complete_lines`): what an upload sends.
+    complete: u64,
     scan: Scan,
     failures: u32,
     retry_at: Option<Instant>,
@@ -132,6 +134,7 @@ impl Tracker {
                 before => {
                     // A file still being written may be locked for a moment: try on the next poll.
                     let Ok(bytes) = fs::read(&path) else { continue };
+                    let complete = log_scan::complete_lines(&bytes);
                     let (failures, retry_at, error, changed_at) = match before {
                         Some(t) => (t.failures, t.retry_at, t.error, now),
                         // First seen: it's been quiet since it was last written.
@@ -141,7 +144,8 @@ impl Tracker {
                         size,
                         modified,
                         changed_at,
-                        scan: log_scan::scan(&String::from_utf8_lossy(&bytes)),
+                        complete: complete.len() as u64,
+                        scan: log_scan::scan(&String::from_utf8_lossy(complete)),
                         failures,
                         retry_at,
                         error,
@@ -150,7 +154,7 @@ impl Tracker {
                     }
                 }
             };
-            tracked.waiting = tracked.scan.ranked && last.map(|s| s.size) != Some(size);
+            tracked.waiting = tracked.scan.ranked && last.map(|s| s.size) != Some(tracked.complete);
             tracked.due = false;
             if !tracked.waiting {
                 // Uploaded as it is: an earlier failure no longer matters.
@@ -309,6 +313,55 @@ mod tests {
             .unwrap();
         assert_eq!(names(&poll), [NAME]);
         assert_eq!(poll.due[0].path, dir.path().join(NAME));
+    }
+
+    #[test]
+    fn waits_for_the_end_of_a_half_written_match_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        // The game paused in the middle of the `MATCH_END` line: not an ended match yet.
+        let half = format!("{}[00:01:54] MATCH_END|", playing());
+        write(dir.path(), NAME, &half, Duration::ZERO);
+        let poll = tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(
+            poll,
+            Poll {
+                due: vec![],
+                waiting: 1
+            }
+        );
+        // The line is finished: due at once.
+        write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
+        let poll = tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(names(&poll), [NAME]);
+    }
+
+    #[test]
+    fn a_half_written_line_isnt_waiting_once_the_rest_was_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        // Uploaded up to its last complete line, then left with half a line (stopped writing).
+        let half = format!("{}[00:01:54] MATCH_END|", playing());
+        write(
+            dir.path(),
+            NAME,
+            &half,
+            Duration::from_secs(config::QUIET_SECS + 5),
+        );
+        let sent = |_: &str| {
+            Some(Sent {
+                size: playing().len() as u64,
+                match_ends: 0,
+            })
+        };
+        let poll = Tracker::default()
+            .poll(dir.path(), Instant::now(), SystemTime::now(), EPOCH, sent)
+            .unwrap();
+        assert_eq!(poll, Poll::default());
     }
 
     #[test]

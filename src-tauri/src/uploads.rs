@@ -39,7 +39,8 @@ impl PartialEq for Record {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sent {
-    /// Bytes sent: the file is sent again once it's a different size.
+    /// Bytes sent, the file's complete lines (`log_scan::complete_lines`): the file is sent again
+    /// once those are a different size.
     pub size: u64,
     /// `MATCH_END` lines in what was sent: a new one is sent straight away.
     pub match_ends: usize,

@@ -371,8 +371,12 @@ impl Run {
         token: &str,
         due: &Due,
     ) -> Result<bool, Problem> {
+        // Only its complete lines: the game may be halfway through writing the next one.
         let bytes = match fs::read(&due.path) {
-            Ok(bytes) => bytes,
+            Ok(mut bytes) => {
+                bytes.truncate(log_scan::complete_lines(&bytes).len());
+                bytes
+            }
             Err(e) => {
                 let message = format!("Couldn't read {}: {e}", due.name);
                 self.tracker

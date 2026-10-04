@@ -31,7 +31,17 @@ fn event(line: &str) -> &str {
     }
 }
 
+/// The complete lines at the start of a log: up to and with its last `\n`. The game may be in the
+/// middle of writing the line after it (a `MATCH_END|` without the rest yet), so only this part
+/// is read and uploaded. The server counts lines the same way (a `\n` ends one).
+pub fn complete_lines(bytes: &[u8]) -> &[u8] {
+    let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    &bytes[..end]
+}
+
+/// What's in the complete lines of `text` (see `complete_lines`).
 pub fn scan(text: &str) -> Scan {
+    let text = &text[..text.rfind('\n').map_or(0, |i| i + 1)];
     let mut found = Scan::default();
     for line in text.lines().map(event) {
         if line.starts_with("GBR|") {
@@ -130,8 +140,29 @@ mod tests {
 
     #[test]
     fn reads_lines_without_the_prefix() {
-        assert!(scan("GBR|2.38|1|1.3.3R|482913507226\nMATCH_END|9|TIME").ranked);
-        assert_eq!(scan("GBR|2.38|1|1.3.3R|1\nMATCH_END|9|TIME").match_ends, 1);
+        assert!(scan("GBR|2.38|1|1.3.3R|482913507226\nMATCH_END|9|TIME\n").ranked);
+        assert_eq!(
+            scan("GBR|2.38|1|1.3.3R|1\nMATCH_END|9|TIME\n").match_ends,
+            1
+        );
+    }
+
+    #[test]
+    fn a_line_still_being_written_doesnt_count() {
+        // The game paused in the middle of writing the `MATCH_END` line.
+        let end = EXAMPLE.find("MATCH_END|").unwrap() + "MATCH_END|".len();
+        let half = &EXAMPLE[..end];
+        assert_eq!(scan(half).match_ends, 0);
+        assert!(scan(half).ranked);
+        assert_eq!(
+            complete_lines(half.as_bytes()),
+            &EXAMPLE.as_bytes()[..EXAMPLE.find("[00:01:54] MATCH_END").unwrap()]
+        );
+        // Once the line has its `\n`, it's there.
+        assert_eq!(scan(EXAMPLE).match_ends, 1);
+        assert_eq!(complete_lines(EXAMPLE.as_bytes()), EXAMPLE.as_bytes());
+        assert_eq!(complete_lines(b"GBR|1|1|1.3.3R|1"), b"");
+        assert_eq!(scan("GBR|1|1|1.3.3R|1"), Scan::default());
     }
 
     #[test]

@@ -79,9 +79,10 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    /// Looks at `folder` at `now` (`clock` being the same moment as wall time). Files last
-    /// written before `since` are left alone. `sent` gives the last upload of a file to the
-    /// current server.
+    /// Looks at `folder` at `now` (`clock` being the same moment as wall time). Files started
+    /// before `since` (when uploads to this server started) are left alone, and that's what
+    /// keeps a first run from sending a folder of old matches; a file after it waits however
+    /// long it takes. `sent` gives the last upload of a file to the current server.
     pub fn poll(
         &mut self,
         folder: &Path,
@@ -94,7 +95,6 @@ impl Tracker {
             self.folder = folder.to_path_buf();
             self.files.clear();
         }
-        let max_age = Duration::from_secs(config::MAX_LOG_AGE_DAYS * 24 * 60 * 60);
         let quiet = Duration::from_secs(config::QUIET_SECS);
         let mut poll = Poll::default();
         let mut seen = Vec::new();
@@ -118,11 +118,15 @@ impl Tracker {
             let started = log_scan::started_at_time(&name)
                 .or_else(|| meta.created().ok())
                 .unwrap_or(modified);
-            if !meta.is_file() || age > max_age || started < since {
+            if !meta.is_file() || started < since {
                 continue;
             }
             let size = meta.len();
             let last = sent(&name);
+            // Uploaded as it is: no need to read it (a folder of old matches is skipped this way).
+            if last.is_some_and(|s| s.size == size) {
+                continue;
+            }
             // Refused once for its size: it can only get bigger, so don't read it again.
             if size > config::MAX_UPLOAD_BYTES
                 && last.is_some_and(|s| s.size > config::MAX_UPLOAD_BYTES)
@@ -470,6 +474,23 @@ mod tests {
     }
 
     #[test]
+    fn doesnt_read_a_file_uploaded_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
+        let mut tracker = Tracker::default();
+        let sent = |_: &str| {
+            Some(Sent {
+                size: EXAMPLE.len() as u64,
+                match_ends: 1,
+            })
+        };
+        tracker
+            .poll(dir.path(), Instant::now(), SystemTime::now(), EPOCH, sent)
+            .unwrap();
+        assert!(tracker.files.is_empty());
+    }
+
+    #[test]
     fn ignores_other_files() {
         let dir = tempfile::tempdir().unwrap();
         let old = Duration::from_secs(config::QUIET_SECS + 5);
@@ -480,12 +501,6 @@ mod tests {
             old,
         );
         write(dir.path(), "notes.txt", EXAMPLE, old);
-        write(
-            dir.path(),
-            NAME,
-            EXAMPLE,
-            Duration::from_secs(config::MAX_LOG_AGE_DAYS * 24 * 60 * 60 + 60),
-        );
         fs::create_dir(dir.path().join("Log-folder.txt")).unwrap();
         let poll = Tracker::default()
             .poll(
@@ -497,6 +512,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(poll, Poll::default());
+    }
+
+    #[test]
+    fn an_old_match_still_waiting_to_upload_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        // Written after uploads started, but not uploaded for a month (offline, server down).
+        let month = Duration::from_secs(30 * 24 * 60 * 60);
+        let name = chrono::DateTime::<chrono::Local>::from(SystemTime::now() - month)
+            .format("Log-%Y-%m-%d-%H-%M-%S.txt")
+            .to_string();
+        write(dir.path(), &name, EXAMPLE, month);
+        let since = SystemTime::now() - month - month;
+        let poll = Tracker::default()
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                since,
+                never_sent,
+            )
+            .unwrap();
+        assert_eq!(names(&poll), [name.as_str()]);
     }
 
     #[test]

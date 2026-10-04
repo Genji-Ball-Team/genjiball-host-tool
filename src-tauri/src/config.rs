@@ -36,10 +36,6 @@ pub const POLL_INTERVAL_SECS: u64 = 5;
 /// moved to spectator (Overwatch carries on in a new file), closed the lobby or crashed.
 pub const QUIET_SECS: u64 = 60;
 
-/// Log files last written longer ago than this are ignored, so a first run doesn't upload a
-/// folder full of old matches.
-pub const MAX_LOG_AGE_DAYS: u64 = 14;
-
 /// The server refuses bigger uploads (`maxUploadBytes` in genjiball-ranked).
 pub const MAX_UPLOAD_BYTES: u64 = 512 * 1024;
 

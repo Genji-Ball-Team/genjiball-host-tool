@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -47,6 +47,10 @@ pub enum Problem {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadStatus {
+    /// The server and log folder this is about, as the settings were when the poll began. The
+    /// window drops a status for others: a poll that was still running when the host changed them.
+    pub server_url: String,
+    pub log_folder: Option<PathBuf>,
     pub problem: Option<Problem>,
     /// Ranked logs not uploaded as they are now: a match being played, or one waiting to retry.
     pub waiting: usize,
@@ -77,6 +81,9 @@ pub struct Uploader {
     refresh: AtomicBool,
     /// A token was saved, or a check found the token works: forget a rejection at the next poll.
     token_ok: AtomicBool,
+    /// Goes up each time the server, the log folder or the token changes (`changed`): a poll
+    /// that began before stops sending.
+    generation: AtomicU64,
 }
 
 impl Uploader {
@@ -97,7 +104,20 @@ impl Uploader {
             wake: Notify::new(),
             refresh: AtomicBool::new(false),
             token_ok: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// The server, the log folder or the token changed: what a poll under way still has to send
+    /// waits for the next one, which starts now with the new settings.
+    pub fn changed(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.wake();
+    }
+
+    /// Whether nothing changed (`changed`) since `generation` was read.
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Relaxed) == generation
     }
 
     /// The host saved a token, or "Check again" found it works: uploads stopped by the server
@@ -256,11 +276,15 @@ impl Run {
     async fn tick(&mut self, app: &AppHandle) -> UploadStatus {
         let store = app.state::<Store>();
         let uploader = app.state::<Uploader>();
+        // Before the settings: a change after this stops what's left of this poll's uploads.
+        let generation = uploader.generation.load(Ordering::Relaxed);
         // First: a settings file fixed by hand is read again here.
         let settings_error = store.load_error();
         let settings = store.get();
         let server_url = settings.server_url().to_string();
         let mut status = UploadStatus {
+            server_url: server_url.clone(),
+            log_folder: log_folder::current(settings.log_folder.as_deref()).map(|f| f.path),
             retrying: self.retrying.clone(),
             ..UploadStatus::default()
         };
@@ -353,22 +377,17 @@ impl Run {
             return finish(self, polled, status);
         }
 
-        for due in poll.due {
-            if self.held(&server_url, Instant::now()) {
-                break;
-            }
-            match self.send(&uploader, &server_url, &token, &due).await {
-                Ok(true) => status.waiting = status.waiting.saturating_sub(1),
-                Ok(false) => {}
-                Err(problem) => {
-                    status.problem = Some(problem);
-                    break;
-                }
-            }
-        }
+        let (done, problem) = self
+            .send_due(&uploader, generation, &server_url, &token, &poll.due)
+            .await;
+        status.waiting = status.waiting.saturating_sub(done);
+        status.problem = problem;
         status.retrying = self.retrying.clone();
-        if status.problem.is_none() {
-            if let Err(problem) = self.refresh(&uploader, &server_url, &token).await {
+        if status.problem.is_none() && uploader.is_current(generation) {
+            if let Err(problem) = self
+                .refresh(&uploader, generation, &server_url, &token)
+                .await
+            {
                 status.problem = Some(problem);
             }
         }
@@ -382,6 +401,7 @@ impl Run {
     async fn refresh(
         &mut self,
         uploader: &Uploader,
+        generation: u64,
         server_url: &str,
         token: &str,
     ) -> Result<(), Problem> {
@@ -417,7 +437,7 @@ impl Run {
             .lock()
             .unwrap()
             .recent_match_keys(server_url, config::MAX_STATUS_KEYS);
-        if !keys.is_empty() {
+        if !keys.is_empty() && uploader.is_current(generation) {
             match server::match_states(server_url, token, &keys).await {
                 Ok(states) => {
                     let mut record = uploader.record.lock().unwrap();
@@ -430,6 +450,31 @@ impl Run {
         uploader
             .save()
             .map_err(|message| Problem::Local { message })
+    }
+
+    /// Uploads the files `due`, oldest first, until one stops every upload, the server says to
+    /// hold off (`429`), or the settings or token changed since `generation` (the rest waits for
+    /// the next poll, with the new ones). How many are done with, and the problem if one came up.
+    async fn send_due(
+        &mut self,
+        uploader: &Uploader,
+        generation: u64,
+        server_url: &str,
+        token: &str,
+        due: &[Due],
+    ) -> (usize, Option<Problem>) {
+        let mut done = 0;
+        for due in due {
+            if !uploader.is_current(generation) || self.held(server_url, Instant::now()) {
+                break;
+            }
+            match self.send(uploader, server_url, token, due).await {
+                Ok(true) => done += 1,
+                Ok(false) => {}
+                Err(problem) => return (done, Some(problem)),
+            }
+        }
+        (done, None)
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it
@@ -621,6 +666,46 @@ mod tests {
     }
 
     #[test]
+    fn a_change_of_settings_stops_the_uploads_left_in_a_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        fs::create_dir(&logs).unwrap();
+        let uploader = std::sync::Arc::new(Uploader::new(dir.path().join("uploads.json")));
+        let mut run = Run::default();
+        let generation = uploader.generation.load(Ordering::Relaxed);
+        // The host switches servers while the first upload is on its way.
+        let changed = uploader.clone();
+        let stored = r#"{"result":"stored","matches":[]}"#;
+        let server = server::test_server(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{stored}",
+                stored.len()
+            ),
+            EXAMPLE,
+            move || changed.changed(),
+        );
+        let first = due(&logs, EXAMPLE);
+        let second = Due {
+            name: "Log-2026-10-02-21-00-00.txt".into(),
+            path: logs.join("Log-2026-10-02-21-00-00.txt"),
+        };
+        fs::write(&second.path, EXAMPLE).unwrap();
+        let (done, problem) = block_on(run.send_due(
+            &uploader,
+            generation,
+            &server,
+            "t",
+            &[first.clone(), second.clone()],
+        ));
+        // The first went through; the second wasn't sent (not even tried: nothing failed).
+        assert_eq!((done, problem), (1, None));
+        assert_eq!(run.retrying, None);
+        let record = uploader.record.lock().unwrap();
+        assert!(record.get(&server, &first.name).is_some());
+        assert!(record.get(&server, &second.name).is_none());
+    }
+
+    #[test]
     fn too_many_uploads_holds_the_whole_server_as_long_as_it_says() {
         let dir = tempfile::tempdir().unwrap();
         let uploader = Uploader::new(dir.path().join("uploads.json"));
@@ -629,6 +714,7 @@ mod tests {
             "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7200\r\nContent-Length: 0\r\n\r\n"
                 .into(),
             EXAMPLE,
+            || {},
         );
         let start = Instant::now();
         let sent = block_on(run.send(&uploader, &server, "t", &due(dir.path(), EXAMPLE)));

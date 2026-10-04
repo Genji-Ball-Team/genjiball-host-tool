@@ -154,6 +154,7 @@ async fn save_token(
         // even the same one, is tried again.
         uploader.start(&server_url);
         uploader.token_ok();
+        uploader.changed();
     }
     Ok(check)
 }
@@ -161,7 +162,7 @@ async fn save_token(
 #[tauri::command]
 fn forget_token(store: State<Store>, uploader: State<Uploader>) -> Result<(), String> {
     store.tokens.delete(store.get().server_url())?;
-    uploader.wake();
+    uploader.changed();
     Ok(())
 }
 
@@ -211,7 +212,7 @@ fn set_server_url(
 ) -> Result<AppState, String> {
     let url = settings::normalize_server_url(&url)?;
     store.update(|s| s.server_url = url)?;
-    uploader.wake();
+    uploader.changed();
     app_state(&app, &store)
 }
 
@@ -224,7 +225,7 @@ fn set_log_folder(
     uploader: State<Uploader>,
 ) -> Result<AppState, String> {
     store.update(|s| s.log_folder = path)?;
-    uploader.wake();
+    uploader.changed();
     app_state(&app, &store)
 }
 
@@ -271,7 +272,9 @@ pub fn run() {
     tauri::Builder::default()
         // First, so a second launch stops here: it shows this window (maybe in the tray) rather
         // than running a second uploader on the same files.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_window(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_window(app)
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;

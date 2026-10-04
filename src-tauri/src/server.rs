@@ -336,9 +336,9 @@ pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String>
 }
 
 /// A server on this PC for the tests, at the URL returned: reads one request ending in `body`
-/// (the request body), answers it with `response` as it is, and hangs up.
+/// (the request body), runs `then`, answers with `response` as it is, and hangs up.
 #[cfg(test)]
-pub fn test_server(response: String, body: &str) -> String {
+pub fn test_server(response: String, body: &str, then: impl FnOnce() + Send + 'static) -> String {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -354,6 +354,7 @@ pub fn test_server(response: String, body: &str) -> String {
             }
             request.extend_from_slice(&buf[..n]);
         }
+        then();
         socket.write_all(response.as_bytes()).unwrap();
     });
     url
@@ -595,6 +596,7 @@ mod tests {
         test_server(
             format!("{head}Content-Length: 100\r\n\r\n{{\"error\":"),
             body,
+            || {},
         )
     }
 

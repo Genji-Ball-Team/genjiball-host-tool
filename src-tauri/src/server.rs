@@ -234,6 +234,8 @@ pub async fn upload(
         .map(str::to_string);
     match response.text().await {
         Ok(body) => read_upload(status, retry_after.as_deref(), &body),
+        // The status alone says the token or the file won't do: the body only explains it.
+        Err(_) if matches!(status, 401 | 403 | 413 | 422) => read_upload(status, None, ""),
         Err(e) => retry(e),
     }
 }
@@ -268,6 +270,8 @@ pub async fn check_token(server_url: &str, token: &str) -> TokenCheck {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(body) => read_token_check(status, &body),
+        // The status alone says the token is turned down.
+        Err(_) if matches!(status, 401 | 403) => read_token_check(status, ""),
         Err(e) => unreachable(e),
     }
 }
@@ -542,6 +546,53 @@ mod tests {
         );
         assert!(match_page_url("file:///C:/Windows", 3).is_err());
         assert!(match_page_url("not a url", 3).is_err());
+    }
+
+    /// A server on this PC that reads one request ending in `body`, answers it with `head` (status
+    /// line and headers), then hangs up before the body it announced.
+    fn cut_off_server(head: &'static str, body: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let end = format!("\r\n\r\n{body}");
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0; 4096];
+            while !request.ends_with(end.as_bytes()) {
+                let n = socket.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+            }
+            let response = format!("{head}Content-Length: 100\r\n\r\n{{\"error\":");
+            socket.write_all(response.as_bytes()).unwrap();
+        });
+        url
+    }
+
+    #[test]
+    fn a_cut_off_answer_still_turns_a_token_down() {
+        use tauri::async_runtime::block_on as run;
+        let revoked = cut_off_server("HTTP/1.1 403 Forbidden\r\n", "");
+        assert_eq!(run(check_token(&revoked, "t")), TokenCheck::Revoked);
+        let unknown = cut_off_server("HTTP/1.1 401 Unauthorized\r\n", "x");
+        assert_eq!(
+            run(upload(&unknown, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::TokenRejected { revoked: false }
+        );
+        let too_big = cut_off_server("HTTP/1.1 413 Payload Too Large\r\n", "x");
+        assert!(matches!(
+            run(upload(&too_big, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::Refused { .. }
+        ));
+        // Any other answer cut off is worth another try.
+        let failing = cut_off_server("HTTP/1.1 500 Internal Server Error\r\n", "x");
+        assert!(matches!(
+            run(upload(&failing, "t", "Log-a.txt", None, b"x".to_vec())),
+            UploadOutcome::Retry { .. }
+        ));
     }
 
     #[test]

@@ -51,7 +51,7 @@ Every tunable lives in `src-tauri/src/config.rs` with its default and a comment 
 
 ## Running it
 
-- Closing the window hides it: the tool keeps uploading from the tray, and quits from the tray menu. A `tauri dev` you stop from the shell can leave the app and its `msedgewebview2.exe` processes behind; the next start then fails with "WebView2 error ... requested resource is in use" until they're stopped.
+- Closing the window hides it: the tool keeps uploading from the tray, and quits from the tray menu. Only one copy runs (`tauri-plugin-single-instance`): starting it again shows the running one's window, so two uploaders never share `uploads.json`. A `tauri dev` therefore won't start while the installed tool is running; quit that from the tray first. A `tauri dev` you stop from the shell can leave the app and its `msedgewebview2.exe` processes behind; the next start then fails with "WebView2 error ... requested resource is in use" until they're stopped.
 - To test uploads end to end, run genjiball-ranked locally (`npm run dev`) and point the tool at it (Advanced → Server URL `http://127.0.0.1:<port>`) with a folder of test logs. Don't test with the detected folder: it holds the host's real logs, and the default server is the live one.
 
 ## PR habits

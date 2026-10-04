@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use keyring::{Entry, Error};
 
-use crate::{config, dpapi};
+use crate::{config, dpapi, settings};
 
 pub struct Tokens {
     /// The DPAPI fallback file.
@@ -123,13 +123,7 @@ fn write_file(path: &Path, tokens: &FallbackFile) -> Result<(), String> {
             _ => Ok(()),
         };
     }
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    let text = serde_json::to_string_pretty(tokens).map_err(|e| e.to_string())?;
-    fs::write(&tmp, text).map_err(|e| format!("Couldn't write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("Couldn't write {}: {e}", path.display()))
+    settings::save_json(path, tokens)
 }
 
 fn to_hex(bytes: &[u8]) -> String {

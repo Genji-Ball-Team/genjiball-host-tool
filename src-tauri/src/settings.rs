@@ -4,6 +4,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
@@ -43,15 +44,21 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
 }
 
 /// Writes `value` to a temporary file next to `path`, then moves it over, so a crash mid-write
-/// never leaves half a file.
+/// never leaves half a file. Every JSON file the tool keeps is written through here. The
+/// temporary file's name is this write's own, so two writes at once never share one.
 pub fn save_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     }
     let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
+    let write = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}-{write}.tmp", std::process::id()));
     fs::write(&tmp, text).map_err(|e| format!("Couldn't write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("Couldn't write {}: {e}", path.display()))
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("Couldn't write {}: {e}", path.display())
+    })
 }
 
 /// A server URL as the host typed it, as `scheme://host[:port][/path]` without a trailing slash,
@@ -129,7 +136,33 @@ mod tests {
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
-        assert!(!path.with_extension("json.tmp").exists());
+        // No temporary file left behind.
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn writes_at_the_same_time_dont_share_a_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("uploads.json");
+        let writers: Vec<_> = (0..8)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        // Renaming over a file another write is renaming over may be refused on
+                        // Windows; what mustn't happen is half a file or another write's text.
+                        let _ = save_json(&path, &vec![n; 1000]);
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        let written: Vec<u32> = serde_json::from_str(&text).unwrap();
+        assert!(written.iter().all(|&n| n == written[0]) && written.len() == 1000);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

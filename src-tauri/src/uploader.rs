@@ -128,9 +128,19 @@ struct Run {
     /// The server and token the host and the match statuses were last asked with, and when.
     refreshed: Option<(String, String, Instant)>,
     host: Option<Host>,
+    /// A refreshed status that couldn't be saved: saved at the next refresh even if unchanged.
+    unsaved: bool,
 }
 
 impl Run {
+    /// Whose token it is, only if the server was last asked with this server and token.
+    fn known_host(&self, server_url: &str, token: &str) -> Option<Host> {
+        match &self.refreshed {
+            Some((url, t, _)) if url == server_url && t == token => self.host.clone(),
+            _ => None,
+        }
+    }
+
     async fn tick(&mut self, app: &AppHandle) -> UploadStatus {
         let store = app.state::<Store>();
         let uploader = app.state::<Uploader>();
@@ -138,11 +148,6 @@ impl Run {
         let server_url = settings.server_url().to_string();
         let mut status = UploadStatus {
             retrying: self.retrying.clone(),
-            host: self
-                .refreshed
-                .as_ref()
-                .filter(|(url, _, _)| *url == server_url)
-                .and(self.host.clone()),
             ..UploadStatus::default()
         };
         let finish = |mut status: UploadStatus| {
@@ -193,7 +198,6 @@ impl Run {
                 // The token was forgotten: whose it was no longer matters.
                 self.host = None;
                 self.refreshed = None;
-                status.host = None;
                 status.problem = Some(Problem::NoToken);
                 return finish(status);
             }
@@ -202,6 +206,7 @@ impl Run {
                 return finish(status);
             }
         };
+        status.host = self.known_host(&server_url, &token);
         {
             let mut record = uploader.record.lock().unwrap();
             if record.start(&server_url, SystemTime::now()) {
@@ -236,7 +241,7 @@ impl Run {
                 status.problem = Some(problem);
             }
         }
-        status.host = self.host.clone();
+        status.host = self.known_host(&server_url, &token);
         finish(status)
     }
 
@@ -287,9 +292,10 @@ impl Run {
         match server::match_states(server_url, token, &keys).await {
             Ok(states) => {
                 let mut record = uploader.record.lock().unwrap();
-                if record.update_states(server_url, &states) {
-                    uploads::save(&uploader.record_path, &record)
-                        .map_err(|message| Problem::Local { message })?;
+                if record.update_states(server_url, &states) || self.unsaved {
+                    let saved = uploads::save(&uploader.record_path, &record);
+                    self.unsaved = saved.is_err();
+                    saved.map_err(|message| Problem::Local { message })?;
                 }
             }
             Err(message) => eprintln!("Couldn't refresh the match status: {message}"),

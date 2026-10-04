@@ -196,6 +196,7 @@ function describeUpload(upload: RecentUpload): { text: string; tone: "good" | "b
 
 function renderUploads(status: UploadStatus): void {
   if (status.host) showHost(status.host);
+  else if (status.problem?.kind === "tokenRejected") showHost(null);
   const line = el("upload-state");
   line.className = status.problem ? "bad" : "";
   line.textContent = status.problem

@@ -75,6 +75,7 @@ interface RankedCode {
   tagsUpdatedAt: string;
   names: number;
   skippedNames: number;
+  keepSecs: number;
 }
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -315,6 +316,8 @@ el("server-form").addEventListener("submit", (e) => {
   e.preventDefault();
   void busy(async () => {
     state = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
+    // A code kept for the old server's tags is no use now.
+    uncopied = null;
     showHost(null);
     setStatus("");
     render();
@@ -346,12 +349,22 @@ function setRankedCodeState(text: string, tone: "good" | "bad" | "muted"): void 
 
 /** Counts builds, so only the latest click's code is copied. */
 let rankedBuild = 0;
-/** The last code built but not copied (the window lost focus while it was built): the next click copies it as is. */
-let uncopied: RankedCode | null = null;
+/**
+ * The last code built but not copied (the window lost focus while it was built): the next click
+ * copies it as is, if it's for the current server and younger than its `keepSecs`.
+ */
+let uncopied: { built: RankedCode; at: number } | null = null;
+
+function takeUncopied(): RankedCode | null {
+  const kept = uncopied;
+  uncopied = null;
+  if (!kept || kept.built.serverUrl !== state.serverUrl) return null;
+  return Date.now() - kept.at < kept.built.keepSecs * 1000 ? kept.built : null;
+}
 
 async function copyRankedCode(): Promise<void> {
   const build = ++rankedBuild;
-  let built = uncopied?.serverUrl === state.serverUrl ? uncopied : null;
+  let built = takeUncopied();
   if (!built) {
     setRankedCodeState("Building the code…", "muted");
     built = await invoke<RankedCode>("build_ranked_code");
@@ -366,11 +379,10 @@ async function copyRankedCode(): Promise<void> {
     await navigator.clipboard.writeText(built.code);
   } catch (err) {
     // Usually "Document is not focused": the host switched windows while it was built.
-    uncopied = built;
+    uncopied = { built, at: Date.now() };
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
   }
-  uncopied = null;
   const names = built.names === 1 ? "1 name" : `${built.names} names`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show them)` : "";
   setRankedCodeState(`Copied. Genji Ball ${built.release}, rank tags from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`, "good");

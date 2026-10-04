@@ -172,6 +172,9 @@ struct RankedCode {
     names: usize,
     /// Names the Workshop can't show, left out.
     skipped_names: usize,
+    /// How long the window may keep a code it couldn't copy for the next click, before building
+    /// a new one: as long as the release found is reused.
+    keep_secs: u64,
 }
 
 /// The latest ranked release's code with the current server's rank tags in it.
@@ -191,6 +194,7 @@ async fn build_ranked_code(
         tags_updated_at: tags.updated_at,
         names: filled.names,
         skipped_names: filled.skipped,
+        keep_secs: config::RELEASE_CACHE_SECS,
     })
 }
 

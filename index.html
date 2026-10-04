@@ -66,6 +66,14 @@
           <button type="button" class="quiet" id="log-folder-reset" hidden>Use the detected folder</button>
         </div>
       </section>
+
+      <section>
+        <h2>Uploads</h2>
+        <p id="upload-state" role="status"></p>
+        <p class="note bad" id="upload-retrying" hidden></p>
+        <ul class="uploads" id="uploads"></ul>
+        <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
+      </section>
     </main>
   </body>
 </html>

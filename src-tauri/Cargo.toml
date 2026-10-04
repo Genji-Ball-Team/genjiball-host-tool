@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }
@@ -24,6 +24,8 @@ dirs = "7.0.0"
 tauri-plugin-dialog = "2.8.1"
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 url = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tokio = { version = "1", features = ["sync", "time"] }
 
 # Small release binary: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

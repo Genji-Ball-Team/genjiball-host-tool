@@ -1030,6 +1030,7 @@ dependencies = [
 name = "genjiball-host-tool"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dirs",
  "keyring",
  "reqwest",
@@ -1039,6 +1040,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "tokio",
  "url",
  "windows-sys 0.60.2",
 ]

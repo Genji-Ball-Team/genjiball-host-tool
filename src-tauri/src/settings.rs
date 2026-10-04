@@ -38,13 +38,17 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     }
 }
 
-/// Writes the settings to a temporary file next to `path`, then moves it over, so a crash
-/// mid-write never leaves half a file.
 pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
+    save_json(path, settings)
+}
+
+/// Writes `value` to a temporary file next to `path`, then moves it over, so a crash mid-write
+/// never leaves half a file.
+pub fn save_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     }
-    let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, text).map_err(|e| format!("Couldn't write {}: {e}", tmp.display()))?;
     fs::rename(&tmp, path).map_err(|e| format!("Couldn't write {}: {e}", path.display()))

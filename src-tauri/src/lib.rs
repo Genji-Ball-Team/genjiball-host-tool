@@ -112,7 +112,8 @@ async fn save_token(
     let check = server::check_token(&server_url, token).await;
     if !check.is_rejected() {
         store.tokens.set(&server_url, token)?;
-        uploader.wake();
+        // Uploads to this server start with the logs written from now on.
+        uploader.start(&server_url);
     }
     Ok(check)
 }

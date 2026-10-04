@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,10 @@ use crate::settings;
 pub struct Record {
     /// Server URL → file name → the last upload of that file.
     servers: BTreeMap<String, BTreeMap<String, Sent>>,
+    /// Server URL → when the tool first had a token for it (Unix seconds). Logs last written
+    /// before that aren't uploaded to it, so switching from the test server to the real one
+    /// doesn't send the test matches along.
+    started: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,6 +56,25 @@ pub struct RecentUpload {
 }
 
 impl Record {
+    pub fn started(&self, server_url: &str) -> Option<SystemTime> {
+        let secs = *self.started.get(server_url)?;
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+    }
+
+    /// Notes that uploads to `server_url` start at `now`, unless they already started.
+    /// `true` when that's new.
+    pub fn start(&mut self, server_url: &str, now: SystemTime) -> bool {
+        if self.started.contains_key(server_url) {
+            return false;
+        }
+        let secs = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.started.insert(server_url.to_string(), secs);
+        true
+    }
+
     pub fn get(&self, server_url: &str, file: &str) -> Option<&Sent> {
         self.servers.get(server_url)?.get(file)
     }
@@ -155,6 +179,17 @@ mod tests {
     }
 
     #[test]
+    fn starts_each_server_once() {
+        let mut record = Record::default();
+        let first = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        assert_eq!(record.started("https://genjiball.us"), None);
+        assert!(record.start("https://genjiball.us", first));
+        assert!(!record.start("https://genjiball.us", first + Duration::from_secs(60)));
+        assert_eq!(record.started("https://genjiball.us"), Some(first));
+        assert_eq!(record.started("https://test.genjiball.us"), None);
+    }
+
+    #[test]
     fn saves_and_loads_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("uploads.json");
@@ -171,6 +206,7 @@ mod tests {
                 ..sent(5, "2026-10-03T10:00:00Z")
             },
         );
+        record.start("https://genjiball.us", SystemTime::now());
         save(&path, &record).unwrap();
         assert_eq!(load(&path).unwrap(), record);
         fs::write(&path, "{ broken").unwrap();

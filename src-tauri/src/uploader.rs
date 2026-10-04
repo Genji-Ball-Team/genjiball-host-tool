@@ -141,13 +141,20 @@ impl Run {
         };
         let poll = {
             let record = uploader.record.lock().unwrap();
-            self.tracker
-                .poll(&folder.path, Instant::now(), SystemTime::now(), |name| {
+            // Before the first token for this server, count only what's written from now on.
+            let since = record.started(&server_url).unwrap_or_else(SystemTime::now);
+            self.tracker.poll(
+                &folder.path,
+                Instant::now(),
+                SystemTime::now(),
+                since,
+                |name| {
                     record.get(&server_url, name).map(|s| watcher::Sent {
                         size: s.size,
                         match_ends: s.match_ends,
                     })
-                })
+                },
+            )
         };
         let poll = match poll {
             Ok(poll) => poll,
@@ -171,6 +178,16 @@ impl Run {
                 return finish(status);
             }
         };
+        {
+            let mut record = uploader.record.lock().unwrap();
+            if record.start(&server_url, SystemTime::now()) {
+                if let Err(message) = uploads::save(&uploader.record_path, &record) {
+                    status.problem = Some(Problem::Local { message });
+                    drop(record);
+                    return finish(status);
+                }
+            }
+        }
         if let Some((url, bad, revoked)) = &self.rejected {
             if *url == server_url && *bad == token {
                 status.problem = Some(Problem::TokenRejected { revoked: *revoked });

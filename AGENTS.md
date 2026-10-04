@@ -36,6 +36,7 @@ Every tunable lives in `src-tauri/src/config.rs` with its default and a comment 
 - The token never goes in a plain file, a log, an error message, the window's state or a diagnostics export.
 - The server checks a token with `GET /api/host/me` (genjiball-ranked `docs/api.md`). Only a `401` or `403` means a bad token; anything else is "couldn't check", and the token is saved anyway.
 - What was uploaded is in `uploads.json` (`uploads.rs`): per server URL and file, the size sent and the server's answer. A file is sent again only once it's grown, so a restart or a lost connection never loses or repeats an upload. Deleting it only costs a round of `duplicate` answers.
+- Each server only gets the logs written after the tool first had a token for it (`started` in `uploads.json`). So a host who tested on test.genjiball.us and switches to genjiball.us doesn't send the test matches to the real leaderboard. Matches from before that go to a server by hand (genjiball-ranked `npm run upload`) or, for v1.3.2 logs, through the admin's legacy import.
 - Credential Manager can't be reached from a non-interactive session (SSH, some agent shells: `cmdkey` fails there too), so the tool uses the DPAPI file there. Test the Credential Manager path from a normal desktop session.
 
 ## Contracts with the other repos

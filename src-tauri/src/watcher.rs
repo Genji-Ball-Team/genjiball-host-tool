@@ -49,13 +49,15 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    /// Looks at `folder` at `now` (`clock` being the same moment as wall time). `sent` gives the
-    /// last upload of a file to the current server.
+    /// Looks at `folder` at `now` (`clock` being the same moment as wall time). Files last
+    /// written before `since` are left alone. `sent` gives the last upload of a file to the
+    /// current server.
     pub fn poll(
         &mut self,
         folder: &Path,
         now: Instant,
         clock: SystemTime,
+        since: SystemTime,
         sent: impl Fn(&str) -> Option<Sent>,
     ) -> io::Result<Poll> {
         if self.folder != folder {
@@ -81,7 +83,7 @@ impl Tracker {
             };
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             let age = clock.duration_since(modified).unwrap_or_default();
-            if !meta.is_file() || age > max_age {
+            if !meta.is_file() || age > max_age || modified < since {
                 continue;
             }
             let size = meta.len();
@@ -166,6 +168,7 @@ mod tests {
 
     const EXAMPLE: &str = include_str!("../tests/fixtures/ranked-log-example.txt");
     const NAME: &str = "Log-2026-10-02-20-15-33.txt";
+    const EPOCH: SystemTime = SystemTime::UNIX_EPOCH;
 
     /// The example log up to (not including) its `MATCH_END`.
     fn playing() -> String {
@@ -199,7 +202,7 @@ mod tests {
         let now = Instant::now();
         write(dir.path(), NAME, &playing(), Duration::ZERO);
         let poll = tracker
-            .poll(dir.path(), now, SystemTime::now(), never_sent)
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
             .unwrap();
         assert_eq!(
             poll,
@@ -215,6 +218,7 @@ mod tests {
                 dir.path(),
                 now + Duration::from_secs(5),
                 SystemTime::now(),
+                EPOCH,
                 never_sent,
             )
             .unwrap();
@@ -229,13 +233,13 @@ mod tests {
         let now = Instant::now();
         write(dir.path(), NAME, &playing(), Duration::ZERO);
         assert!(tracker
-            .poll(dir.path(), now, SystemTime::now(), never_sent)
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
             .unwrap()
             .due
             .is_empty());
         let later = now + Duration::from_secs(config::QUIET_SECS);
         let poll = tracker
-            .poll(dir.path(), later, SystemTime::now(), never_sent)
+            .poll(dir.path(), later, SystemTime::now(), EPOCH, never_sent)
             .unwrap();
         assert_eq!(names(&poll), [NAME]);
     }
@@ -250,7 +254,13 @@ mod tests {
             Duration::from_secs(config::QUIET_SECS + 5),
         );
         let poll = Tracker::default()
-            .poll(dir.path(), Instant::now(), SystemTime::now(), never_sent)
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                EPOCH,
+                never_sent,
+            )
             .unwrap();
         assert_eq!(names(&poll), [NAME]);
     }
@@ -266,7 +276,7 @@ mod tests {
             })
         };
         let poll = Tracker::default()
-            .poll(dir.path(), Instant::now(), SystemTime::now(), sent)
+            .poll(dir.path(), Instant::now(), SystemTime::now(), EPOCH, sent)
             .unwrap();
         assert_eq!(poll, Poll::default());
     }
@@ -286,7 +296,7 @@ mod tests {
         };
         assert_eq!(
             tracker
-                .poll(dir.path(), now, SystemTime::now(), sent)
+                .poll(dir.path(), now, SystemTime::now(), EPOCH, sent)
                 .unwrap(),
             Poll::default()
         );
@@ -294,7 +304,7 @@ mod tests {
         let longer = format!("{first}[00:01:50] KILL|110.00||Ghost||4\n");
         write(dir.path(), NAME, &longer, Duration::ZERO);
         let poll = tracker
-            .poll(dir.path(), now, SystemTime::now(), sent)
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, sent)
             .unwrap();
         assert_eq!(
             poll,
@@ -307,7 +317,7 @@ mod tests {
         assert_eq!(
             names(
                 &tracker
-                    .poll(dir.path(), later, SystemTime::now(), sent)
+                    .poll(dir.path(), later, SystemTime::now(), EPOCH, sent)
                     .unwrap()
             ),
             [NAME]
@@ -333,7 +343,13 @@ mod tests {
         );
         fs::create_dir(dir.path().join("Log-folder.txt")).unwrap();
         let poll = Tracker::default()
-            .poll(dir.path(), Instant::now(), SystemTime::now(), never_sent)
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                EPOCH,
+                never_sent,
+            )
             .unwrap();
         assert_eq!(poll, Poll::default());
     }
@@ -345,7 +361,13 @@ mod tests {
         write(dir.path(), "Log-2026-10-02-21-00-00.txt", EXAMPLE, old);
         write(dir.path(), "Log-2026-10-02-20-00-00.txt", EXAMPLE, old);
         let poll = Tracker::default()
-            .poll(dir.path(), Instant::now(), SystemTime::now(), never_sent)
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                EPOCH,
+                never_sent,
+            )
             .unwrap();
         assert_eq!(
             names(&poll),
@@ -361,7 +383,7 @@ mod tests {
         write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
         assert_eq!(
             tracker
-                .poll(dir.path(), now, SystemTime::now(), never_sent)
+                .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
                 .unwrap()
                 .due
                 .len(),
@@ -370,7 +392,7 @@ mod tests {
 
         tracker.failed(NAME, now, None);
         let poll = tracker
-            .poll(dir.path(), now, SystemTime::now(), never_sent)
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
             .unwrap();
         assert_eq!(
             poll,
@@ -383,7 +405,7 @@ mod tests {
         assert_eq!(
             names(
                 &tracker
-                    .poll(dir.path(), retry, SystemTime::now(), never_sent)
+                    .poll(dir.path(), retry, SystemTime::now(), EPOCH, never_sent)
                     .unwrap()
             ),
             [NAME]
@@ -393,7 +415,7 @@ mod tests {
         tracker.failed(NAME, retry, Some(Duration::from_secs(3600)));
         let soon = retry + backoff(2);
         assert!(tracker
-            .poll(dir.path(), soon, SystemTime::now(), never_sent)
+            .poll(dir.path(), soon, SystemTime::now(), EPOCH, never_sent)
             .unwrap()
             .due
             .is_empty());
@@ -402,7 +424,7 @@ mod tests {
         assert_eq!(
             names(
                 &tracker
-                    .poll(dir.path(), soon, SystemTime::now(), never_sent)
+                    .poll(dir.path(), soon, SystemTime::now(), EPOCH, never_sent)
                     .unwrap()
             ),
             [NAME]
@@ -416,7 +438,13 @@ mod tests {
         write(dir.path(), NAME, &big, Duration::ZERO);
         // Never sent: due once, so the host sees why it wasn't uploaded.
         let poll = Tracker::default()
-            .poll(dir.path(), Instant::now(), SystemTime::now(), never_sent)
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                EPOCH,
+                never_sent,
+            )
             .unwrap();
         assert_eq!(names(&poll), [NAME]);
         // Refused at a size over the limit: left alone from then on, even with a new `MATCH_END`.
@@ -427,9 +455,39 @@ mod tests {
             })
         };
         let poll = Tracker::default()
-            .poll(dir.path(), Instant::now(), SystemTime::now(), refused)
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                EPOCH,
+                refused,
+            )
             .unwrap();
         assert_eq!(poll, Poll::default());
+    }
+
+    #[test]
+    fn leaves_files_from_before_uploads_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = Duration::from_secs(config::QUIET_SECS + 600);
+        write(dir.path(), "Log-2026-10-02-20-00-00.txt", EXAMPLE, old);
+        write(
+            dir.path(),
+            NAME,
+            EXAMPLE,
+            Duration::from_secs(config::QUIET_SECS + 5),
+        );
+        let since = SystemTime::now() - Duration::from_secs(config::QUIET_SECS + 300);
+        let poll = Tracker::default()
+            .poll(
+                dir.path(),
+                Instant::now(),
+                SystemTime::now(),
+                since,
+                never_sent,
+            )
+            .unwrap();
+        assert_eq!(names(&poll), [NAME]);
     }
 
     #[test]
@@ -450,6 +508,7 @@ mod tests {
                 &dir.path().join("gone"),
                 Instant::now(),
                 SystemTime::now(),
+                EPOCH,
                 never_sent
             )
             .is_err());

@@ -8,9 +8,25 @@ How ranked works end to end:
 2. This tool watches the log folder and uploads the matches.
 3. The [ranked server](https://github.com/Genji-Ball-Team/genjiball-ranked) parses the log, rates each round and shows the results on the website.
 
-**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). There's no release yet.
+**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
 
 - **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
+
+## Install
+
+Download the `.exe` installer from the [Releases page](https://github.com/Genji-Ball-Team/genjiball-host-tool/releases) and run it. Windows only.
+
+Windows SmartScreen will warn that it doesn't know the app, because the installer isn't code-signed. Click "More info", then "Run anyway".
+
+Then follow the [hosting guide](docs/hosting.md).
+
+## Make a release
+
+1. Bump `version` in `package.json` (the app and the installer take it from there).
+2. Merge that to `main`.
+3. Tag it `vX.Y.Z` (the same number) and push the tag.
+
+The [release workflow](.github/workflows/release.yml) runs the checks, builds the installer and attaches it to a GitHub release for the tag. It fails if the tag and `package.json` disagree.
 
 ## Build it
 

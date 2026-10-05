@@ -13,6 +13,10 @@ pub struct Host {
     pub name: String,
     /// `trusted` or `untrusted`: an untrusted host's matches wait for an admin.
     pub trust: String,
+    /// The home region, which an admin sets: what an upload without `X-Region` is stored as.
+    /// `None`: every upload must say its region.
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 /// What checking a token found.
@@ -75,6 +79,10 @@ pub struct UploadedMatch {
     #[serde(default)]
     pub match_id: Option<i64>,
     pub line_count: u32,
+    /// The region the match is stored in: the upload's for a new match, the stored one's for
+    /// another copy. `None` in records from before regions.
+    #[serde(default)]
+    pub region: Option<String>,
     /// `insert`, `replace`, `repoint` or `skip`.
     pub action: String,
     /// `accepted`, `review`, `rejected` or `void`.
@@ -97,6 +105,10 @@ pub struct Rejection {
 pub struct UploadAnswer {
     /// `stored`, `unchanged` or `duplicate`.
     pub result: String,
+    /// The region the upload was sent as (its `X-Region`, or the host's home region). `None` in
+    /// records from before regions.
+    #[serde(default)]
+    pub region: Option<String>,
     #[serde(default)]
     pub matches: Vec<UploadedMatch>,
 }
@@ -154,6 +166,9 @@ pub struct RankTags {
     pub header: String,
     /// When the server worked the tiers out (ISO 8601).
     pub updated_at: String,
+    /// The region whose ratings they're from. `None` from a server without regions.
+    #[serde(default)]
+    pub region: Option<String>,
     /// Lowest tier first.
     pub tiers: Vec<Tier>,
 }
@@ -174,11 +189,19 @@ pub fn read_rank_tags(status: u16, body: &str) -> Result<RankTags, String> {
     }
 }
 
-/// Asks the server for the rank tags. Public: no token.
-pub async fn rank_tags(server_url: &str, timeout: Duration) -> Result<RankTags, String> {
-    // Region (#12): ask for the host's region here once the server splits the tags by region.
+/// Asks the server for a region's rank tags (its first region's for `None`). Public: no token.
+pub async fn rank_tags(
+    server_url: &str,
+    region: Option<&str>,
+    timeout: Duration,
+) -> Result<RankTags, String> {
+    let mut url =
+        url::Url::parse(&format!("{server_url}/api/rank-tags")).map_err(|e| e.to_string())?;
+    if let Some(region) = region {
+        url.query_pairs_mut().append_pair("region", region);
+    }
     let response = client(timeout)?
-        .get(format!("{server_url}/api/rank-tags"))
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
@@ -206,6 +229,9 @@ pub enum UploadOutcome {
         error: String,
         message: String,
     },
+    /// The host has no home region and the upload didn't say one (`422 no_region`). Nothing was
+    /// stored: send the file again once the host picked a region.
+    NoRegion,
     /// The token doesn't work (`401`) or was revoked (`403`). Stop until the host changes it.
     TokenRejected {
         revoked: bool,
@@ -239,6 +265,7 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
         },
         401 => UploadOutcome::TokenRejected { revoked: false },
         403 => UploadOutcome::TokenRejected { revoked: true },
+        422 if error.as_ref().is_some_and(|e| e.error == "no_region") => UploadOutcome::NoRegion,
         413 | 422 => UploadOutcome::Refused {
             error: error
                 .as_ref()
@@ -259,12 +286,14 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
     }
 }
 
-/// Sends a log file, unchanged, to `POST /api/upload`.
+/// Sends a log file, unchanged, to `POST /api/upload`, as hosted in `region` (the host's home
+/// region for `None`).
 pub async fn upload(
     server_url: &str,
     token: &str,
     file_name: &str,
     started_at: Option<&str>,
+    region: Option<&str>,
     body: Vec<u8>,
     timeout: Duration,
 ) -> UploadOutcome {
@@ -289,6 +318,9 @@ pub async fn upload(
         .body(body);
     if let Some(started_at) = started_at {
         request = request.header("X-Log-Started-At", started_at);
+    }
+    if let Some(region) = region {
+        request = request.header("X-Region", region);
     }
     let response = match request.send().await {
         Ok(response) => response,
@@ -400,6 +432,27 @@ pub fn match_page_url(server_url: &str, match_id: i64) -> Result<String, String>
 /// (the request body), runs `then`, answers with `response` as it is, and hangs up.
 #[cfg(test)]
 pub fn test_server(response: String, body: &str, then: impl FnOnce() + Send + 'static) -> String {
+    test_server_with(response, body, |_| then())
+}
+
+/// `test_server`, sending the request it read (head and body) to `seen`.
+#[cfg(test)]
+pub fn test_server_seeing(
+    response: String,
+    body: &str,
+    seen: std::sync::mpsc::Sender<String>,
+) -> String {
+    test_server_with(response, body, move |request| {
+        let _ = seen.send(request);
+    })
+}
+
+#[cfg(test)]
+fn test_server_with(
+    response: String,
+    body: &str,
+    then: impl FnOnce(String) + Send + 'static,
+) -> String {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -415,7 +468,7 @@ pub fn test_server(response: String, body: &str, then: impl FnOnce() + Send + 's
             }
             request.extend_from_slice(&buf[..n]);
         }
-        then();
+        then(String::from_utf8_lossy(&request).into_owned());
         socket.write_all(response.as_bytes()).unwrap();
     });
     url
@@ -433,7 +486,8 @@ mod tests {
                 host: Host {
                     id: 3,
                     name: "Kenzo".into(),
-                    trust: "trusted".into()
+                    trust: "trusted".into(),
+                    region: None,
                 }
             }
         );
@@ -472,15 +526,17 @@ mod tests {
 
     #[test]
     fn reads_a_stored_upload() {
-        let body = r#"{"result":"stored","uploadId":12,"matches":[{"matchKey":"482913507226","lineCount":57,"action":"insert","status":"review","rejection":null,"reviewReasons":["duplicate_name"]}]}"#;
+        let body = r#"{"result":"stored","uploadId":12,"region":"eu","matches":[{"matchKey":"482913507226","lineCount":57,"region":"eu","action":"insert","status":"review","rejection":null,"reviewReasons":["duplicate_name"]}]}"#;
         assert_eq!(
             read_upload(200, None, body),
             UploadOutcome::Stored(UploadAnswer {
                 result: "stored".into(),
+                region: Some("eu".into()),
                 matches: vec![UploadedMatch {
                     match_key: Some("482913507226".into()),
                     match_id: None,
                     line_count: 57,
+                    region: Some("eu".into()),
                     action: "insert".into(),
                     status: "review".into(),
                     rejection: None,
@@ -504,6 +560,7 @@ mod tests {
             ),
             UploadOutcome::Stored(UploadAnswer {
                 result: "duplicate".into(),
+                region: None,
                 matches: vec![]
             })
         );
@@ -538,6 +595,64 @@ mod tests {
             read_upload(413, None, "too big"),
             UploadOutcome::Refused { error, .. } if error == "413"
         ));
+    }
+
+    #[test]
+    fn asks_for_a_region_rather_than_refusing_the_file() {
+        // Nothing was stored, and the file is fine: it goes once the host picked a region.
+        assert_eq!(
+            read_upload(
+                422,
+                None,
+                r#"{"error":"no_region","message":"This host has no home region"}"#
+            ),
+            UploadOutcome::NoRegion
+        );
+    }
+
+    #[test]
+    fn reads_the_home_region() {
+        let check = read_token_check(
+            200,
+            r#"{"host":{"id":3,"name":"Kenzo","trust":"trusted","region":"na"}}"#,
+        );
+        let TokenCheck::Ok { host } = check else {
+            panic!("{check:?}")
+        };
+        assert_eq!(host.region.as_deref(), Some("na"));
+        let none = read_token_check(
+            200,
+            r#"{"host":{"id":3,"name":"Kenzo","trust":"trusted","region":null}}"#,
+        );
+        assert!(matches!(none, TokenCheck::Ok { host } if host.region.is_none()));
+    }
+
+    #[test]
+    fn sends_the_region() {
+        use tauri::async_runtime::block_on as run;
+        let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
+        let (seen, request) = std::sync::mpsc::channel();
+        let body = r#"{"result":"duplicate","uploadId":1,"region":"na","matches":[]}"#;
+        let url = test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+            "x",
+            seen,
+        );
+        let outcome = run(upload(
+            &url,
+            "t",
+            "Log-a.txt",
+            None,
+            Some("na"),
+            b"x".to_vec(),
+            timeout,
+        ));
+        assert!(matches!(outcome, UploadOutcome::Stored(a) if a.region.as_deref() == Some("na")));
+        let request = request.recv().unwrap().to_ascii_lowercase();
+        assert!(request.contains("\r\nx-region: na\r\n"), "{request}");
     }
 
     #[test]
@@ -610,12 +725,13 @@ mod tests {
 
     #[test]
     fn reads_rank_tags() {
-        let body = r#"{"header":"Ranks updated 2026-10-03","updatedAt":"2026-10-03T12:00:00Z","tiers":[{"label":"Apprentice","color":[205,127,50,255],"guide":"Apprentice - 1300","names":["Kenzo"]},{"label":"Master","color":[255,215,0,255],"guide":"Master - 1600","names":[]}]}"#;
+        let body = r#"{"header":"Ranks updated 2026-10-03","updatedAt":"2026-10-03T12:00:00Z","region":"na","tiers":[{"label":"Apprentice","color":[205,127,50,255],"guide":"Apprentice - 1300","names":["Kenzo"]},{"label":"Master","color":[255,215,0,255],"guide":"Master - 1600","names":[]}]}"#;
         assert_eq!(
             read_rank_tags(200, body).unwrap(),
             RankTags {
                 header: "Ranks updated 2026-10-03".into(),
                 updated_at: "2026-10-03T12:00:00Z".into(),
+                region: Some("na".into()),
                 tiers: vec![
                     Tier {
                         label: "Apprentice".into(),
@@ -718,6 +834,7 @@ mod tests {
                 "t",
                 "Log-a.txt",
                 None,
+                None,
                 b"x".to_vec(),
                 timeout
             )),
@@ -729,6 +846,7 @@ mod tests {
                 &too_big,
                 "t",
                 "Log-a.txt",
+                None,
                 None,
                 b"x".to_vec(),
                 timeout
@@ -742,6 +860,7 @@ mod tests {
                 &failing,
                 "t",
                 "Log-a.txt",
+                None,
                 None,
                 b"x".to_vec(),
                 timeout

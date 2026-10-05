@@ -96,6 +96,9 @@ struct AppState {
     default_server_url: &'static str,
     has_token: bool,
     log_folder: Option<LogFolder>,
+    /// The region the host picked, `None` for their home region.
+    region: Option<String>,
+    regions: &'static [config::Region],
     settings_error: Option<String>,
     /// Every `config::TUNABLES`, in order, with the host's value.
     advanced: Vec<AdvancedSetting>,
@@ -124,6 +127,8 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         default_server_url: config::DEFAULT_SERVER_URL,
         has_token: store.tokens.get(settings.server_url())?.is_some(),
         log_folder: log_folder::current(settings.log_folder.as_deref()),
+        region: settings.region.clone(),
+        regions: &config::REGIONS,
         settings_error,
         advanced: config::TUNABLES
             .iter()
@@ -265,6 +270,23 @@ fn set_log_folder(
     app_state(&app, &store)
 }
 
+/// The region the host hosts in now, `None` for their home region. Uploads from the next one on
+/// go as it, and the ranked code gets its rank tags.
+#[tauri::command]
+fn set_region(
+    region: Option<String>,
+    app: tauri::AppHandle,
+    store: State<Store>,
+    uploader: State<Uploader>,
+) -> Result<AppState, String> {
+    if let Some(region) = &region {
+        settings::check_region(region)?;
+    }
+    store.update(|s| s.region = region)?;
+    uploader.changed();
+    app_state(&app, &store)
+}
+
 /// The Advanced values the host entered, by key. A key left out goes back to its default, so `{}`
 /// resets them all. Nothing is saved unless every value is in its range.
 #[tauri::command]
@@ -289,6 +311,11 @@ struct RankedCode {
     /// The server the rank tags came from: the window drops a code built for a server the host
     /// has since switched away from.
     server_url: String,
+    /// The region the host picked when it was built (`None`: the home region), likewise.
+    chosen_region: Option<String>,
+    /// The region whose rank tags are in it, as the server said. `None` from a server without
+    /// regions.
+    region: Option<String>,
     /// The GenjiBall-CE release it's built from (`1.3.3R`).
     release: String,
     /// When the server worked the rank tags out (ISO 8601).
@@ -301,22 +328,31 @@ struct RankedCode {
     keep_secs: u64,
 }
 
-/// The latest ranked release's code with the current server's rank tags in it.
+/// The latest ranked release's code with the rank tags of the current server and region in it.
 #[tauri::command]
 async fn build_ranked_code(
     store: State<'_, Store>,
     releases: State<'_, ReleaseCache>,
+    uploader: State<'_, Uploader>,
 ) -> Result<RankedCode, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
+    // The home region once the server said it; until then the server's first region, which the
+    // answer names.
+    let region = settings
+        .region
+        .clone()
+        .or_else(|| uploader.home_region(&server_url));
     let keep = settings.secs(&config::RELEASE_CACHE_SECS);
     let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
     let (release, base) = releases.latest(keep, timeout).await?;
-    let tags = server::rank_tags(&server_url, timeout).await?;
+    let tags = server::rank_tags(&server_url, region.as_deref(), timeout).await?;
     let filled = ranked_code::fill(&base, &tags)?;
     Ok(RankedCode {
         code: filled.code,
         server_url,
+        chosen_region: settings.region,
+        region: tags.region,
         release,
         tags_updated_at: tags.updated_at,
         names: filled.names,
@@ -396,6 +432,7 @@ pub fn run() {
             set_server_url,
             set_log_folder,
             set_advanced,
+            set_region,
             get_upload_status,
             build_ranked_code,
             get_upload_history,

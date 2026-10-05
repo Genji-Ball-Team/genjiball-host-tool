@@ -27,7 +27,10 @@
           <dd id="server"></dd>
           <dt>Host</dt>
           <dd><span id="host"></span> <span class="tag" id="host-trust" hidden>Untrusted</span> <span class="status" id="token-status" role="status"></span></dd>
+          <dt><label for="region">Region</label></dt>
+          <dd><select id="region"></select> <span class="status" id="region-status" role="status"></span></dd>
         </dl>
+        <p class="note" id="region-note">The region you host in now. Ranked keeps EU and NA apart: switch it before you host in the other one.</p>
         <p class="note" id="host-trust-note" hidden>An admin checks each of your matches before it counts for the ratings. Ask an admin to make you a trusted host.</p>
 
         <form id="token-form" hidden>
@@ -74,11 +77,12 @@
           <button type="button" id="ranked-code-copy">Copy ranked code</button>
         </div>
         <p id="ranked-code-state" role="status" hidden></p>
-        <p class="note">The latest ranked release of Genji Ball with the rank tags from this server in it. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the ranks update.</p>
+        <p class="note">The latest ranked release of Genji Ball with the rank tags of this server and region in it. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the ranks update.</p>
       </section>
 
       <section>
         <h2>Uploads</h2>
+        <p id="upload-region"></p>
         <p id="upload-state" role="status"></p>
         <p class="note bad" id="upload-retrying" hidden></p>
         <ul class="uploads" id="uploads"></ul>

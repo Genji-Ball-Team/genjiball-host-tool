@@ -291,12 +291,14 @@ mod tests {
         Sent {
             answer: Answer::Answered(UploadAnswer {
                 result: "stored".into(),
+                region: Some("eu".into()),
                 matches: keys
                     .iter()
                     .map(|key| UploadedMatch {
                         match_key: Some(key.to_string()),
                         match_id: None,
                         line_count: 10,
+                        region: Some("eu".into()),
                         action: "insert".into(),
                         status: status.into(),
                         rejection: None,
@@ -453,6 +455,7 @@ mod tests {
             Sent {
                 answer: Answer::Answered(UploadAnswer {
                     result: "duplicate".into(),
+                    region: None,
                     matches: vec![],
                 }),
                 ..sent(5, "2026-10-03T10:00:00Z")

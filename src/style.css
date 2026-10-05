@@ -44,7 +44,15 @@ input {
   flex: 1 1 16rem; min-width: 0; padding: .45rem .65rem;
   border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--fg); font: inherit;
 }
-input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
+select {
+  padding: .3rem .5rem; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); color: var(--fg); font: inherit;
+}
+dt label { display: inline; margin: 0; color: inherit; font-size: inherit; }
+#region-note { margin: -.5rem 0 1rem; }
+#upload-region { margin: 0 0 .5rem; }
+#upload-region strong { font-weight: 650; }
+select:focus-visible, input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
 button {
   padding: .45rem .9rem; border: 1px solid var(--good); border-radius: 4px;
   background: var(--good); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer;

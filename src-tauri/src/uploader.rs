@@ -37,6 +37,9 @@ pub enum Problem {
     TokenRejected {
         revoked: bool,
     },
+    /// The host has no home region on the server and didn't pick one: the server won't store a
+    /// match without one. Uploads wait until the host picks a region (or an admin sets theirs).
+    NoRegion,
     /// The credential store or the upload record failed.
     Local {
         message: String,
@@ -51,6 +54,12 @@ pub struct UploadStatus {
     /// window drops a status for others: a poll that was still running when the host changed them.
     pub server_url: String,
     pub log_folder: Option<PathBuf>,
+    /// The region the host picked (`Settings::region`) when the poll began, `None` for their home
+    /// region. The window drops a status for another, like one for another server.
+    pub chosen_region: Option<String>,
+    /// The region uploads go as: the one picked, else the host's home region. `None` while the
+    /// home region isn't known (the server can't be reached) or the host has none.
+    pub region: Option<String>,
     pub problem: Option<Problem>,
     /// Ranked logs not uploaded as they are now: a match being played, or one waiting to retry.
     pub waiting: usize,
@@ -81,8 +90,8 @@ pub struct Uploader {
     refresh: AtomicBool,
     /// A token was saved, or a check found the token works: forget a rejection at the next poll.
     token_ok: AtomicBool,
-    /// Goes up each time the server, the log folder or the token changes (`changed`): a poll
-    /// that began before stops sending.
+    /// Goes up each time the server, the log folder, the region or the token changes (`changed`):
+    /// a poll that began before stops sending.
     generation: AtomicU64,
 }
 
@@ -108,8 +117,8 @@ impl Uploader {
         }
     }
 
-    /// The server, the log folder or the token changed: what a poll under way still has to send
-    /// waits for the next one, which starts now with the new settings.
+    /// The server, the log folder, the region or the token changed: what a poll under way still has
+    /// to send waits for the next one, which starts now with the new settings.
     pub fn changed(&self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
         self.wake();
@@ -129,6 +138,15 @@ impl Uploader {
 
     pub fn status(&self) -> UploadStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// The host's home region on `server_url`, as the server last said, if it's known.
+    pub fn home_region(&self, server_url: &str) -> Option<String> {
+        let status = self.status.lock().unwrap();
+        if status.server_url != server_url {
+            return None;
+        }
+        status.host.as_ref()?.region.clone()
     }
 
     /// Page `page` of the upload history for `server_url`, with the files waiting in `folder` (the
@@ -207,6 +225,14 @@ impl Uploader {
     }
 }
 
+/// Where a poll's uploads go, and as which region (the host's home region for `None`).
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    server_url: &'a str,
+    token: &'a str,
+    region: Option<&'a str>,
+}
+
 /// Starts the loop. Call once, after `Store` and `Uploader` are managed.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -241,6 +267,9 @@ struct Run {
     host: Option<Host>,
     /// The server that answered "too many uploads" (`429`), and until when nothing is sent to it.
     held: Option<(String, Instant)>,
+    /// The server and token an upload without a region was refused for (`no_region`): uploads
+    /// without one wait, even while the server can't say the host's home region.
+    no_region: Option<(String, String)>,
 }
 
 impl Run {
@@ -265,6 +294,17 @@ impl Run {
         }
     }
 
+    /// Whether uploads to `server_url` with `token` need a region the host hasn't picked: the host
+    /// has no home region, as far as the server last said.
+    fn needs_region(&self, server_url: &str, token: &str, host: Option<&Host>) -> bool {
+        match host {
+            Some(host) => host.region.is_none(),
+            None => {
+                matches!(&self.no_region, Some((url, t)) if url == server_url && t == token)
+            }
+        }
+    }
+
     /// Whose token it is, only if the server was last asked with this server and token.
     fn known_host(&self, server_url: &str, token: &str) -> Option<Host> {
         match &self.refreshed {
@@ -285,11 +325,19 @@ impl Run {
         self.tracker.timing = Timing::new(&settings);
         let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
         let refresh_every = settings.secs(&config::STATUS_REFRESH_SECS);
+        let chosen_region = settings.region.clone();
         let mut status = UploadStatus {
             server_url: server_url.clone(),
             log_folder: log_folder::current(settings.log_folder.as_deref()).map(|f| f.path),
+            chosen_region: chosen_region.clone(),
+            region: chosen_region.clone(),
             retrying: self.retrying.clone(),
             ..UploadStatus::default()
+        };
+        let region_of = |host: Option<&Host>| {
+            chosen_region
+                .clone()
+                .or_else(|| host.and_then(|h| h.region.clone()))
         };
         // `folder`: the folder just polled, `None` when there's none to poll.
         let finish = |run: &Run, folder: Option<&Path>, mut status: UploadStatus| {
@@ -379,16 +427,43 @@ impl Run {
             status.problem = Some(Problem::TokenRejected { revoked });
             return finish(self, polled, status);
         }
+        // Uploads go as the home region: learn it first, so the window shows it before the first
+        // upload, and a host without one isn't sent a match. While they have none, keep asking
+        // (every `STATUS_REFRESH_SECS`, or on "Check again"): an admin may set it.
+        let unsure = status.host.is_none() && !poll.due.is_empty();
+        if chosen_region.is_none()
+            && (unsure || self.needs_region(&server_url, &token, status.host.as_ref()))
+        {
+            let refreshed = self
+                .refresh(
+                    &uploader,
+                    generation,
+                    &server_url,
+                    &token,
+                    refresh_every,
+                    timeout,
+                )
+                .await;
+            status.host = self.known_host(&server_url, &token);
+            if let Err(problem) = refreshed {
+                status.problem = Some(problem);
+                return finish(self, polled, status);
+            }
+        }
+        let region = region_of(status.host.as_ref());
+        status.region = region.clone();
+        if region.is_none() && self.needs_region(&server_url, &token, status.host.as_ref()) {
+            status.problem = Some(Problem::NoRegion);
+            return finish(self, polled, status);
+        }
 
+        let target = Target {
+            server_url: &server_url,
+            token: &token,
+            region: region.as_deref(),
+        };
         let (done, problem) = self
-            .send_due(
-                &uploader,
-                generation,
-                &server_url,
-                &token,
-                &poll.due,
-                timeout,
-            )
+            .send_due(&uploader, generation, target, &poll.due, timeout)
             .await;
         status.waiting = status.waiting.saturating_sub(done);
         status.problem = problem;
@@ -409,6 +484,7 @@ impl Run {
             }
         }
         status.host = self.known_host(&server_url, &token);
+        status.region = region_of(status.host.as_ref());
         finish(self, polled, status)
     }
 
@@ -476,17 +552,16 @@ impl Run {
         &mut self,
         uploader: &Uploader,
         generation: u64,
-        server_url: &str,
-        token: &str,
+        target: Target<'_>,
         due: &[Due],
         timeout: Duration,
     ) -> (usize, Option<Problem>) {
         let mut done = 0;
         for due in due {
-            if !uploader.is_current(generation) || self.held(server_url, Instant::now()) {
+            if !uploader.is_current(generation) || self.held(target.server_url, Instant::now()) {
                 break;
             }
-            match self.send(uploader, server_url, token, due, timeout).await {
+            match self.send(uploader, target, due, timeout).await {
                 Ok(true) => done += 1,
                 Ok(false) => {}
                 Err(problem) => return (done, Some(problem)),
@@ -500,11 +575,15 @@ impl Run {
     async fn send(
         &mut self,
         uploader: &Uploader,
-        server_url: &str,
-        token: &str,
+        target: Target<'_>,
         due: &Due,
         timeout: Duration,
     ) -> Result<bool, Problem> {
+        let Target {
+            server_url,
+            token,
+            region,
+        } = target;
         // Only its complete lines: the game may be halfway through writing the next one.
         let bytes = match fs::read(&due.path) {
             Ok(mut bytes) => {
@@ -536,6 +615,7 @@ impl Run {
                 token,
                 &due.name,
                 started_at.as_deref(),
+                region,
                 bytes,
                 timeout,
             );
@@ -549,6 +629,11 @@ impl Run {
                     Answer::Answered(answer)
                 }
                 UploadOutcome::Refused { error, message } => Answer::Refused { error, message },
+                UploadOutcome::NoRegion => {
+                    // Not recorded: the file goes once there's a region.
+                    self.no_region = Some((server_url.to_string(), token.to_string()));
+                    return Err(Problem::NoRegion);
+                }
                 UploadOutcome::TokenRejected { revoked } => {
                     self.rejected = Some((server_url.to_string(), token.to_string(), revoked));
                     return Err(Problem::TokenRejected { revoked });
@@ -620,6 +705,61 @@ mod tests {
     }
 
     const SERVER: &str = "https://genjiball.us";
+
+    /// Uploads to `server` with the token `t`, as the home region.
+    fn target(server: &str) -> Target<'_> {
+        Target {
+            server_url: server,
+            token: "t",
+            region: None,
+        }
+    }
+
+    fn host(region: Option<&str>) -> Host {
+        Host {
+            id: 3,
+            name: "Kenzo".into(),
+            trust: "trusted".into(),
+            region: region.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_host_without_a_home_region_must_pick_one() {
+        let run = Run::default();
+        assert!(run.needs_region(SERVER, "t", Some(&host(None))));
+        assert!(!run.needs_region(SERVER, "t", Some(&host(Some("eu")))));
+        // Not known yet: the server stores the upload as the home region, or says there's none.
+        assert!(!run.needs_region(SERVER, "t", None));
+    }
+
+    #[test]
+    fn an_upload_without_a_region_waits_for_one_and_isnt_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let refused = r#"{"error":"no_region","message":"This host has no home region"}"#;
+        let server = server::test_server(
+            format!(
+                "HTTP/1.1 422 Unprocessable Content\r\nContent-Length: {}\r\n\r\n{refused}",
+                refused.len()
+            ),
+            EXAMPLE,
+            || {},
+        );
+        let file = due(dir.path(), EXAMPLE);
+        let sent = block_on(run.send(&uploader, target(&server), &file, TIMEOUT));
+        assert_eq!(sent, Err(Problem::NoRegion));
+        assert!(uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(&server, &file.name)
+            .is_none());
+        // Even while the server can't say the home region; not for another token.
+        assert!(run.needs_region(&server, "t", None));
+        assert!(!run.needs_region(&server, "other", None));
+    }
 
     #[test]
     fn saving_a_token_starts_uploads_to_its_server_once() {
@@ -722,8 +862,7 @@ mod tests {
         let (done, problem) = block_on(run.send_due(
             &uploader,
             generation,
-            &server,
-            "t",
+            target(&server),
             &[first.clone(), second.clone()],
             TIMEOUT,
         ));
@@ -747,7 +886,12 @@ mod tests {
             || {},
         );
         let start = Instant::now();
-        let sent = block_on(run.send(&uploader, &server, "t", &due(dir.path(), EXAMPLE), TIMEOUT));
+        let sent = block_on(run.send(
+            &uploader,
+            target(&server),
+            &due(dir.path(), EXAMPLE),
+            TIMEOUT,
+        ));
         assert_eq!(sent, Ok(false));
         // Two hours, past `RETRY_MAX_SECS`, for every file to that server; not another server.
         assert!(run.held(

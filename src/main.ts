@@ -9,8 +9,17 @@ interface AppState {
   defaultServerUrl: string;
   hasToken: boolean;
   logFolder: LogFolder | null;
+  /** The region the host picked, `null` for their home region. */
+  region: string | null;
+  regions: Region[];
   settingsError: string | null;
   advanced: AdvancedSetting[];
+}
+
+/** Mirrors `Region` in src-tauri/src/config.rs. */
+interface Region {
+  id: string;
+  label: string;
 }
 
 /** Mirrors `AdvancedSetting` in src-tauri/src/lib.rs. All in seconds. */
@@ -36,6 +45,8 @@ interface Host {
   id: number;
   name: string;
   trust: "trusted" | "untrusted";
+  /** The home region, `null` for none. */
+  region: string | null;
 }
 
 /** Mirrors `TokenCheck` in src-tauri/src/server.rs. */
@@ -49,6 +60,9 @@ type TokenCheck =
 interface UploadStatus {
   serverUrl: string;
   logFolder: string | null;
+  chosenRegion: string | null;
+  /** What uploads go as: the region picked, else the home region. `null` while not known. */
+  region: string | null;
   problem: Problem | null;
   waiting: number;
   retrying: string | null;
@@ -64,6 +78,7 @@ type Problem =
   | { kind: "folderUnreadable"; message: string }
   | { kind: "noToken" }
   | { kind: "tokenRejected"; revoked: boolean }
+  | { kind: "noRegion" }
   | { kind: "local"; message: string };
 
 /** Mirrors `Page` in src-tauri/src/history.rs: what `get_upload_history` returns. */
@@ -84,7 +99,7 @@ interface HistoryEntry {
 }
 
 /** Mirrors `Answer` in src-tauri/src/uploads.rs. */
-type Answer = { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
+type Answer = { kind: "answered"; result: "stored" | "unchanged" | "duplicate"; region: string | null; matches: UploadedMatch[] } | { kind: "refused"; error: string; message: string };
 
 /** Mirrors `QueueState` in src-tauri/src/watcher.rs. */
 type QueueState = { kind: "playing" } | { kind: "due" } | { kind: "failed"; error: string };
@@ -94,6 +109,7 @@ interface UploadedMatch {
   matchKey: string | null;
   matchId: number | null;
   lineCount: number;
+  region: string | null;
   action: "insert" | "replace" | "repoint" | "skip";
   status: "accepted" | "review" | "rejected" | "void";
   rejection: { code: string; message: string } | null;
@@ -104,6 +120,9 @@ interface UploadedMatch {
 interface RankedCode {
   code: string;
   serverUrl: string;
+  chosenRegion: string | null;
+  /** Whose rank tags are in it. */
+  region: string | null;
   release: string;
   tagsUpdatedAt: string;
   names: number;
@@ -128,8 +147,41 @@ function setStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void
   status.className = `status ${tone}`;
 }
 
+/** The host's home region as the server last said (`null`: none), `undefined` while not known. */
+let homeRegion: string | null | undefined;
+
+function regionLabel(id: string): string {
+  return state.regions.find((r) => r.id === id)?.label ?? id.toUpperCase();
+}
+
+/** The region choice: the home region (named once it's known), then each region. */
+function renderRegion(): void {
+  const select = el<HTMLSelectElement>("region");
+  const home = homeRegion === undefined ? "Home region" : homeRegion === null ? "Home region (none set)" : `Home region (${regionLabel(homeRegion)})`;
+  const options = [{ id: "", label: home }, ...state.regions];
+  if (select.options.length !== options.length || select.options.item(0)?.textContent !== home) {
+    select.replaceChildren(
+      ...options.map((r) => {
+        const option = document.createElement("option");
+        option.value = r.id;
+        option.textContent = r.label;
+        return option;
+      }),
+    );
+  }
+  select.value = state.region ?? "";
+}
+
+function setRegionStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void {
+  const status = el("region-status");
+  status.textContent = text;
+  status.className = `status ${tone}`;
+}
+
 /** The host's name and, while they're untrusted, a tag saying so. `null` hides both. */
 function showHost(host: Host | null): void {
+  homeRegion = host ? host.region : undefined;
+  renderRegion();
   el("host").textContent = host?.name ?? "";
   const untrusted = host?.trust === "untrusted";
   el("host-trust").hidden = !untrusted;
@@ -191,6 +243,7 @@ function render(): void {
         : "Chosen by you.";
   el("log-folder-reset").hidden = folder?.source !== "custom";
 
+  renderRegion();
   renderAdvanced();
 }
 
@@ -269,6 +322,8 @@ function describeProblem(problem: Problem): string {
       return "Paused: there's no host token for this server.";
     case "tokenRejected":
       return problem.revoked ? "Paused: this token was revoked. Ask an admin for a new one." : "Paused: the server doesn't know this token.";
+    case "noRegion":
+      return "Paused: you have no home region yet. Pick the region you host in above.";
     case "local":
       return problem.message;
   }
@@ -311,9 +366,10 @@ function describeAnswer(answer: Answer): { text: string; tone: Tone } {
 function renderUploads(status: UploadStatus): void {
   // A poll that began before the host changed the server or folder: not about what's shown.
   // Dropped before it touches the history, so it can't replace the new server's page.
-  if (status.serverUrl !== state.serverUrl || status.logFolder !== (state.logFolder?.path ?? null)) return;
+  if (status.serverUrl !== state.serverUrl || status.logFolder !== (state.logFolder?.path ?? null) || status.chosenRegion !== state.region) return;
   if (status.host) showHost(status.host);
   else if (status.problem?.kind === "tokenRejected") showHost(null);
+  renderUploadRegion(status);
   const line = el("upload-state");
   line.className = status.problem ? "bad" : "";
   line.textContent = status.problem
@@ -338,6 +394,27 @@ function renderUploads(status: UploadStatus): void {
   } else if (changed) {
     showHistoryPage(historyPage).catch(showUploadsError);
   }
+}
+
+/** Which region matches upload as, so a night in the other one isn't stored as this one. */
+function renderUploadRegion(status: UploadStatus): void {
+  const line = el("upload-region");
+  line.hidden = status.problem?.kind === "noRegion";
+  if (!status.region) {
+    line.textContent = "Uploading as your home region.";
+    return;
+  }
+  const strong = document.createElement("strong");
+  strong.textContent = regionLabel(status.region);
+  line.replaceChildren("Uploading as ", strong, status.chosenRegion ? "." : " (your home region).");
+}
+
+/** The regions an upload's matches are stored in, as their ids in capitals (`EU`). */
+function answerRegions(answer: Answer): string {
+  if (answer.kind !== "answered") return "";
+  const regions = new Set(answer.matches.map((m) => m.region).filter((r): r is string => r !== null));
+  if (!regions.size && answer.region) regions.add(answer.region);
+  return [...regions].map((r) => r.toUpperCase()).join(", ");
 }
 
 function describeQueued(queued: QueueState): { text: string; tone: Tone } {
@@ -377,7 +454,9 @@ function button(text: string, action: () => Promise<void>): HTMLButtonElement {
 
 function historyItem(entry: HistoryEntry): HTMLLIElement {
   const item = document.createElement("li");
-  item.append(span(entry.file, "path"), span(entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet", "muted"));
+  const regions = entry.answer ? answerRegions(entry.answer) : "";
+  const at = entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet";
+  item.append(span(entry.file, "path"), span(regions ? `${regions} · ${at}` : at, "muted"));
   if (entry.players.length) item.append(span(entry.players.join(", "), "soft"));
 
   const answer = entry.answer && describeAnswer(entry.answer);
@@ -524,6 +603,24 @@ el("server-form").addEventListener("submit", (e) => {
   });
 });
 
+el("region").addEventListener("change", () => {
+  void busy(
+    async () => {
+      setRegionStatus("");
+      const region = el<HTMLSelectElement>("region").value || null;
+      const next = await invoke<AppState>("set_region", { region });
+      // A code kept for the old region's tags is no use now.
+      uncopied = null;
+      await show(next);
+      setRegionStatus("Saved", "good");
+    },
+    (m) => {
+      setRegionStatus(m, "bad");
+      renderRegion();
+    },
+  );
+});
+
 async function saveAdvanced(values: Record<string, number>): Promise<void> {
   setAdvancedState("", "good");
   const next = await invoke<AppState>("set_advanced", { values });
@@ -572,7 +669,7 @@ let uncopied: { built: RankedCode; at: number } | null = null;
 function takeUncopied(): { built: RankedCode; at: number } | null {
   const kept = uncopied;
   uncopied = null;
-  if (!kept || kept.built.serverUrl !== state.serverUrl) return null;
+  if (!kept || kept.built.serverUrl !== state.serverUrl || kept.built.chosenRegion !== state.region) return null;
   return Date.now() - kept.at < kept.built.keepSecs * 1000 ? kept : null;
 }
 
@@ -594,6 +691,10 @@ async function copyRankedCode(): Promise<void> {
       setRankedCodeState("The server changed while the code was built. Click again for this server's.", "bad");
       return;
     }
+    if (built.chosenRegion !== state.region) {
+      setRankedCodeState("The region changed while the code was built. Click again for this region's.", "bad");
+      return;
+    }
   }
   try {
     await navigator.clipboard.writeText(built.code);
@@ -605,7 +706,8 @@ async function copyRankedCode(): Promise<void> {
   }
   const names = built.names === 1 ? "1 name" : `${built.names} names`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show them)` : "";
-  setRankedCodeState(`Copied. Genji Ball ${built.release}, rank tags from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`, "good");
+  const tags = built.region ? `${regionLabel(built.region)} rank tags` : "rank tags";
+  setRankedCodeState(`Copied. Genji Ball ${built.release}, ${tags} from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`, "good");
 }
 
 el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));

@@ -1,6 +1,6 @@
 [package]
 name = "genjiball-host-tool"
-version = "0.1.0"
+version = "0.2.0"
 description = "Genji Ball Ranked host tool"
 authors = ["Genji Ball Team"]
 repository = "https://github.com/Genji-Ball-Team/genjiball-host-tool"
@@ -28,6 +28,7 @@ url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1", features = ["sync", "time"] }
 tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-updater = "2.13.1"
 
 # Small release binary: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

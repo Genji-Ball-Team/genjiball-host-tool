@@ -170,8 +170,23 @@ pub const TOP_TAGGED: usize = 10;
 /// `accepted` and `void` matches are public; the site answers any other with "not found".
 pub const MATCH_PAGE_PATH: &str = "/match";
 
+/// How often the tool looks for a new version of itself, after the check at startup. The endpoint
+/// and the signing key are in `tauri.conf.json`, under `plugins.updater`.
+pub const UPDATE_CHECK_SECS: Tunable = Tunable {
+    key: "updateCheckSecs",
+    label: "Update check",
+    help: "How often the tool looks for a new version of itself. It also looks when it starts.",
+    default: 6 * 3600,
+    min: 3600,
+    max: 7 * 24 * 3600,
+};
+
+/// How often the update loop looks at the clock to see whether a check is due, so a changed
+/// `UPDATE_CHECK_SECS` counts within this long.
+pub const UPDATE_TICK_SECS: u64 = 60;
+
 /// Every `Tunable`, in the order the window lists them.
-pub const TUNABLES: [&Tunable; 7] = [
+pub const TUNABLES: [&Tunable; 8] = [
     &POLL_INTERVAL_SECS,
     &QUIET_SECS,
     &REQUEST_TIMEOUT_SECS,
@@ -179,6 +194,7 @@ pub const TUNABLES: [&Tunable; 7] = [
     &RETRY_MAX_SECS,
     &STATUS_REFRESH_SECS,
     &RELEASE_CACHE_SECS,
+    &UPDATE_CHECK_SECS,
 ];
 
 #[cfg(test)]

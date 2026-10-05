@@ -1,7 +1,8 @@
 name: Release
 
 # Pushing a tag like v0.2.0 checks, builds the Windows installer and attaches it to a GitHub release.
-# The tag must match `version` in package.json. Updater signing comes later (#7).
+# The tag must match `version` in package.json. The installer is signed for the app's updater (the
+# TAURI_SIGNING_PRIVATE_KEY secrets) and `latest.json`, which the updater reads, is attached too.
 on:
   push:
     tags:
@@ -36,18 +37,61 @@ jobs:
           if ($env:GITHUB_REF_NAME -ne "v$version") {
             throw "Tag $env:GITHUB_REF_NAME doesn't match package.json version $version"
           }
+      - name: Check the updater signing key is there
+        if: github.ref_type == 'tag'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw "The TAURI_SIGNING_PRIVATE_KEY secret is missing: a release without it can't be installed as an update. Add it in the repo's Actions secrets (see the README's Make a release)"
+          }
       - run: npm ci
       - name: Typecheck, lint and test
         run: npm run check
       - name: Build the installer
-        run: npm run build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # A manual run without the key still builds an installer, just without update files.
+          $extra = @()
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { $extra = @("--config", "src-tauri/tauri.unsigned.conf.json") }
+          npm run build -- @extra
+          if ($LASTEXITCODE -ne 0) { throw "The build failed" }
+      - name: Name the installer and write latest.json
+        if: github.ref_type == 'tag'
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $dir = "src-tauri/target/release/bundle/nsis"
+          $built = Get-ChildItem "$dir/*-setup.exe" | Select-Object -First 1
+          if (-not $built) { throw "No installer was built" }
+          $sig = "$($built.FullName).sig"
+          if (-not (Test-Path $sig)) { throw "The installer has no .sig file: the build didn't sign it" }
+          # No spaces in the name: it's in latest.json's URL. The signature is over the file's bytes, so renaming is fine.
+          $name = "genjiball-host-tool_${version}_x64-setup.exe"
+          Copy-Item $built.FullName "$dir/$name"
+          $latest = [ordered]@{
+            version  = $version
+            notes    = "See the release notes on GitHub"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = [ordered]@{
+                signature = (Get-Content $sig -Raw).Trim()
+                url       = "https://github.com/Genji-Ball-Team/genjiball-host-tool/releases/download/v$version/$name"
+              }
+            }
+          }
+          $latest | ConvertTo-Json -Depth 5 | Set-Content "$dir/latest.json" -Encoding utf8
       - name: Publish the release
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $files = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | ForEach-Object FullName)
-          if (-not $files) { throw "No installer was built" }
+          # The renamed installer and latest.json: the app's updater reads the latest release's latest.json.
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $dir = "src-tauri/target/release/bundle/nsis"
+          $files = @("$dir/genjiball-host-tool_${version}_x64-setup.exe", "$dir/latest.json")
+          foreach ($file in $files) { if (-not (Test-Path $file)) { throw "$file wasn't built" } }
           gh release view $env:GITHUB_REF_NAME *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:GITHUB_REF_NAME @files --clobber

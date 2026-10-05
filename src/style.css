@@ -25,6 +25,7 @@ section { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(-
 .good { color: var(--good); }
 .bad { color: var(--bad); }
 .banner { margin: 1rem 0 0; padding: .6rem .8rem; border-left: 3px solid var(--bad); background: #1c1012; }
+.banner.update { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; border-left-color: var(--good); background: #0f1c15; }
 .path { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.5rem; margin: 0 0 1rem; }

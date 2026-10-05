@@ -133,6 +133,15 @@ interface RankedCode {
   keepSecs: number;
 }
 
+/** Mirrors `UpdateStatus` in src-tauri/src/updates.rs. */
+interface UpdateStatus {
+  /** The version waiting to be installed. */
+  available: string | null;
+  checkedAt: string | null;
+  /** Why the last check failed: shown quietly. */
+  error: string | null;
+}
+
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
   if (!found) throw new Error(`#${id} is missing from index.html`);
@@ -525,6 +534,16 @@ async function refresh(): Promise<void> {
   await show(await invoke<AppState>("get_state"));
 }
 
+function renderUpdate(status: UpdateStatus): void {
+  el("update-banner").hidden = !status.available;
+  el("update-banner-text").textContent = status.available ? `Version ${status.available} is available (you have v${state.version}).` : "";
+  const line = el("update-state");
+  if (status.error) line.textContent = `Couldn't check for updates: ${status.error}`;
+  else if (status.available) line.textContent = `Version ${status.available} is available`;
+  else if (status.checkedAt) line.textContent = `Up to date (checked ${new Date(status.checkedAt).toLocaleTimeString()})`;
+  else line.textContent = "Checking…";
+}
+
 /** Actions running now. The buttons come back only when the last one ends. */
 let running = 0;
 
@@ -722,6 +741,13 @@ async function copyRankedCode(): Promise<void> {
 
 el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));
 
+function showUpdateError(message: string): void {
+  el("update-state").textContent = message;
+}
+
+el("update-check").addEventListener("click", () => void busy(async () => renderUpdate(await invoke<UpdateStatus>("check_for_update")), showUpdateError));
+el("update-install").addEventListener("click", () => void busy(() => invoke("install_update"), showUpdateError));
+
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
@@ -732,7 +758,11 @@ void busy(async () => {
     if (state.settingsError && event.payload.problem?.kind !== "settings") void refresh();
     else renderUploads(event.payload);
   });
+  await listen<UpdateStatus>("update-status", (event) => {
+    if (ready) renderUpdate(event.payload);
+  });
   await refresh();
+  renderUpdate(await invoke<UpdateStatus>("get_update_status"));
   if (state.hasToken) await checkSaved();
   else el("token").focus();
 });

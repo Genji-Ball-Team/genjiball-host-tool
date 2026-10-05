@@ -45,8 +45,8 @@ pub struct TopTags {
 
 /// `rankTags`: the server's rank tiers, lowest first, with no line in the game's list, then the
 /// leaderboard's top `config::TOP_TAGGED` players, an entry each, the best last, tagged with
-/// their place and rating. The game gives a player the last entry with their name, so a top
-/// player gets their place and everyone else in a tier its name. The list shows the top players
+/// their place and rating. A top player is left out of their tier, so everyone else in a tier
+/// gets its name (the game would take the last entry with their name anyway). The list shows the top players
 /// best first, under a line with `date`. Top players whose name the Workshop can't show are left
 /// out, and the next one takes their spot; their place stays as the site shows it.
 pub fn top_tags(tiers: &RankTiers, leaderboard: &Leaderboard, date: &str) -> TopTags {
@@ -87,7 +87,12 @@ pub fn top_tags(tiers: &RankTiers, leaderboard: &Leaderboard, date: &str) -> Top
             label: tier.label.clone(),
             color: tier.color,
             guide: String::new(),
-            names: tier.names.clone(),
+            names: tier
+                .names
+                .iter()
+                .filter(|name| !top.iter().any(|t| t.names.contains(name)))
+                .cloned()
+                .collect(),
         })
         .collect();
     entries.extend(top);
@@ -491,16 +496,13 @@ mod tests {
             entries.iter().map(|t| t.label.as_str()).collect::<Vec<_>>(),
             vec!["Apprentice", "Champion", "#1 | 2600"]
         );
-        // The tiers aren't in the list; the top player is, and comes last so their tag wins.
+        // The tiers aren't in the list, and the top player isn't in their tier.
         assert_eq!(entries[0].guide, "");
         assert_eq!(entries[1].guide, "");
-        assert_eq!(
-            entries[1].names,
-            vec!["Kenzo".to_string(), "Genji".to_string()]
-        );
+        assert_eq!(entries[1].names, vec!["Genji".to_string()]);
         assert_eq!(entries[2].guide, "#1 Kenzo - 2600");
         let (action, names, _) = rank_tags_action(&built.tags).unwrap();
-        assert_eq!(names, 4);
+        assert_eq!(names, 3);
         assert!(
             action.contains(r#"Array(Custom String("Apprentice"), Custom Color(205, 127, 50, 255), Custom String(""), Custom String("Hana"))"#),
             "{action}"

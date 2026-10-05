@@ -1,3 +1,4 @@
+mod afk;
 mod config;
 mod credentials;
 mod dpapi;
@@ -17,6 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use afk::AfkStatus;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -224,6 +226,31 @@ fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader
         folder.as_ref().map(|f| f.path.as_path()),
         page,
     )
+}
+
+/// Turns host AFK on or off: from then on, rounds that start aren't rated for the host (`afk.rs`).
+/// The live log is read now, so a round already started (even one not read yet) still counts.
+#[tauri::command]
+fn set_afk(on: bool, store: State<Store>, uploader: State<Uploader>) -> Result<AfkStatus, String> {
+    let settings = store.get();
+    let started = match log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists) {
+        Some(folder) => live_round_starts(&folder.path)?,
+        None => Vec::new(),
+    };
+    Ok(uploader.set_afk(on, &started))
+}
+
+/// The rounds started in the live log (the newest in `folder`), now.
+fn live_round_starts(folder: &Path) -> Result<Vec<log_scan::RoundStart>, String> {
+    let live =
+        watcher::newest_log(folder).map_err(|e| format!("Couldn't read the log folder: {e}"))?;
+    let Some(path) = live else {
+        return Ok(Vec::new());
+    };
+    // Locked for a moment while the game writes it: the host clicks again.
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("Couldn't read the match log ({e}). Try again"))?;
+    Ok(log_scan::round_starts(&String::from_utf8_lossy(&bytes)))
 }
 
 /// Tries a failed upload again now, through the upload queue.
@@ -495,6 +522,7 @@ pub fn run() {
             build_ranked_code,
             get_upload_history,
             retry_upload,
+            set_afk,
             open_match,
             get_update_status,
             check_for_update,

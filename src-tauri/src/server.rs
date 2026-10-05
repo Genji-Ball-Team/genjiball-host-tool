@@ -352,17 +352,34 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
     }
 }
 
-/// Sends a log file, unchanged, to `POST /api/upload`, as hosted in `region` (the host's home
-/// region for `None`).
+/// What an upload says about its file, besides the file itself: its headers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UploadInfo<'a> {
+    /// `X-Log-File`.
+    pub file_name: &'a str,
+    /// `X-Log-Started-At`: when the file was started.
+    pub started_at: Option<&'a str>,
+    /// `X-Region`: the region it was hosted in, `None` for the host's home region.
+    pub region: Option<&'a str>,
+    /// `X-Host-Afk`: the rounds of its matches that started while the host was AFK
+    /// (`afk::Afk::header`), `None` for none.
+    pub host_afk: Option<&'a str>,
+}
+
+/// Sends a log file, unchanged, to `POST /api/upload`, with the headers in `info`.
 pub async fn upload(
     server_url: &str,
     token: &str,
-    file_name: &str,
-    started_at: Option<&str>,
-    region: Option<&str>,
+    info: UploadInfo<'_>,
     body: Vec<u8>,
     timeout: Duration,
 ) -> UploadOutcome {
+    let UploadInfo {
+        file_name,
+        started_at,
+        region,
+        host_afk,
+    } = info;
     let retry = |e: reqwest::Error| UploadOutcome::Retry {
         message: format!("Couldn't reach the server: {}", e.without_url()),
         after: None,
@@ -387,6 +404,9 @@ pub async fn upload(
     }
     if let Some(region) = region {
         request = request.header("X-Region", region);
+    }
+    if let Some(host_afk) = host_afk {
+        request = request.header("X-Host-Afk", host_afk);
     }
     let response = match request.send().await {
         Ok(response) => response,
@@ -710,15 +730,50 @@ mod tests {
         let outcome = run(upload(
             &url,
             "t",
-            "Log-a.txt",
-            None,
-            Some("na"),
+            UploadInfo {
+                file_name: "Log-a.txt",
+                region: Some("na"),
+                ..UploadInfo::default()
+            },
             b"x".to_vec(),
             timeout,
         ));
         assert!(matches!(outcome, UploadOutcome::Stored(a) if a.region.as_deref() == Some("na")));
         let request = request.recv().unwrap().to_ascii_lowercase();
         assert!(request.contains("\r\nx-region: na\r\n"), "{request}");
+        assert!(!request.contains("x-host-afk"), "{request}");
+    }
+
+    #[test]
+    fn sends_the_hosts_afk_rounds() {
+        use tauri::async_runtime::block_on as run;
+        let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
+        let (seen, request) = std::sync::mpsc::channel();
+        let body = r#"{"result":"stored","matches":[]}"#;
+        let url = test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+            "x",
+            seen,
+        );
+        run(upload(
+            &url,
+            "t",
+            UploadInfo {
+                file_name: "Log-a.txt",
+                host_afk: Some("482913507226:3,4,5"),
+                ..UploadInfo::default()
+            },
+            b"x".to_vec(),
+            timeout,
+        ));
+        let request = request.recv().unwrap().to_ascii_lowercase();
+        assert!(
+            request.contains("\r\nx-host-afk: 482913507226:3,4,5\r\n"),
+            "{request}"
+        );
     }
 
     #[test]
@@ -932,9 +987,10 @@ mod tests {
             run(upload(
                 &unknown,
                 "t",
-                "Log-a.txt",
-                None,
-                None,
+                UploadInfo {
+                    file_name: "Log-a.txt",
+                    ..UploadInfo::default()
+                },
                 b"x".to_vec(),
                 timeout
             )),
@@ -945,9 +1001,10 @@ mod tests {
             run(upload(
                 &too_big,
                 "t",
-                "Log-a.txt",
-                None,
-                None,
+                UploadInfo {
+                    file_name: "Log-a.txt",
+                    ..UploadInfo::default()
+                },
                 b"x".to_vec(),
                 timeout
             )),
@@ -959,9 +1016,10 @@ mod tests {
             run(upload(
                 &failing,
                 "t",
-                "Log-a.txt",
-                None,
-                None,
+                UploadInfo {
+                    file_name: "Log-a.txt",
+                    ..UploadInfo::default()
+                },
                 b"x".to_vec(),
                 timeout
             )),

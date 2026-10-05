@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::Serialize;
 
 use crate::config;
-use crate::log_scan::{self, Scan};
+use crate::log_scan::{self, RoundStart, Scan};
 use crate::settings::Settings;
 
 /// A file to upload.
@@ -114,6 +114,8 @@ impl Default for Timing {
 pub struct Tracker {
     folder: PathBuf,
     files: HashMap<String, Tracked>,
+    /// The newest log file in the folder at the last poll (`newest_log`): the one being written.
+    live: Option<String>,
     /// Set from the settings before each poll.
     pub timing: Timing,
 }
@@ -138,6 +140,7 @@ impl Tracker {
         let quiet = self.timing.quiet;
         let mut poll = Poll::default();
         let mut seen = Vec::new();
+        self.live = None;
         for entry in fs::read_dir(folder)? {
             let Ok(entry) = entry else { continue };
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
@@ -151,6 +154,9 @@ impl Tracker {
             let Ok(meta) = fs::metadata(&path) else {
                 continue;
             };
+            if meta.is_file() && self.live.as_ref().is_none_or(|live| name > *live) {
+                self.live = Some(name.clone());
+            }
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             let age = clock.duration_since(modified).unwrap_or_default();
             // When the file was started, not last written: a match that began before `since` and
@@ -226,6 +232,20 @@ impl Tracker {
         Ok(poll)
     }
 
+    /// The newest log file at the last poll: the one the game is writing, if any is.
+    pub fn live(&self) -> Option<&str> {
+        self.live.as_deref()
+    }
+
+    /// The rounds started in the live log, as last read. None when it isn't read: it isn't a
+    /// ranked log, or it hasn't changed since it was uploaded as it is (nor been read since).
+    pub fn live_rounds(&self) -> &[RoundStart] {
+        self.live
+            .as_ref()
+            .and_then(|name| self.files.get(name))
+            .map_or(&[], |t| &t.scan.round_starts)
+    }
+
     /// The upload of `name` worked, or won't work however often it's tried. Either way it's in the
     /// upload record now, so it's no longer waiting.
     pub fn sent(&mut self, name: &str) {
@@ -284,6 +304,25 @@ impl Tracker {
         queue.sort_by(|a, b| a.file.cmp(&b.file));
         queue
     }
+}
+
+/// The newest log file in `folder` (by name: Overwatch names them by when they start), the one
+/// the game is writing if it's writing one. The same as `Tracker::live`.
+pub fn newest_log(folder: &Path) -> io::Result<Option<PathBuf>> {
+    let mut newest: Option<(String, PathBuf)> = None;
+    for entry in fs::read_dir(folder)? {
+        let Ok(entry) = entry else { continue };
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !log_scan::is_log_file(&name) || !fs::metadata(entry.path()).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        if newest.as_ref().is_none_or(|(n, _)| name > *n) {
+            newest = Some((name, entry.path()));
+        }
+    }
+    Ok(newest.map(|(_, path)| path))
 }
 
 #[cfg(test)]
@@ -897,6 +936,42 @@ mod tests {
             ..timing
         };
         assert_eq!(odd.backoff(1), Duration::from_secs(12));
+    }
+
+    #[test]
+    fn knows_the_live_log_and_its_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        assert_eq!(newest_log(dir.path()).unwrap(), None);
+        write(
+            dir.path(),
+            "Log-2026-10-02-19-00-00.txt",
+            EXAMPLE,
+            Duration::ZERO,
+        );
+        write(dir.path(), NAME, &playing(), Duration::ZERO);
+        write(dir.path(), "notes.txt", EXAMPLE, Duration::ZERO);
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(tracker.live(), Some(NAME));
+        assert_eq!(newest_log(dir.path()).unwrap(), Some(dir.path().join(NAME)));
+        let rounds: Vec<u32> = tracker.live_rounds().iter().map(|s| s.round).collect();
+        assert_eq!(rounds, [1, 2, 3]);
+
+        // Uploaded as it is: not read, so no rounds, but still the live log.
+        let sent = |name: &str| {
+            Some(Sent {
+                size: fs::metadata(dir.path().join(name)).unwrap().len(),
+                match_ends: 0,
+            })
+        };
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, sent)
+            .unwrap();
+        assert_eq!(tracker.live(), Some(NAME));
+        assert!(tracker.live_rounds().is_empty());
     }
 
     #[test]

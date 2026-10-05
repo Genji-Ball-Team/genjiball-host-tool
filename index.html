@@ -12,6 +12,7 @@
       <header>
         <h1>Genji Ball Host Tool</h1>
         <span class="muted" id="version"></span>
+        <span class="tag afk" id="afk-tag" hidden>AFK</span>
       </header>
 
       <p class="banner bad" id="settings-error" hidden></p>
@@ -23,6 +24,16 @@
 
       <section id="welcome" hidden>
         <p class="lede">Paste the host token an admin gave you. The tool checks it with the ranked server, then keeps it on this PC, encrypted for your Windows account.</p>
+      </section>
+
+      <section id="afk">
+        <h2>AFK</h2>
+        <div class="row">
+          <button type="button" class="quiet" id="afk-toggle" aria-pressed="false" aria-describedby="afk-note">Go AFK</button>
+          <span class="status" id="afk-state" role="status"></span>
+        </div>
+        <p class="note" id="afk-note">Your rating doesn't change in rounds that start while AFK is on. Other players still count. AFK stays on across matches until you turn it off.</p>
+        <p class="note bad" id="afk-error" hidden></p>
       </section>
 
       <section>

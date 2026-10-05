@@ -162,8 +162,8 @@ pub const RELEASE_CACHE_SECS: Tunable = Tunable {
     max: 24 * 3600,
 };
 
-/// How many of the region's best players the ranked code tags with their place and rating. At
-/// most 10: past that, the game's guide puts a line above its own "Live leaderboard" header.
+/// How many of the region's best players the ranked code tags with their place and rating, and
+/// the game lists on the right (its "top 10 list": GenjiBall-CE `docs/rank-tags.md` allows 60).
 pub const TOP_TAGGED: usize = 10;
 
 /// A match's page on the ranked site, under the server URL, with its id (`/match?id=12`). Only

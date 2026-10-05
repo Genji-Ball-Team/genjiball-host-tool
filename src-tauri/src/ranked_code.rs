@@ -2,21 +2,20 @@
 //! `docs/rank-tags.md` (on `v1.3.3R`) defines it. Pure: the release and the leaderboard are
 //! fetched elsewhere.
 //!
-//! The tags are the region's top players, not the server's rank tiers: each one is a "tier" of
-//! their own, so the tag over them is their place and rating (`#1 | 2143`), and everyone else gets
-//! none. The game needs no change for it.
+//! The tags are the region's top players: each one is an entry of their own, so the tag over them
+//! is their place and rating (`#1 | 2143`), and everyone else gets none.
 
 use crate::config;
 use crate::server::Leaderboard;
 
-/// One tier of `rankTags`.
+/// One entry of `rankTags`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tier {
     /// The tag over the player.
     pub label: String,
     /// RGBA, 0–255.
     pub color: [u8; 4],
-    /// A line in the game's guide.
+    /// The entry's line in the game's top 10 list.
     pub guide: String,
     /// Display names, raw: not escaped for the Workshop yet.
     pub names: Vec<String>,
@@ -25,36 +24,17 @@ pub struct Tier {
 /// The game's `rankTags`, as data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RankTags {
-    /// `rankTags[0]`, a line in the game's guide.
+    /// `rankTags[0]`, the line under the top 10 list's header.
     pub header: String,
-    /// Lowest tier first.
+    /// The best last.
     pub tiers: Vec<Tier>,
 }
 
 /// The tag's colour for a player below the lowest tier.
 const UNTIERED_COLOR: [u8; 4] = [255, 255, 255, 255];
 
-/// Where the game's guide (`Rank tags - tier guide`, GenjiBall-CE `workshop/genjiball.txt`) puts
-/// its lines: HUD sort orders, lower first. Its own "Live leaderboard" line is at -40 and made
-/// first, `rankTags[0]` at -39 and made next, then each tier at `-30 - index`, highest first.
-const GUIDE_HEADER_SORT: i64 = -39;
-const GUIDE_TIER_SORT: i64 = -30;
-
-/// The guide's lines from the top, after its own "Live leaderboard": `None` for `rankTags[0]`,
-/// `Some(i)` for tier `i` (1 is the lowest). Lines with the same sort order are shown in the order
-/// the game made them, so past 8 tiers a tier's line goes above `rankTags[0]`.
-fn guide_order(tiers: usize) -> Vec<Option<usize>> {
-    // (sort order, when it's made, line)
-    let mut lines = vec![(GUIDE_HEADER_SORT, 0, None)];
-    for i in 1..=tiers {
-        lines.push((GUIDE_TIER_SORT - i as i64, 1 + tiers - i, Some(i)));
-    }
-    lines.sort();
-    lines.into_iter().map(|(_, _, line)| line).collect()
-}
-
-/// `rankTags` for the leaderboard's top `config::TOP_TAGGED` players: a tier each, the best
-/// highest, tagged with their place and rating. The guide lists them best first, under a line
+/// `rankTags` for the leaderboard's top `config::TOP_TAGGED` players: an entry each, the best
+/// last, tagged with their place and rating. The game's list shows them best first, under a line
 /// with `date`. Players whose name the Workshop can't show are left out (counted, the second
 /// value), and the next one takes their spot; their place stays as the site shows it.
 pub fn top_tags(leaderboard: &Leaderboard, date: &str) -> (RankTags, usize) {
@@ -82,21 +62,11 @@ pub fn top_tags(leaderboard: &Leaderboard, date: &str) -> (RankTags, usize) {
     }
     top.reverse();
 
-    let title = if top.is_empty() {
+    let header = if top.is_empty() {
         "No ranked players yet".to_string()
     } else {
         format!("Top {} on {date}", top.len())
     };
-    // The guide's lines are each tier's own: put the texts in them in the order they show.
-    let mut texts = vec![title];
-    texts.extend(top.iter().rev().map(|t| t.guide.clone()));
-    let mut header = String::new();
-    for (line, text) in guide_order(top.len()).into_iter().zip(texts) {
-        match line {
-            None => header = text,
-            Some(i) => top[i - 1].guide = text,
-        }
-    }
     (RankTags { header, tiers: top }, skipped)
 }
 
@@ -370,29 +340,6 @@ mod tests {
         }
     }
 
-    /// The guide's texts from the top, as the game shows them (`guide_order`).
-    fn guide(tags: &RankTags) -> Vec<String> {
-        guide_order(tags.tiers.len())
-            .into_iter()
-            .map(|line| match line {
-                None => tags.header.clone(),
-                Some(i) => tags.tiers[i - 1].guide.clone(),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_guide_follows_the_games_sort_order() {
-        // Up to 8 tiers: rankTags[0], then the highest tier down.
-        assert_eq!(guide_order(3), vec![None, Some(3), Some(2), Some(1)]);
-        // 10: tier 10 shares -40 with the game's header and tier 9 -39 with rankTags[0], each
-        // made after it.
-        assert_eq!(
-            guide_order(10),
-            [vec![Some(10), None], (1..=9).rev().map(Some).collect()].concat()
-        );
-    }
-
     #[test]
     fn tags_the_top_players_with_place_and_rating() {
         let (tags, skipped) = top_tags(
@@ -432,18 +379,18 @@ mod tests {
     }
 
     #[test]
-    fn tags_only_the_top_ten_and_lists_them_best_first() {
+    fn tags_only_the_top_ten_the_best_last() {
         let players = (1..=15)
             .map(|rank| ranked(rank, &format!("P{rank}"), 2000.0 - f64::from(rank), None))
             .collect();
         let (tags, _) = top_tags(&board(players), "2026-10-05");
         assert_eq!(tags.tiers.len(), config::TOP_TAGGED);
-        // Lowest first: the best player is the highest tier.
+        // The best last: the game looks names up from the end.
         assert_eq!(tags.tiers[9].names, vec!["P1".to_string()]);
         assert_eq!(tags.tiers[0].names, vec!["P10".to_string()]);
-        let mut expected = vec!["Top 10 on 2026-10-05".to_string()];
-        expected.extend((1..=10).map(|r| format!("#{r} P{r} - {}", 2000 - r)));
-        assert_eq!(guide(&tags), expected);
+        assert_eq!(tags.header, "Top 10 on 2026-10-05");
+        assert_eq!(tags.tiers[9].guide, "#1 P1 - 1999");
+        assert_eq!(tags.tiers[0].guide, "#10 P10 - 1990");
     }
 
     #[test]

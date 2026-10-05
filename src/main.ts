@@ -127,6 +127,7 @@ interface RankedCode {
   region: string | null;
   release: string;
   tagsUpdatedAt: string;
+  top: number;
   names: number;
   skippedNames: number;
   keepSecs: number;
@@ -713,10 +714,10 @@ async function copyRankedCode(): Promise<void> {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
   }
-  const names = built.names === 1 ? "1 player" : `${built.names} players`;
+  const region = built.region ? `${regionLabel(built.region)} ` : "";
+  const tiers = built.names === 1 ? "1 more with their rank" : `${built.names} more with their rank`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
-  const tags = built.region ? `${regionLabel(built.region)} top ${names} tagged` : `top ${names} tagged`;
-  setRankedCodeState(`Copied. Genji Ball ${built.release}, ${tags} with place and rating, from the leaderboard at ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`, "good");
+  setRankedCodeState(`Copied. Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`, "good");
 }
 
 el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));

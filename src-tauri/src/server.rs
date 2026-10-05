@@ -145,6 +145,74 @@ pub fn read_match_states(status: u16, body: &str) -> Result<Vec<MatchState>, Str
     }
 }
 
+/// One tier of the rank tags, as `GET /api/rank-tags` gives it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct RankTier {
+    /// The tag over the player (`Grandmaster`).
+    pub label: String,
+    /// RGBA, 0–255.
+    pub color: [u8; 4],
+    /// The tier's line in the game's guide (`Grandmaster - 1900`).
+    pub guide: String,
+    /// Display names, raw: not escaped for the Workshop yet.
+    pub names: Vec<String>,
+}
+
+/// What `GET /api/rank-tags` answers: the rank tiers and who's in each.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RankTiers {
+    /// The line under the game's guide header (`Ranks updated 2026-10-03`).
+    pub header: String,
+    /// When the server worked the tiers out (ISO 8601).
+    pub updated_at: String,
+    /// The region whose ratings they're from. `None` from a server without regions.
+    #[serde(default)]
+    pub region: Option<String>,
+    /// Lowest tier first.
+    pub tiers: Vec<RankTier>,
+}
+
+/// What a `GET /api/rank-tags` answer means.
+pub fn read_rank_tags(status: u16, body: &str) -> Result<RankTiers, String> {
+    match status {
+        200 => serde_json::from_str(body)
+            .map_err(|_| "The server's rank tags weren't what the host tool expected".into()),
+        // An older server without the route, or the wrong URL.
+        404 => Err(
+            "This server has no rank tags (it may need updating), or the server URL is wrong"
+                .into(),
+        ),
+        _ => Err(format!(
+            "The server answered {status} when asked for the rank tags"
+        )),
+    }
+}
+
+/// Asks the server for a region's rank tags (its first region's for `None`). Public: no token.
+pub async fn rank_tags(
+    server_url: &str,
+    region: Option<&str>,
+    timeout: Duration,
+) -> Result<RankTiers, String> {
+    let mut url =
+        url::Url::parse(&format!("{server_url}/api/rank-tags")).map_err(|e| e.to_string())?;
+    if let Some(region) = region {
+        url.query_pairs_mut().append_pair("region", region);
+    }
+    let response = client(timeout)?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    read_rank_tags(status, &body)
+}
+
 /// A player's tier on the leaderboard, as `GET /api/leaderboard` gives it.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct LeaderboardTier {
@@ -719,6 +787,48 @@ mod tests {
         assert!(read_match_states(200, "<html>").is_err());
         // An older server without the route.
         assert!(read_match_states(404, r#"{"error":"not_found"}"#).is_err());
+    }
+
+    #[test]
+    fn reads_rank_tags() {
+        let body = r#"{"header":"Ranks updated 2026-10-03","updatedAt":"2026-10-03T12:00:00Z","region":"na","tiers":[{"label":"Apprentice","color":[205,127,50,255],"guide":"Apprentice - 1300","names":["Kenzo"]},{"label":"Master","color":[255,215,0,255],"guide":"Master - 1600","names":[]}]}"#;
+        assert_eq!(
+            read_rank_tags(200, body).unwrap(),
+            RankTiers {
+                header: "Ranks updated 2026-10-03".into(),
+                updated_at: "2026-10-03T12:00:00Z".into(),
+                region: Some("na".into()),
+                tiers: vec![
+                    RankTier {
+                        label: "Apprentice".into(),
+                        color: [205, 127, 50, 255],
+                        guide: "Apprentice - 1300".into(),
+                        names: vec!["Kenzo".into()],
+                    },
+                    RankTier {
+                        label: "Master".into(),
+                        color: [255, 215, 0, 255],
+                        guide: "Master - 1600".into(),
+                        names: vec![],
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn rank_tags_errors_say_what_went_wrong() {
+        assert!(read_rank_tags(200, "<html>").is_err());
+        // A colour out of range isn't a colour.
+        assert!(read_rank_tags(
+            200,
+            r#"{"header":"","updatedAt":"","tiers":[{"label":"A","color":[256,0,0,255],"guide":"A","names":[]}]}"#
+        )
+        .is_err());
+        assert!(read_rank_tags(404, r#"{"error":"not_found"}"#)
+            .unwrap_err()
+            .contains("no rank tags"));
+        assert!(read_rank_tags(503, "").unwrap_err().contains("503"));
     }
 
     #[test]

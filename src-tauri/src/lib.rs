@@ -323,6 +323,9 @@ struct RankedCode {
     release: String,
     /// When the leaderboard was read for the tags (ISO 8601).
     tags_updated_at: String,
+    /// Top players tagged with their place and rating.
+    top: usize,
+    /// Names tagged with their rank tier.
     names: usize,
     /// Names the Workshop can't show, left out.
     skipped_names: usize,
@@ -347,10 +350,11 @@ async fn build_ranked_code(
         None => home_region(&store, &server_url, timeout).await?,
     };
     let (release, base) = releases.latest(keep, timeout).await?;
+    let tiers = server::rank_tags(&server_url, region.as_deref(), timeout).await?;
     let leaderboard = server::leaderboard(&server_url, region.as_deref(), timeout).await?;
     let now = chrono::Local::now();
-    let (tags, skipped) = ranked_code::top_tags(&leaderboard, &now.format("%Y-%m-%d").to_string());
-    let filled = ranked_code::fill(&base, &tags)?;
+    let built = ranked_code::top_tags(&tiers, &leaderboard, &now.format("%Y-%m-%d").to_string());
+    let filled = ranked_code::fill(&base, &built.tags)?;
     Ok(RankedCode {
         code: filled.code,
         server_url,
@@ -359,8 +363,9 @@ async fn build_ranked_code(
         region: leaderboard.region,
         release,
         tags_updated_at: now.to_rfc3339(),
-        names: filled.names,
-        skipped_names: skipped + filled.skipped,
+        top: built.top,
+        names: filled.names - built.top,
+        skipped_names: built.skipped + filled.skipped,
         keep_secs: keep.as_secs(),
     })
 }

@@ -2,11 +2,11 @@
 //! `docs/rank-tags.md` (on `v1.3.3R`) defines it. Pure: the release and the leaderboard are
 //! fetched elsewhere.
 //!
-//! The tags are the region's top players: each one is an entry of their own, so the tag over them
-//! is their place and rating (`#1 | 2143`), and everyone else gets none.
+//! The region's top players are an entry each, so the tag over them is their place and rating
+//! (`#1 | 2143`). Before them come the rank tiers, so everyone else in a tier gets its name.
 
 use crate::config;
-use crate::server::Leaderboard;
+use crate::server::{Leaderboard, RankTiers};
 
 /// One entry of `rankTags`.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,7 +15,7 @@ pub struct Tier {
     pub label: String,
     /// RGBA, 0–255.
     pub color: [u8; 4],
-    /// The entry's line in the game's top 10 list.
+    /// The entry's line in the game's top 10 list. Empty for a rank tier: the game doesn't list it.
     pub guide: String,
     /// Display names, raw: not escaped for the Workshop yet.
     pub names: Vec<String>,
@@ -26,18 +26,30 @@ pub struct Tier {
 pub struct RankTags {
     /// `rankTags[0]`, the line under the top 10 list's header.
     pub header: String,
-    /// The best last.
+    /// The rank tiers, lowest first, then the top players, the best last.
     pub tiers: Vec<Tier>,
 }
 
 /// The tag's colour for a player below the lowest tier.
 const UNTIERED_COLOR: [u8; 4] = [255, 255, 255, 255];
 
-/// `rankTags` for the leaderboard's top `config::TOP_TAGGED` players: an entry each, the best
-/// last, tagged with their place and rating. The game's list shows them best first, under a line
-/// with `date`. Players whose name the Workshop can't show are left out (counted, the second
-/// value), and the next one takes their spot; their place stays as the site shows it.
-pub fn top_tags(leaderboard: &Leaderboard, date: &str) -> (RankTags, usize) {
+/// What `top_tags` built.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopTags {
+    pub tags: RankTags,
+    /// Top players tagged with their place and rating.
+    pub top: usize,
+    /// Top players left out: the Workshop can't show their names.
+    pub skipped: usize,
+}
+
+/// `rankTags`: the server's rank tiers, lowest first, with no line in the game's list, then the
+/// leaderboard's top `config::TOP_TAGGED` players, an entry each, the best last, tagged with
+/// their place and rating. The game gives a player the last entry with their name, so a top
+/// player gets their place and everyone else in a tier its name. The list shows the top players
+/// best first, under a line with `date`. Top players whose name the Workshop can't show are left
+/// out, and the next one takes their spot; their place stays as the site shows it.
+pub fn top_tags(tiers: &RankTiers, leaderboard: &Leaderboard, date: &str) -> TopTags {
     let mut skipped = 0;
     let mut top = Vec::new();
     for player in &leaderboard.players {
@@ -67,7 +79,26 @@ pub fn top_tags(leaderboard: &Leaderboard, date: &str) -> (RankTags, usize) {
     } else {
         format!("Top {} on {date}", top.len())
     };
-    (RankTags { header, tiers: top }, skipped)
+    let count = top.len();
+    let mut entries: Vec<Tier> = tiers
+        .tiers
+        .iter()
+        .map(|tier| Tier {
+            label: tier.label.clone(),
+            color: tier.color,
+            guide: String::new(),
+            names: tier.names.clone(),
+        })
+        .collect();
+    entries.extend(top);
+    TopTags {
+        tags: RankTags {
+            header,
+            tiers: entries,
+        },
+        top: count,
+        skipped,
+    }
 }
 
 /// The rule's first line. It's in the code exactly once.
@@ -204,7 +235,7 @@ pub fn fill(code: &str, tags: &RankTags) -> Result<Filled, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{LeaderboardTier, Ranked};
+    use crate::server::{LeaderboardTier, RankTier, Ranked};
 
     /// The real rule and its neighbours, from GenjiBall-CE `workshop/genjiball.txt` on `v1.3.3R`.
     const EXAMPLE: &str = include_str!("../tests/fixtures/ranks-rule-example.txt");
@@ -333,6 +364,15 @@ mod tests {
         }
     }
 
+    fn no_tiers() -> RankTiers {
+        RankTiers {
+            header: String::new(),
+            updated_at: String::new(),
+            region: Some("eu".into()),
+            tiers: vec![],
+        }
+    }
+
     fn board(players: Vec<Ranked>) -> Leaderboard {
         Leaderboard {
             region: Some("eu".into()),
@@ -342,7 +382,8 @@ mod tests {
 
     #[test]
     fn tags_the_top_players_with_place_and_rating() {
-        let (tags, skipped) = top_tags(
+        let TopTags { tags, skipped, .. } = top_tags(
+            &no_tiers(),
             &board(vec![
                 ranked(1, "Kenzo", 2143.0, Some([150, 0, 0])),
                 ranked(2, "Hana", 1010.4, None),
@@ -383,7 +424,8 @@ mod tests {
         let players = (1..=15)
             .map(|rank| ranked(rank, &format!("P{rank}"), 2000.0 - f64::from(rank), None))
             .collect();
-        let (tags, _) = top_tags(&board(players), "2026-10-05");
+        let TopTags { tags, top, .. } = top_tags(&no_tiers(), &board(players), "2026-10-05");
+        assert_eq!(top, config::TOP_TAGGED);
         assert_eq!(tags.tiers.len(), config::TOP_TAGGED);
         // The best last: the game looks names up from the end.
         assert_eq!(tags.tiers[9].names, vec!["P1".to_string()]);
@@ -395,7 +437,8 @@ mod tests {
 
     #[test]
     fn skips_names_the_workshop_cant_show_and_keeps_site_places() {
-        let (tags, skipped) = top_tags(
+        let TopTags { tags, skipped, .. } = top_tags(
+            &no_tiers(),
             &board(vec![
                 ranked(1, "{0}", 2100.0, None),
                 ranked(2, "Kenzo", 2000.0, None),
@@ -409,12 +452,58 @@ mod tests {
 
     #[test]
     fn an_empty_leaderboard_tags_nobody() {
-        let (tags, skipped) = top_tags(&board(vec![]), "2026-10-05");
+        let TopTags { tags, skipped, .. } = top_tags(&no_tiers(), &board(vec![]), "2026-10-05");
         assert_eq!((tags.tiers.len(), skipped), (0, 0));
         assert_eq!(tags.header, "No ranked players yet");
         assert_eq!(
             rank_tags_action(&tags).unwrap().0,
             r#"Set Global Variable(rankTags, Array(Custom String("No ranked players yet")));"#
+        );
+    }
+
+    #[test]
+    fn puts_the_tiers_before_the_top_players_with_no_list_line() {
+        let tiers = RankTiers {
+            tiers: vec![
+                RankTier {
+                    label: "Apprentice".into(),
+                    color: [205, 127, 50, 255],
+                    guide: "Apprentice - 1300".into(),
+                    names: vec!["Hana".into()],
+                },
+                RankTier {
+                    label: "Champion".into(),
+                    color: [150, 0, 0, 255],
+                    guide: "Champion - 2500".into(),
+                    names: vec!["Kenzo".into(), "Genji".into()],
+                },
+            ],
+            ..no_tiers()
+        };
+        let built = top_tags(
+            &tiers,
+            &board(vec![ranked(1, "Kenzo", 2600.0, Some([150, 0, 0]))]),
+            "2026-10-05",
+        );
+        assert_eq!((built.top, built.skipped), (1, 0));
+        let entries = &built.tags.tiers;
+        assert_eq!(
+            entries.iter().map(|t| t.label.as_str()).collect::<Vec<_>>(),
+            vec!["Apprentice", "Champion", "#1 | 2600"]
+        );
+        // The tiers aren't in the list; the top player is, and comes last so their tag wins.
+        assert_eq!(entries[0].guide, "");
+        assert_eq!(entries[1].guide, "");
+        assert_eq!(
+            entries[1].names,
+            vec!["Kenzo".to_string(), "Genji".to_string()]
+        );
+        assert_eq!(entries[2].guide, "#1 Kenzo - 2600");
+        let (action, names, _) = rank_tags_action(&built.tags).unwrap();
+        assert_eq!(names, 4);
+        assert!(
+            action.contains(r#"Array(Custom String("Apprentice"), Custom Color(205, 127, 50, 255), Custom String(""), Custom String("Hana"))"#),
+            "{action}"
         );
     }
 }

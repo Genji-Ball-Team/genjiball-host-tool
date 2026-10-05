@@ -321,7 +321,7 @@ struct RankedCode {
     region: Option<String>,
     /// The GenjiBall-CE release it's built from (`1.3.3R`).
     release: String,
-    /// When the server worked the rank tags out (ISO 8601).
+    /// When the leaderboard was read for the tags (ISO 8601).
     tags_updated_at: String,
     names: usize,
     /// Names the Workshop can't show, left out.
@@ -331,7 +331,8 @@ struct RankedCode {
     keep_secs: u64,
 }
 
-/// The latest ranked release's code with the rank tags of the current server and region in it.
+/// The latest ranked release's code with the top players of the current server and region tagged
+/// in it.
 #[tauri::command]
 async fn build_ranked_code(
     store: State<'_, Store>,
@@ -346,18 +347,20 @@ async fn build_ranked_code(
         None => home_region(&store, &server_url, timeout).await?,
     };
     let (release, base) = releases.latest(keep, timeout).await?;
-    let tags = server::rank_tags(&server_url, region.as_deref(), timeout).await?;
+    let leaderboard = server::leaderboard(&server_url, region.as_deref(), timeout).await?;
+    let now = chrono::Local::now();
+    let (tags, skipped) = ranked_code::top_tags(&leaderboard, &now.format("%Y-%m-%d").to_string());
     let filled = ranked_code::fill(&base, &tags)?;
     Ok(RankedCode {
         code: filled.code,
         server_url,
         chosen_region: settings.region,
         requested_region: region,
-        region: tags.region,
+        region: leaderboard.region,
         release,
-        tags_updated_at: tags.updated_at,
+        tags_updated_at: now.to_rfc3339(),
         names: filled.names,
-        skipped_names: filled.skipped,
+        skipped_names: skipped + filled.skipped,
         keep_secs: keep.as_secs(),
     })
 }

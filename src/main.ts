@@ -123,7 +123,7 @@ interface RankedCode {
   chosenRegion: string | null;
   /** The region the tags were asked for: the one picked, else the home region. */
   requestedRegion: string | null;
-  /** Whose rank tags are in it. */
+  /** Whose leaderboard the tags are from. */
   region: string | null;
   release: string;
   tagsUpdatedAt: string;
@@ -713,10 +713,10 @@ async function copyRankedCode(): Promise<void> {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
   }
-  const names = built.names === 1 ? "1 name" : `${built.names} names`;
-  const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show them)` : "";
-  const tags = built.region ? `${regionLabel(built.region)} rank tags` : "rank tags";
-  setRankedCodeState(`Copied. Genji Ball ${built.release}, ${tags} from ${new Date(built.tagsUpdatedAt).toLocaleString()}, ${names}${skipped}.`, "good");
+  const names = built.names === 1 ? "1 player" : `${built.names} players`;
+  const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
+  const tags = built.region ? `${regionLabel(built.region)} top ${names} tagged` : `top ${names} tagged`;
+  setRankedCodeState(`Copied. Genji Ball ${built.release}, ${tags} with place and rating, from the leaderboard at ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`, "good");
 }
 
 el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));

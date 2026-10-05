@@ -145,58 +145,56 @@ pub fn read_match_states(status: u16, body: &str) -> Result<Vec<MatchState>, Str
     }
 }
 
-/// One tier of the rank tags, as `GET /api/rank-tags` gives it.
+/// A player's tier on the leaderboard, as `GET /api/leaderboard` gives it.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Tier {
-    /// The tag over the player (`Grandmaster`).
-    pub label: String,
-    /// RGBA, 0–255.
-    pub color: [u8; 4],
-    /// The tier's line in the game's guide (`Grandmaster - 1900`).
-    pub guide: String,
-    /// Display names, raw: not escaped for the Workshop yet.
-    pub names: Vec<String>,
+pub struct LeaderboardTier {
+    /// RGB, 0–255.
+    pub color: [u8; 3],
 }
 
-/// What `GET /api/rank-tags` answers: the game's `RANKS - generated` rule, as data.
+/// One player on the leaderboard.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RankTags {
-    /// The line under the game's guide header (`Ranks updated 2026-10-03`).
-    pub header: String,
-    /// When the server worked the tiers out (ISO 8601).
-    pub updated_at: String,
-    /// The region whose ratings they're from. `None` from a server without regions.
+pub struct Ranked {
+    /// Their place on the region's leaderboard (`1` is the best).
+    pub rank: u32,
+    /// Their display name, raw: not escaped for the Workshop yet.
+    pub name: String,
+    /// Their display rating (the Elo-like number the site shows).
+    pub rating: f64,
+    /// `None` below the lowest tier.
+    pub tier: Option<LeaderboardTier>,
+}
+
+/// What `GET /api/leaderboard` answers: the first page, best first.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Leaderboard {
+    /// The region whose ratings they are. `None` from a server without regions.
     #[serde(default)]
     pub region: Option<String>,
-    /// Lowest tier first.
-    pub tiers: Vec<Tier>,
+    pub players: Vec<Ranked>,
 }
 
-/// What a `GET /api/rank-tags` answer means.
-pub fn read_rank_tags(status: u16, body: &str) -> Result<RankTags, String> {
+/// What a `GET /api/leaderboard` answer means.
+pub fn read_leaderboard(status: u16, body: &str) -> Result<Leaderboard, String> {
     match status {
         200 => serde_json::from_str(body)
-            .map_err(|_| "The server's rank tags weren't what the host tool expected".into()),
-        // An older server without the route, or the wrong URL.
-        404 => Err(
-            "This server has no rank tags (it may need updating), or the server URL is wrong"
-                .into(),
-        ),
+            .map_err(|_| "The server's leaderboard wasn't what the host tool expected".into()),
+        404 => Err("This server has no leaderboard, or the server URL is wrong".into()),
         _ => Err(format!(
-            "The server answered {status} when asked for the rank tags"
+            "The server answered {status} when asked for the leaderboard"
         )),
     }
 }
 
-/// Asks the server for a region's rank tags (its first region's for `None`). Public: no token.
-pub async fn rank_tags(
+/// Asks the server for the first page of a region's leaderboard (its first region's for `None`).
+/// Public: no token.
+pub async fn leaderboard(
     server_url: &str,
     region: Option<&str>,
     timeout: Duration,
-) -> Result<RankTags, String> {
+) -> Result<Leaderboard, String> {
     let mut url =
-        url::Url::parse(&format!("{server_url}/api/rank-tags")).map_err(|e| e.to_string())?;
+        url::Url::parse(&format!("{server_url}/api/leaderboard")).map_err(|e| e.to_string())?;
     if let Some(region) = region {
         url.query_pairs_mut().append_pair("region", region);
     }
@@ -210,7 +208,7 @@ pub async fn rank_tags(
         .text()
         .await
         .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
-    read_rank_tags(status, &body)
+    read_leaderboard(status, &body)
 }
 
 #[derive(Deserialize)]
@@ -724,26 +722,24 @@ mod tests {
     }
 
     #[test]
-    fn reads_rank_tags() {
-        let body = r#"{"header":"Ranks updated 2026-10-03","updatedAt":"2026-10-03T12:00:00Z","region":"na","tiers":[{"label":"Apprentice","color":[205,127,50,255],"guide":"Apprentice - 1300","names":["Kenzo"]},{"label":"Master","color":[255,215,0,255],"guide":"Master - 1600","names":[]}]}"#;
+    fn reads_the_leaderboard() {
+        let body = r#"{"region":"na","page":1,"pageSize":50,"hasMore":false,"players":[{"rank":1,"id":7,"name":"Kenzo","rating":2143,"rounds":90,"wins":30,"lastPlayedAt":"2026-10-03T12:00:00Z","tier":{"label":"Champion","color":[150,0,0],"threshold":2100},"inactiveSince":null},{"rank":2,"id":8,"name":"Hana","rating":1010,"rounds":3,"wins":0,"lastPlayedAt":"2026-10-03T12:00:00Z","tier":null,"inactiveSince":null}]}"#;
         assert_eq!(
-            read_rank_tags(200, body).unwrap(),
-            RankTags {
-                header: "Ranks updated 2026-10-03".into(),
-                updated_at: "2026-10-03T12:00:00Z".into(),
+            read_leaderboard(200, body).unwrap(),
+            Leaderboard {
                 region: Some("na".into()),
-                tiers: vec![
-                    Tier {
-                        label: "Apprentice".into(),
-                        color: [205, 127, 50, 255],
-                        guide: "Apprentice - 1300".into(),
-                        names: vec!["Kenzo".into()],
+                players: vec![
+                    Ranked {
+                        rank: 1,
+                        name: "Kenzo".into(),
+                        rating: 2143.0,
+                        tier: Some(LeaderboardTier { color: [150, 0, 0] }),
                     },
-                    Tier {
-                        label: "Master".into(),
-                        color: [255, 215, 0, 255],
-                        guide: "Master - 1600".into(),
-                        names: vec![],
+                    Ranked {
+                        rank: 2,
+                        name: "Hana".into(),
+                        rating: 1010.0,
+                        tier: None,
                     },
                 ],
             }
@@ -751,18 +747,12 @@ mod tests {
     }
 
     #[test]
-    fn rank_tags_errors_say_what_went_wrong() {
-        assert!(read_rank_tags(200, "<html>").is_err());
-        // A colour out of range isn't a colour.
-        assert!(read_rank_tags(
-            200,
-            r#"{"header":"","updatedAt":"","tiers":[{"label":"A","color":[256,0,0,255],"guide":"A","names":[]}]}"#
-        )
-        .is_err());
-        assert!(read_rank_tags(404, r#"{"error":"not_found"}"#)
+    fn leaderboard_errors_say_what_went_wrong() {
+        assert!(read_leaderboard(200, "<html>").is_err());
+        assert!(read_leaderboard(404, r#"{"error":"not_found"}"#)
             .unwrap_err()
-            .contains("no rank tags"));
-        assert!(read_rank_tags(503, "").unwrap_err().contains("503"));
+            .contains("no leaderboard"));
+        assert!(read_leaderboard(503, "").unwrap_err().contains("503"));
     }
 
     #[test]

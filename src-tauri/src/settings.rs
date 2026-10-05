@@ -20,6 +20,9 @@ pub struct Settings {
     pub server_url: Option<String>,
     /// Overrides the detected Workshop log folder.
     pub log_folder: Option<PathBuf>,
+    /// The region the host hosts in now, an id from `config::REGIONS`. `None`: the host's home
+    /// region, which an admin sets on the server.
+    pub region: Option<String>,
     /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -83,6 +86,15 @@ fn check(tunable: &Tunable, value: u64) -> Result<(), String> {
     }
 }
 
+/// `Ok` for an id in `config::REGIONS`.
+pub fn check_region(region: &str) -> Result<(), String> {
+    if config::REGIONS.iter().any(|r| r.id == region) {
+        Ok(())
+    } else {
+        Err(format!("There's no region {region}"))
+    }
+}
+
 /// The settings in `path`, or the defaults when the file doesn't exist yet. A file that can't be
 /// read as settings is an error rather than silently reset, so a typo doesn't lose the others.
 /// So is a server URL the window wouldn't take (`normalize_server_url`): the token is sent there,
@@ -97,6 +109,10 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     if let Some(url) = &settings.server_url {
         settings.server_url = normalize_server_url(url)
             .map_err(|e| format!("The server URL in {} won't do ({e})", path.display()))?;
+    }
+    // Edited by hand: the server would refuse every upload with a region it doesn't know.
+    if let Some(region) = &settings.region {
+        check_region(region).map_err(|e| format!("{e} in {}", path.display()))?;
     }
     // Edited by hand: a value out of range (a quiet time of 0, say) would upload every match
     // half-played.
@@ -202,6 +218,7 @@ mod tests {
         let settings = Settings {
             server_url: Some("http://localhost:8787".into()),
             log_folder: Some(PathBuf::from(r"D:\Logs")),
+            region: Some("na".into()),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
@@ -335,6 +352,21 @@ mod tests {
         let settings = load(&path).unwrap();
         assert_eq!(settings.get(&config::QUIET_SECS), 90);
         assert_eq!(settings.advanced.get("later"), Some(&0));
+    }
+
+    #[test]
+    fn checks_the_region_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{ "region": "na" }"#).unwrap();
+        assert_eq!(load(&path).unwrap().region.as_deref(), Some("na"));
+        // Left at the home region.
+        fs::write(&path, r#"{ "region": null }"#).unwrap();
+        assert_eq!(load(&path).unwrap().region, None);
+        for bad in ["NA", "us", ""] {
+            fs::write(&path, format!(r#"{{ "region": "{bad}" }}"#)).unwrap();
+            assert!(load(&path).unwrap_err().contains("region"), "{bad}");
+        }
     }
 
     #[test]

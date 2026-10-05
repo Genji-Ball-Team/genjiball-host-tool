@@ -147,6 +147,7 @@ mod tests {
         RankTags {
             header: "Ranks updated 2026-10-03".into(),
             updated_at: "2026-10-03T12:00:00Z".into(),
+            region: Some("eu".into()),
             tiers: vec![
                 Tier {
                     label: "Apprentice".into(),

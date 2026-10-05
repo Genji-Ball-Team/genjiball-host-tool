@@ -18,6 +18,26 @@ pub struct Tunable {
 /// The ranked server uploads go to. Overridable for local testing or the test server.
 pub const DEFAULT_SERVER_URL: &str = "https://genjiball.us";
 
+/// A region ranked keeps apart (its own ratings, leaderboard and rank tags): `id` is what the
+/// server takes (`X-Region`, `?region=`), `label` what the window shows.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct Region {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+/// The regions the host picks from: the server's `regions` (genjiball-ranked `src/config.ts`).
+pub const REGIONS: [Region; 2] = [
+    Region {
+        id: "eu",
+        label: "Europe",
+    },
+    Region {
+        id: "na",
+        label: "North America",
+    },
+];
+
 /// How long a request to the ranked server (or GitHub) may take before it counts as unreachable.
 pub const REQUEST_TIMEOUT_SECS: Tunable = Tunable {
     key: "requestTimeoutSecs",
@@ -170,6 +190,13 @@ mod tests {
                 TUNABLES[..i].iter().all(|other| other.key != t.key),
                 "{} twice",
                 t.key
+            );
+        }
+        for (i, r) in REGIONS.iter().enumerate() {
+            assert!(
+                REGIONS[..i].iter().all(|other| other.id != r.id),
+                "{}",
+                r.id
             );
         }
     }

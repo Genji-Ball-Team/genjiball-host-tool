@@ -154,10 +154,12 @@ mod tests {
             players: vec!["Sparrow".into(), "Tidal".into()],
             answer: Answer::Answered(UploadAnswer {
                 result: "stored".into(),
+                region: Some("eu".into()),
                 matches: vec![UploadedMatch {
                     match_key: Some("1".into()),
                     match_id: Some(4),
                     line_count: 9,
+                    region: Some("eu".into()),
                     action: "insert".into(),
                     status: status.into(),
                     rejection: None,

@@ -18,15 +18,19 @@ Download the `.exe` installer from the [Releases page](https://github.com/Genji-
 
 Windows SmartScreen will warn that it doesn't know the app, because the installer isn't code-signed. Click "More info", then "Run anyway".
 
+From v0.2.0 on the app updates itself: it looks for a new version when it starts and every few hours, and a banner offers "Install and restart". There's also a "Check for updates" button. v0.1.0 has no updater, so if you have it, install v0.2.0 by hand once.
+
 Then follow the [hosting guide](docs/hosting.md).
 
 ## Make a release
 
-1. Bump `version` in `package.json` (the app and the installer take it from there).
+1. Bump `version` in `package.json` and in `src-tauri/Cargo.toml` (the app and the installer take it from `package.json`; run a `cargo check` so `Cargo.lock` follows).
 2. Merge that to `main`.
 3. Tag it `vX.Y.Z` (the same number) and push the tag.
 
-The [release workflow](.github/workflows/release.yml) runs the checks, builds the installer and attaches it to a GitHub release for the tag. It fails if the tag and `package.json` disagree.
+The [release workflow](.github/workflows/release.yml) runs the checks, builds the installer, signs it and attaches it to a GitHub release for the tag, together with `latest.json`, which the installed apps read to find the new version. It fails if the tag and `package.json` disagree, or if the signing key is missing.
+
+**The updater signing key.** Updates are signed, and the app only installs one signed with our key (its public half is in `src-tauri/tauri.conf.json`). The private key and its password are the repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A backup of the private key is kept by the team outside the repo: whoever holds it can sign releases. If it's lost, installed apps can't update any more: a new key means everyone installs the next version by hand once.
 
 ## Build it
 
@@ -56,6 +60,7 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/config.rs` | Every tunable and its default |
 | `src-tauri/src/settings.rs`, `credentials.rs` | The settings file, and the host token (Credential Manager, or a DPAPI-encrypted file) |
 | `src-tauri/src/server.rs` | Requests to the ranked server |
+| `src-tauri/src/updates.rs` | The self-update: checks GitHub releases, installs a signed update |
 | `src-tauri/src/watcher.rs`, `log_scan.rs` | Which log files to upload, and when |
 | `src-tauri/src/uploader.rs`, `uploads.rs` | The upload loop, and the record of what was uploaded (`uploads.json`) |
 | `src-tauri/capabilities/` | What the window is allowed to call |

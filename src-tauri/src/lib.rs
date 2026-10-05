@@ -8,6 +8,7 @@ mod ranked_code;
 mod release;
 mod server;
 mod settings;
+mod updates;
 mod uploader;
 mod uploads;
 mod watcher;
@@ -27,6 +28,7 @@ use log_folder::LogFolder;
 use release::ReleaseCache;
 use server::TokenCheck;
 use settings::Settings;
+use updates::{UpdateStatus, Updates};
 use uploader::{UploadStatus, Uploader};
 
 /// The settings file and what's in it. Commands change both together.
@@ -303,6 +305,24 @@ fn set_advanced(
     app_state(&app, &store)
 }
 
+/// The update the last check found, and whether the last check worked.
+#[tauri::command]
+fn get_update_status(updates: State<Updates>) -> UpdateStatus {
+    updates.status()
+}
+
+/// Looks for an update now ("Check for updates"). A failed check is in the status, not an error.
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> UpdateStatus {
+    updates::check(&app).await
+}
+
+/// Installs the update found and restarts the tool. Only returns when that failed.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    updates::install(&app).await
+}
+
 /// The ranked Workshop code, for the window to copy.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -442,12 +462,16 @@ pub fn run() {
             show_window(app)
         }))
         .plugin(tauri_plugin_dialog::init())
+        // Only its Rust API is used (`updates.rs`): the window has no updater permission.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             app.manage(Store::open(&dir));
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
             app.manage(ReleaseCache::default());
+            app.manage(Updates::default());
             uploader::start(app.handle().clone());
+            updates::start(app.handle().clone());
             tray(app)?;
             Ok(())
         })
@@ -471,7 +495,10 @@ pub fn run() {
             build_ranked_code,
             get_upload_history,
             retry_upload,
-            open_match
+            open_match,
+            get_update_status,
+            check_for_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running the host tool");

@@ -16,6 +16,11 @@
 
       <p class="banner bad" id="settings-error" hidden></p>
 
+      <div class="banner update" id="update-banner" hidden>
+        <span id="update-banner-text"></span>
+        <button type="button" id="update-install">Install and restart</button>
+      </div>
+
       <section id="welcome" hidden>
         <p class="lede">Paste the host token an admin gave you. The tool checks it with the ranked server, then keeps it on this PC, encrypted for your Windows account.</p>
       </section>
@@ -93,6 +98,15 @@
         </div>
         <p class="note bad" id="uploads-error" hidden></p>
         <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. A failed upload is retried automatically. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
+      </section>
+
+      <section>
+        <h2>Updates</h2>
+        <div class="row">
+          <button type="button" id="update-check">Check for updates</button>
+          <span class="status muted" id="update-state" role="status"></span>
+        </div>
+        <p class="note">The tool looks for a new version when it starts and every few hours, and installs one only when you click "Install and restart". The window closes while it installs; uploads carry on once the new version has started.</p>
       </section>
 
       <section>

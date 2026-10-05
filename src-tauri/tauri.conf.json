@@ -25,8 +25,20 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ3QTFBNTZERjU1ODJFNkEKUldScUxsajFiYVdoMXk2SXZCeWtPZUZ2R21pZmV4TTB4eUlybFBETHovSVlQb2dUQXc4WEl5TWsK",
+      "endpoints": [
+        "https://github.com/Genji-Ball-Team/genjiball-host-tool/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "publisher": "Genji Ball Team",
     "homepage": "https://genjiball.us",

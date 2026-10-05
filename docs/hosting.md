@@ -11,6 +11,8 @@ For hosts of Genji Ball Ranked. You run the host tool next to Overwatch; it uplo
 5. **Turn on the Workshop log file in Overwatch.** Overwatch only writes the log the tool reads if **Enable Workshop Inspector Log File** is on (Options, Gameplay, General). Without it, nothing is uploaded.
 6. **Check the log folder.** The tool looks in `Documents\Overwatch\Workshop` and says "Found automatically". If it says the folder isn't there yet, that's normal until Overwatch has written its first log. If your Documents folder is somewhere else, or the logs go elsewhere, click "Choose folder..." and pick it.
 
+The tool updates itself: when a new version is out, a banner at the top offers "Install and restart" (or use "Check for updates"). If you have v0.1.0, which can't, download the newest installer by hand once.
+
 You can close the window afterwards: the tool keeps uploading from the tray (next to the clock). Quit it from the tray icon's menu.
 
 ## Every time you host

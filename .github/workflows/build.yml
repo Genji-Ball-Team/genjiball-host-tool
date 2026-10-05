@@ -1,7 +1,8 @@
 name: Build
 
 # Checks every push and PR, and builds the Windows installer as a workflow artifact.
-# Publishing releases and the updater come with #7.
+# It has no signing key, so the build leaves out the updater files (`tauri.unsigned.conf.json`); the
+# release workflow signs.
 on:
   push:
   pull_request:
@@ -26,7 +27,7 @@ jobs:
       - name: Typecheck, lint and test
         run: npm run check
       - name: Build the installer
-        run: npm run build
+        run: npm run build -- --config src-tauri/tauri.unsigned.conf.json
       - uses: actions/upload-artifact@v4
         with:
           name: installer

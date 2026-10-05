@@ -1,6 +1,6 @@
 //! Which log files to upload now. Each poll reads the sizes in the log folder, reads a file again
 //! only when it changed, and picks the ranked files that changed since they were last sent and
-//! either have a new `MATCH_END` or stopped growing (`config::QUIET_SECS`).
+//! either have a new `MATCH_END` or stopped growing (`Timing::quiet`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::config;
 use crate::log_scan::{self, Scan};
+use crate::settings::Settings;
 
 /// A file to upload.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,10 +73,49 @@ struct Tracked {
     due: bool,
 }
 
+/// How long the watcher waits, as the host set it (`config::QUIET_SECS`, `RETRY_FIRST_SECS`,
+/// `RETRY_MAX_SECS`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Timing {
+    pub quiet: Duration,
+    pub retry_first: Duration,
+    pub retry_max: Duration,
+}
+
+impl Timing {
+    pub fn new(settings: &Settings) -> Self {
+        Self {
+            quiet: settings.secs(&config::QUIET_SECS),
+            retry_first: settings.secs(&config::RETRY_FIRST_SECS),
+            retry_max: settings.secs(&config::RETRY_MAX_SECS),
+        }
+    }
+
+    /// `retry_first`, doubled for each failure after the first, at most `retry_max`.
+    pub fn backoff(&self, failures: u32) -> Duration {
+        2u32.checked_pow(failures.saturating_sub(1))
+            .and_then(|times| self.retry_first.checked_mul(times))
+            .map_or(self.retry_max, |wait| wait.min(self.retry_max))
+    }
+
+    /// `wait` after `now`. A server's `Retry-After` too far off to count to waits `retry_max`.
+    pub fn later(&self, now: Instant, wait: Duration) -> Instant {
+        now.checked_add(wait).unwrap_or(now + self.retry_max)
+    }
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self::new(&Settings::default())
+    }
+}
+
 #[derive(Default)]
 pub struct Tracker {
     folder: PathBuf,
     files: HashMap<String, Tracked>,
+    /// Set from the settings before each poll.
+    pub timing: Timing,
 }
 
 impl Tracker {
@@ -95,7 +135,7 @@ impl Tracker {
             self.folder = folder.to_path_buf();
             self.files.clear();
         }
-        let quiet = Duration::from_secs(config::QUIET_SECS);
+        let quiet = self.timing.quiet;
         let mut poll = Poll::default();
         let mut seen = Vec::new();
         for entry in fs::read_dir(folder)? {
@@ -201,9 +241,11 @@ impl Tracker {
     /// The upload of `name` failed with `error`: hold it for `after`, or a backoff that grows with
     /// each failure.
     pub fn failed(&mut self, name: &str, now: Instant, after: Option<Duration>, error: String) {
+        let timing = self.timing;
         if let Some(t) = self.files.get_mut(name) {
             t.failures += 1;
-            t.retry_at = Some(later(now, after.unwrap_or_else(|| backoff(t.failures))));
+            let wait = after.unwrap_or_else(|| timing.backoff(t.failures));
+            t.retry_at = Some(timing.later(now, wait));
             t.error = Some(error);
         }
     }
@@ -244,23 +286,6 @@ impl Tracker {
     }
 }
 
-/// `wait` after `now`. A server's `Retry-After` too far off to count to waits `RETRY_MAX_SECS`.
-pub fn later(now: Instant, wait: Duration) -> Instant {
-    now.checked_add(wait)
-        .unwrap_or_else(|| now + Duration::from_secs(config::RETRY_MAX_SECS))
-}
-
-/// `RETRY_FIRST_SECS`, doubled for each failure after the first, at most `RETRY_MAX_SECS`.
-pub fn backoff(failures: u32) -> Duration {
-    let secs = 2u64
-        .checked_pow(failures.saturating_sub(1))
-        .and_then(|times| config::RETRY_FIRST_SECS.checked_mul(times))
-        .map_or(config::RETRY_MAX_SECS, |secs| {
-            secs.min(config::RETRY_MAX_SECS)
-        });
-    Duration::from_secs(secs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +319,18 @@ mod tests {
     fn never_sent(_: &str) -> Option<Sent> {
         None
     }
+
+    fn backoff(failures: u32) -> Duration {
+        Timing::default().backoff(failures)
+    }
+
+    fn later(now: Instant, wait: Duration) -> Instant {
+        Timing::default().later(now, wait)
+    }
+
+    const QUIET_SECS: u64 = config::QUIET_SECS.default;
+    const RETRY_FIRST_SECS: u64 = config::RETRY_FIRST_SECS.default;
+    const RETRY_MAX_SECS: u64 = config::RETRY_MAX_SECS.default;
 
     #[test]
     fn uploads_a_match_as_soon_as_it_ends() {
@@ -357,12 +394,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Uploaded up to its last complete line, then left with half a line (stopped writing).
         let half = format!("{}[00:01:54] MATCH_END|", playing());
-        write(
-            dir.path(),
-            NAME,
-            &half,
-            Duration::from_secs(config::QUIET_SECS + 5),
-        );
+        write(dir.path(), NAME, &half, Duration::from_secs(QUIET_SECS + 5));
         let sent = |_: &str| {
             Some(Sent {
                 size: playing().len() as u64,
@@ -386,7 +418,7 @@ mod tests {
             .unwrap()
             .due
             .is_empty());
-        let later = now + Duration::from_secs(config::QUIET_SECS);
+        let later = now + Duration::from_secs(QUIET_SECS);
         let poll = tracker
             .poll(dir.path(), later, SystemTime::now(), EPOCH, never_sent)
             .unwrap();
@@ -400,7 +432,7 @@ mod tests {
             dir.path(),
             NAME,
             &playing(),
-            Duration::from_secs(config::QUIET_SECS + 5),
+            Duration::from_secs(QUIET_SECS + 5),
         );
         let poll = Tracker::default()
             .poll(
@@ -462,7 +494,7 @@ mod tests {
                 waiting: 1
             }
         );
-        let later = now + Duration::from_secs(config::QUIET_SECS);
+        let later = now + Duration::from_secs(QUIET_SECS);
         assert_eq!(
             names(
                 &tracker
@@ -493,7 +525,7 @@ mod tests {
     #[test]
     fn ignores_other_files() {
         let dir = tempfile::tempdir().unwrap();
-        let old = Duration::from_secs(config::QUIET_SECS + 5);
+        let old = Duration::from_secs(QUIET_SECS + 5);
         write(
             dir.path(),
             "Log-2026-10-02-20-00-00.txt",
@@ -539,7 +571,7 @@ mod tests {
     #[test]
     fn sends_the_oldest_first() {
         let dir = tempfile::tempdir().unwrap();
-        let old = Duration::from_secs(config::QUIET_SECS + 5);
+        let old = Duration::from_secs(QUIET_SECS + 5);
         write(dir.path(), "Log-2026-10-02-21-00-00.txt", EXAMPLE, old);
         write(dir.path(), "Log-2026-10-02-20-00-00.txt", EXAMPLE, old);
         let poll = Tracker::default()
@@ -815,12 +847,9 @@ mod tests {
 
     #[test]
     fn backs_off_up_to_the_max() {
-        assert_eq!(backoff(1), Duration::from_secs(config::RETRY_FIRST_SECS));
-        assert_eq!(
-            backoff(2),
-            Duration::from_secs(config::RETRY_FIRST_SECS * 2)
-        );
-        assert_eq!(backoff(100), Duration::from_secs(config::RETRY_MAX_SECS));
+        assert_eq!(backoff(1), Duration::from_secs(RETRY_FIRST_SECS));
+        assert_eq!(backoff(2), Duration::from_secs(RETRY_FIRST_SECS * 2));
+        assert_eq!(backoff(100), Duration::from_secs(RETRY_MAX_SECS));
         let now = Instant::now();
         assert_eq!(
             later(now, Duration::from_secs(3600)),
@@ -828,15 +857,46 @@ mod tests {
         );
         assert!(later(now, Duration::MAX) > now);
         // However many failures: no overflow, and no cap but `RETRY_MAX_SECS`.
-        assert_eq!(
-            backoff(u32::MAX),
-            Duration::from_secs(config::RETRY_MAX_SECS)
-        );
+        assert_eq!(backoff(u32::MAX), Duration::from_secs(RETRY_MAX_SECS));
         assert_eq!(backoff(0), backoff(1));
         assert_eq!(
             backoff(20),
-            Duration::from_secs((config::RETRY_FIRST_SECS << 19).min(config::RETRY_MAX_SECS))
+            Duration::from_secs((RETRY_FIRST_SECS << 19).min(RETRY_MAX_SECS))
         );
+    }
+
+    #[test]
+    fn waits_as_the_host_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let ago = Duration::from_secs(20);
+        write(dir.path(), NAME, &playing(), ago);
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        // 20 s quiet: not long enough by default.
+        let poll = tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert!(poll.due.is_empty());
+        tracker.timing.quiet = Duration::from_secs(10);
+        let poll = tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(names(&poll), [NAME]);
+
+        let timing = Timing {
+            quiet: Duration::from_secs(10),
+            retry_first: Duration::from_secs(5),
+            retry_max: Duration::from_secs(12),
+        };
+        assert_eq!(timing.backoff(1), Duration::from_secs(5));
+        assert_eq!(timing.backoff(2), Duration::from_secs(10));
+        assert_eq!(timing.backoff(3), Duration::from_secs(12));
+        // A first wait longer than the longest: the longest.
+        let odd = Timing {
+            retry_first: Duration::from_secs(60),
+            ..timing
+        };
+        assert_eq!(odd.backoff(1), Duration::from_secs(12));
     }
 
     #[test]

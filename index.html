@@ -90,6 +90,22 @@
         <p class="note bad" id="uploads-error" hidden></p>
         <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. A failed upload is retried automatically. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
       </section>
+
+      <section>
+        <h2>Advanced</h2>
+        <details id="timing">
+          <summary>Timing</summary>
+          <form id="advanced-form" novalidate>
+            <div id="tunables"></div>
+            <div class="row">
+              <button type="submit">Save</button>
+              <button type="button" class="quiet" id="advanced-reset">Use the defaults</button>
+            </div>
+            <p id="advanced-state" role="status" hidden></p>
+          </form>
+          <p class="note">Leave a value empty for its default. The defaults suit most hosts.</p>
+        </details>
+      </section>
     </main>
   </body>
 </html>

@@ -1,15 +1,17 @@
 //! The settings file: what the host chose, with `None` meaning "use the default".
 //! The host token is never here: it lives in the OS credential store (`credentials.rs`).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
-use crate::config;
+use crate::config::{self, Tunable};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -18,6 +20,10 @@ pub struct Settings {
     pub server_url: Option<String>,
     /// Overrides the detected Workshop log folder.
     pub log_folder: Option<PathBuf>,
+    /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
+    /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub advanced: BTreeMap<String, u64>,
 }
 
 impl Settings {
@@ -26,11 +32,61 @@ impl Settings {
             .as_deref()
             .unwrap_or(config::DEFAULT_SERVER_URL)
     }
+
+    /// The host's value for `tunable`, or its default.
+    pub fn get(&self, tunable: &Tunable) -> u64 {
+        self.advanced
+            .get(tunable.key)
+            .copied()
+            .unwrap_or(tunable.default)
+    }
+
+    /// `get`, as a duration: every tunable is in seconds.
+    pub fn secs(&self, tunable: &Tunable) -> Duration {
+        Duration::from_secs(self.get(tunable))
+    }
+
+    /// Every tunable's value, from `values` (`normalize_advanced`): one left out goes back to its
+    /// default. Keys a newer version wrote stay.
+    pub fn replace_advanced(&mut self, values: BTreeMap<String, u64>) {
+        self.advanced
+            .retain(|key, _| !config::TUNABLES.iter().any(|t| t.key == key));
+        self.advanced.extend(values);
+    }
+}
+
+/// The Advanced values the host entered, by key, as they're stored: each checked against its
+/// range, and one at its default left out. A key that isn't a tunable is an error.
+pub fn normalize_advanced(values: &BTreeMap<String, u64>) -> Result<BTreeMap<String, u64>, String> {
+    let mut normalized = BTreeMap::new();
+    for (key, &value) in values {
+        let tunable = config::TUNABLES
+            .iter()
+            .find(|t| t.key == key)
+            .ok_or_else(|| format!("There's no setting {key}"))?;
+        check(tunable, value)?;
+        if value != tunable.default {
+            normalized.insert(key.clone(), value);
+        }
+    }
+    Ok(normalized)
+}
+
+fn check(tunable: &Tunable, value: u64) -> Result<(), String> {
+    if (tunable.min..=tunable.max).contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} must be {} to {} seconds",
+            tunable.label, tunable.min, tunable.max
+        ))
+    }
 }
 
 /// The settings in `path`, or the defaults when the file doesn't exist yet. A file that can't be
 /// read as settings is an error rather than silently reset, so a typo doesn't lose the others.
-/// So is a server URL the window wouldn't take (`normalize_server_url`): the token is sent there.
+/// So is a server URL the window wouldn't take (`normalize_server_url`): the token is sent there,
+/// and an Advanced value out of its range.
 pub fn load(path: &Path) -> Result<Settings, String> {
     let mut settings: Settings = match fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
@@ -41,6 +97,13 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     if let Some(url) = &settings.server_url {
         settings.server_url = normalize_server_url(url)
             .map_err(|e| format!("The server URL in {} won't do ({e})", path.display()))?;
+    }
+    // Edited by hand: a value out of range (a quiet time of 0, say) would upload every match
+    // half-played.
+    for tunable in config::TUNABLES {
+        if let Some(&value) = settings.advanced.get(tunable.key) {
+            check(tunable, value).map_err(|e| format!("{e} in {}", path.display()))?;
+        }
     }
     Ok(settings)
 }
@@ -139,6 +202,7 @@ mod tests {
         let settings = Settings {
             server_url: Some("http://localhost:8787".into()),
             log_folder: Some(PathBuf::from(r"D:\Logs")),
+            advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
@@ -204,6 +268,73 @@ mod tests {
         );
         fs::write(&path, r#"{ "serverUrl": "https://genjiball.us" }"#).unwrap();
         assert_eq!(load(&path).unwrap().server_url, None);
+    }
+
+    #[test]
+    fn advanced_values_default_until_set() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            settings.get(&config::QUIET_SECS),
+            config::QUIET_SECS.default
+        );
+        settings.advanced.insert("quietSecs".into(), 90);
+        assert_eq!(settings.secs(&config::QUIET_SECS), Duration::from_secs(90));
+        assert_eq!(
+            settings.get(&config::POLL_INTERVAL_SECS),
+            config::POLL_INTERVAL_SECS.default
+        );
+    }
+
+    #[test]
+    fn normalizes_advanced_values() {
+        let entered = BTreeMap::from([
+            ("quietSecs".to_string(), 90),
+            // At its default: not stored, so a new default reaches this host.
+            (
+                "pollIntervalSecs".to_string(),
+                config::POLL_INTERVAL_SECS.default,
+            ),
+        ]);
+        assert_eq!(
+            normalize_advanced(&entered),
+            Ok(BTreeMap::from([("quietSecs".to_string(), 90)]))
+        );
+        let too_short = BTreeMap::from([("quietSecs".to_string(), 0)]);
+        assert!(normalize_advanced(&too_short)
+            .unwrap_err()
+            .contains("Quiet time"));
+        let unknown = BTreeMap::from([("nope".to_string(), 1)]);
+        assert!(normalize_advanced(&unknown).is_err());
+    }
+
+    #[test]
+    fn replacing_advanced_values_keeps_unknown_keys() {
+        let mut settings = Settings {
+            advanced: BTreeMap::from([("quietSecs".into(), 90), ("later".into(), 1)]),
+            ..Settings::default()
+        };
+        settings.replace_advanced(BTreeMap::from([("pollIntervalSecs".into(), 2)]));
+        assert_eq!(
+            settings.advanced,
+            BTreeMap::from([("later".into(), 1), ("pollIntervalSecs".into(), 2)])
+        );
+        settings.replace_advanced(BTreeMap::new());
+        assert_eq!(settings.advanced, BTreeMap::from([("later".into(), 1)]));
+    }
+
+    #[test]
+    fn checks_the_advanced_values_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{ "advanced": { "quietSecs": 0 } }"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("Quiet time"));
+        fs::write(&path, r#"{ "advanced": { "quietSecs": -1 } }"#).unwrap();
+        assert!(load(&path).is_err());
+        // One a newer version added is kept, not refused.
+        fs::write(&path, r#"{ "advanced": { "quietSecs": 90, "later": 0 } }"#).unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(settings.get(&config::QUIET_SECS), 90);
+        assert_eq!(settings.advanced.get("later"), Some(&0));
     }
 
     #[test]

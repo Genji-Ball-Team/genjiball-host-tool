@@ -26,12 +26,13 @@ You need Node.js 22+ and Rust stable (MSVC toolchain on Windows). CI runs `npm r
 Every tunable lives in `src-tauri/src/config.rs` with its default and a comment saying what it does: server URL, timeouts, retry counts and backoff, poll intervals, how long a log must be quiet, cache times, feature flags. Code reads the config, never a literal.
 
 - Each tunable becomes a setting the host can change (#11). Normal hosts see the server URL, token and region; everything else sits under "Advanced".
+- A number a host can change is a `config::Tunable` (key, label, help, default, range) listed in `config::TUNABLES`: the window builds its Advanced field from it, and `settings.rs` checks the range when it's saved and when the file is read. Code reads it with `settings.get(&config::QUIET_SECS)` (or `.secs()`), never the default directly, and takes it from the settings each time it's used, so a change counts from the next poll or request. Tests may use `.default`.
 - Unfinished features ship behind a flag, off by default.
 - Debug settings come with the features (#11): a log level, a dry run that shows what would be uploaded, a debug panel and a diagnostics export.
 
 ## Settings and the host token
 
-- Settings live in `settings.json` in the app's config folder (`%APPDATA%\us.genjiball.hosttool`), through `src-tauri/src/settings.rs`. A setting left at its default is stored as `null`, so a new default reaches every host. A file that can't be read, or holds a server URL the window wouldn't take, pauses uploads (the defaults would be the live server and the real log folder) until it's fixed or a setting is changed.
+- Settings live in `settings.json` in the app's config folder (`%APPDATA%\us.genjiball.hosttool`), through `src-tauri/src/settings.rs`. A setting left at its default is stored as `null` (or, under `advanced`, left out), so a new default reaches every host. A file that can't be read, or holds a server URL or an Advanced value the window wouldn't take, pauses uploads (the defaults would be the live server and the real log folder) until it's fixed or a setting is changed.
 - The host token, one per server URL, goes through `src-tauri/src/credentials.rs`: Windows Credential Manager first. When that refuses (a Credential Manager filled by the Xbox app's tokens answers "not enough memory", common on gaming PCs), the token goes in `tokens.json`, encrypted with DPAPI for the Windows user (`dpapi.rs`). A fallback entry takes precedence when reading, even if deleting an older native token fails; a successful native save removes the fallback entry.
 - The token never goes in a plain file, a log, an error message, the window's state or a diagnostics export.
 - The server checks a token with `GET /api/host/me` (genjiball-ranked `docs/api.md`). Only a `401` or `403` means a bad token; anything else is "couldn't check", and the token is saved anyway.

@@ -10,6 +10,18 @@ interface AppState {
   hasToken: boolean;
   logFolder: LogFolder | null;
   settingsError: string | null;
+  advanced: AdvancedSetting[];
+}
+
+/** Mirrors `AdvancedSetting` in src-tauri/src/lib.rs. All in seconds. */
+interface AdvancedSetting {
+  key: string;
+  label: string;
+  help: string;
+  default: number;
+  min: number;
+  max: number;
+  value: number | null;
 }
 
 /** Mirrors `LogFolder` in src-tauri/src/log_folder.rs. */
@@ -178,6 +190,71 @@ function render(): void {
         ? "Found automatically."
         : "Chosen by you.";
   el("log-folder-reset").hidden = folder?.source !== "custom";
+
+  renderAdvanced();
+}
+
+function tunableInput(key: string): HTMLInputElement {
+  return el<HTMLInputElement>(`tunable-${key}`);
+}
+
+/** One field per Advanced setting, built once; their values follow `state` unless being edited. */
+function renderAdvanced(): void {
+  const list = el("tunables");
+  if (!list.childElementCount) {
+    list.replaceChildren(
+      ...state.advanced.map((t) => {
+        const item = document.createElement("div");
+        item.className = "tunable";
+        const label = document.createElement("label");
+        label.htmlFor = `tunable-${t.key}`;
+        label.textContent = t.label;
+        const input = document.createElement("input");
+        input.id = `tunable-${t.key}`;
+        input.type = "number";
+        input.min = String(t.min);
+        input.max = String(t.max);
+        input.step = "1";
+        input.placeholder = String(t.default);
+        const unit = document.createElement("span");
+        unit.className = "muted";
+        unit.textContent = `seconds (default ${t.default})`;
+        const row = document.createElement("div");
+        row.className = "row";
+        row.append(input, unit);
+        const help = document.createElement("p");
+        help.className = "note";
+        help.textContent = t.help;
+        item.append(label, row, help);
+        return item;
+      }),
+    );
+  }
+  for (const t of state.advanced) {
+    const input = tunableInput(t.key);
+    if (document.activeElement !== input) input.value = t.value === null ? "" : String(t.value);
+  }
+  if (state.advanced.some((t) => t.value !== null)) el<HTMLDetailsElement>("timing").open = true;
+}
+
+function setAdvancedState(text: string, tone: "good" | "bad"): void {
+  const line = el("advanced-state");
+  line.hidden = !text;
+  line.textContent = text;
+  line.className = tone;
+}
+
+/** What's in the Advanced fields, by key: an empty one is left out (its default). */
+function advancedValues(): Record<string, number> {
+  const values: Record<string, number> = {};
+  for (const t of state.advanced) {
+    const text = tunableInput(t.key).value.trim();
+    if (!text) continue;
+    const value = Number(text);
+    if (!Number.isInteger(value) || value < 0) throw new Error(`${t.label} must be a whole number of seconds`);
+    values[t.key] = value;
+  }
+  return values;
 }
 
 function describeProblem(problem: Problem): string {
@@ -445,6 +522,23 @@ el("server-form").addEventListener("submit", (e) => {
     await showHistoryPage(0);
     if (state.hasToken) await checkSaved();
   });
+});
+
+async function saveAdvanced(values: Record<string, number>): Promise<void> {
+  setAdvancedState("", "good");
+  const next = await invoke<AppState>("set_advanced", { values });
+  // Shown as saved, not as typed: a value at its default empties its field.
+  for (const t of next.advanced) tunableInput(t.key).value = t.value === null ? "" : String(t.value);
+  await show(next);
+  setAdvancedState("Saved.", "good");
+}
+
+el("advanced-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  void busy(() => saveAdvanced(advancedValues()), (m) => setAdvancedState(m, "bad"));
+});
+el("advanced-reset").addEventListener("click", () => {
+  void busy(() => saveAdvanced({}), (m) => setAdvancedState(m, "bad"));
 });
 
 el("log-folder-choose").addEventListener("click", () => {

@@ -363,8 +363,9 @@ async fn build_ranked_code(
 }
 
 /// The home region of the token saved for `server_url`, asked now: the token may have changed
-/// since the uploader last asked. `None` without a token, or when the server can't say (the
-/// server's first region then, which its answer names).
+/// since the uploader last asked. `None` without a token (the server's first region then, which
+/// its answer names). A check that fails is an error, not that first region: it may be the wrong
+/// one.
 async fn home_region(
     store: &Store,
     server_url: &str,
@@ -377,7 +378,12 @@ async fn home_region(
         TokenCheck::Ok { host } => host.region.map(Some).ok_or_else(|| {
             "You have no home region: pick the region you host in under Ranked server".to_string()
         }),
-        _ => Ok(None),
+        TokenCheck::Unknown | TokenCheck::Revoked => {
+            Err("The server turned your host token down, so your home region isn't known. Pick the region you host in under Ranked server".into())
+        }
+        TokenCheck::Unreachable { message } => Err(format!(
+            "Couldn't ask the server for your home region ({message}). Pick the region you host in under Ranked server"
+        )),
     }
 }
 

@@ -605,12 +605,17 @@ el("server-form").addEventListener("submit", (e) => {
   });
 });
 
+/** Counts region changes: the answer to one a later change replaced is dropped. */
+let regionChange = 0;
+
 el("region").addEventListener("change", () => {
   void busy(
     async () => {
       setRegionStatus("");
+      const change = ++regionChange;
       const region = el<HTMLSelectElement>("region").value || null;
       const next = await invoke<AppState>("set_region", { region });
+      if (change !== regionChange) return;
       // A code kept for the old region's tags is no use now.
       uncopied = null;
       await show(next);

@@ -175,9 +175,9 @@ pub fn read_rank_tags(status: u16, body: &str) -> Result<RankTags, String> {
 }
 
 /// Asks the server for the rank tags. Public: no token.
-pub async fn rank_tags(server_url: &str) -> Result<RankTags, String> {
+pub async fn rank_tags(server_url: &str, timeout: Duration) -> Result<RankTags, String> {
     // Region (#12): ask for the host's region here once the server splits the tags by region.
-    let response = client()?
+    let response = client(timeout)?
         .get(format!("{server_url}/api/rank-tags"))
         .send()
         .await
@@ -266,12 +266,13 @@ pub async fn upload(
     file_name: &str,
     started_at: Option<&str>,
     body: Vec<u8>,
+    timeout: Duration,
 ) -> UploadOutcome {
     let retry = |e: reqwest::Error| UploadOutcome::Retry {
         message: format!("Couldn't reach the server: {}", e.without_url()),
         after: None,
     };
-    let client = match client() {
+    let client = match client(timeout) {
         Ok(client) => client,
         Err(message) => {
             return UploadOutcome::Retry {
@@ -307,22 +308,23 @@ pub async fn upload(
     }
 }
 
-/// The HTTP client every request goes through (the ranked server and GitHub).
-pub fn client() -> Result<reqwest::Client, String> {
+/// The HTTP client every request goes through (the ranked server and GitHub). A request taking
+/// longer than `timeout` (`config::REQUEST_TIMEOUT_SECS`, as the host set it) fails.
+pub fn client(timeout: Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(config::REQUEST_TIMEOUT_SECS))
+        .timeout(timeout)
         .user_agent(concat!("genjiball-host-tool/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())
 }
 
 /// Asks the server whose token this is.
-pub async fn check_token(server_url: &str, token: &str) -> TokenCheck {
+pub async fn check_token(server_url: &str, token: &str, timeout: Duration) -> TokenCheck {
     let unreachable = |e: reqwest::Error| TokenCheck::Unreachable {
         // Without the URL: it can't hold the token, but keep messages short.
         message: format!("Couldn't reach the server: {}", e.without_url()),
     };
-    let client = match client() {
+    let client = match client(timeout) {
         Ok(client) => client,
         Err(message) => return TokenCheck::Unreachable { message },
     };
@@ -349,13 +351,14 @@ pub async fn match_states(
     server_url: &str,
     token: &str,
     keys: &[String],
+    timeout: Duration,
 ) -> Result<Vec<MatchState>, String> {
     let url = url::Url::parse_with_params(
         &format!("{server_url}/api/host/matches"),
         [("keys", keys.join(","))],
     )
     .map_err(|e| e.to_string())?;
-    let response = client()?
+    let response = client(timeout)?
         .get(url)
         .bearer_auth(token)
         .send()
@@ -702,22 +705,47 @@ mod tests {
     #[test]
     fn a_cut_off_answer_still_turns_a_token_down() {
         use tauri::async_runtime::block_on as run;
+        let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
         let revoked = cut_off_server("HTTP/1.1 403 Forbidden\r\n", "");
-        assert_eq!(run(check_token(&revoked, "t")), TokenCheck::Revoked);
+        assert_eq!(
+            run(check_token(&revoked, "t", timeout)),
+            TokenCheck::Revoked
+        );
         let unknown = cut_off_server("HTTP/1.1 401 Unauthorized\r\n", "x");
         assert_eq!(
-            run(upload(&unknown, "t", "Log-a.txt", None, b"x".to_vec())),
+            run(upload(
+                &unknown,
+                "t",
+                "Log-a.txt",
+                None,
+                b"x".to_vec(),
+                timeout
+            )),
             UploadOutcome::TokenRejected { revoked: false }
         );
         let too_big = cut_off_server("HTTP/1.1 413 Payload Too Large\r\n", "x");
         assert!(matches!(
-            run(upload(&too_big, "t", "Log-a.txt", None, b"x".to_vec())),
+            run(upload(
+                &too_big,
+                "t",
+                "Log-a.txt",
+                None,
+                b"x".to_vec(),
+                timeout
+            )),
             UploadOutcome::Refused { .. }
         ));
         // Any other answer cut off is worth another try.
         let failing = cut_off_server("HTTP/1.1 500 Internal Server Error\r\n", "x");
         assert!(matches!(
-            run(upload(&failing, "t", "Log-a.txt", None, b"x".to_vec())),
+            run(upload(
+                &failing,
+                "t",
+                "Log-a.txt",
+                None,
+                b"x".to_vec(),
+                timeout
+            )),
             UploadOutcome::Retry { .. }
         ));
     }

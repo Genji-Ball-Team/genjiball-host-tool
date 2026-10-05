@@ -16,7 +16,7 @@ use tokio::sync::Notify;
 use crate::history::{self, Page, QueueSnapshot};
 use crate::server::{self, Host, TokenCheck, UploadOutcome};
 use crate::uploads::{self, Answer, Record, Sent};
-use crate::watcher::{self, Due, Tracker};
+use crate::watcher::{self, Due, Timing, Tracker};
 use crate::{config, log_folder, log_scan, Store};
 
 /// The event the window listens to for `UploadStatus`.
@@ -224,7 +224,7 @@ pub fn start(app: AppHandle) {
                 let _ = app.emit(STATUS_EVENT, status);
             }
             // Until the next poll, or until woken.
-            let interval = Duration::from_secs(config::POLL_INTERVAL_SECS);
+            let interval = app.state::<Store>().get().secs(&config::POLL_INTERVAL_SECS);
             let _ = tokio::time::timeout(interval, uploader.wake.notified()).await;
         }
     });
@@ -282,6 +282,9 @@ impl Run {
         let settings_error = store.load_error();
         let settings = store.get();
         let server_url = settings.server_url().to_string();
+        self.tracker.timing = Timing::new(&settings);
+        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let refresh_every = settings.secs(&config::STATUS_REFRESH_SECS);
         let mut status = UploadStatus {
             server_url: server_url.clone(),
             log_folder: log_folder::current(settings.log_folder.as_deref()).map(|f| f.path),
@@ -378,14 +381,28 @@ impl Run {
         }
 
         let (done, problem) = self
-            .send_due(&uploader, generation, &server_url, &token, &poll.due)
+            .send_due(
+                &uploader,
+                generation,
+                &server_url,
+                &token,
+                &poll.due,
+                timeout,
+            )
             .await;
         status.waiting = status.waiting.saturating_sub(done);
         status.problem = problem;
         status.retrying = self.retrying.clone();
         if status.problem.is_none() && uploader.is_current(generation) {
             if let Err(problem) = self
-                .refresh(&uploader, generation, &server_url, &token)
+                .refresh(
+                    &uploader,
+                    generation,
+                    &server_url,
+                    &token,
+                    refresh_every,
+                    timeout,
+                )
                 .await
             {
                 status.problem = Some(problem);
@@ -395,21 +412,21 @@ impl Run {
         finish(self, polled, status)
     }
 
-    /// Every `STATUS_REFRESH_SECS`, or when asked: asks the server whose token it is (the trust
-    /// may have changed) and the status now of the listed matches (an admin may have accepted
-    /// one), and records it. Failing to ask isn't a problem: it's asked again next time.
+    /// Every `every` (`STATUS_REFRESH_SECS`), or when asked: asks the server whose token it is (the
+    /// trust may have changed) and the status now of the listed matches (an admin may have
+    /// accepted one), and records it. Failing to ask isn't a problem: it's asked again next time.
     async fn refresh(
         &mut self,
         uploader: &Uploader,
         generation: u64,
         server_url: &str,
         token: &str,
+        every: Duration,
+        timeout: Duration,
     ) -> Result<(), Problem> {
         let asked = uploader.refresh.swap(false, Ordering::Relaxed);
         let due = match &self.refreshed {
-            Some((url, t, at)) if url == server_url && t == token => {
-                asked || at.elapsed() >= Duration::from_secs(config::STATUS_REFRESH_SECS)
-            }
+            Some((url, t, at)) if url == server_url && t == token => asked || at.elapsed() >= every,
             _ => {
                 self.host = None;
                 true
@@ -420,7 +437,7 @@ impl Run {
         }
         self.refreshed = Some((server_url.to_string(), token.to_string(), Instant::now()));
 
-        match server::check_token(server_url, token).await {
+        match server::check_token(server_url, token, timeout).await {
             TokenCheck::Ok { host } => self.host = Some(host),
             check @ (TokenCheck::Unknown | TokenCheck::Revoked) => {
                 let revoked = check == TokenCheck::Revoked;
@@ -438,7 +455,7 @@ impl Run {
             .unwrap()
             .recent_match_keys(server_url, config::MAX_STATUS_KEYS);
         if !keys.is_empty() && uploader.is_current(generation) {
-            match server::match_states(server_url, token, &keys).await {
+            match server::match_states(server_url, token, &keys, timeout).await {
                 Ok(states) => {
                     let mut record = uploader.record.lock().unwrap();
                     record.update_states(server_url, &states);
@@ -462,13 +479,14 @@ impl Run {
         server_url: &str,
         token: &str,
         due: &[Due],
+        timeout: Duration,
     ) -> (usize, Option<Problem>) {
         let mut done = 0;
         for due in due {
             if !uploader.is_current(generation) || self.held(server_url, Instant::now()) {
                 break;
             }
-            match self.send(uploader, server_url, token, due).await {
+            match self.send(uploader, server_url, token, due, timeout).await {
                 Ok(true) => done += 1,
                 Ok(false) => {}
                 Err(problem) => return (done, Some(problem)),
@@ -485,6 +503,7 @@ impl Run {
         server_url: &str,
         token: &str,
         due: &Due,
+        timeout: Duration,
     ) -> Result<bool, Problem> {
         // Only its complete lines: the game may be halfway through writing the next one.
         let bytes = match fs::read(&due.path) {
@@ -512,7 +531,15 @@ impl Run {
             }
         } else {
             let started_at = started_at(due);
-            match server::upload(server_url, token, &due.name, started_at.as_deref(), bytes).await {
+            let sent = server::upload(
+                server_url,
+                token,
+                &due.name,
+                started_at.as_deref(),
+                bytes,
+                timeout,
+            );
+            match sent.await {
                 UploadOutcome::Stored(answer) => {
                     // The answer has no match id on the site: the status refresh brings it, so
                     // ask for one at the end of this poll rather than in `STATUS_REFRESH_SECS`.
@@ -535,8 +562,9 @@ impl Run {
                 UploadOutcome::RateLimited { message, after } => {
                     // Every upload to this server waits, not only this file.
                     let now = Instant::now();
-                    let wait = after.unwrap_or_else(|| watcher::backoff(1));
-                    self.held = Some((server_url.to_string(), watcher::later(now, wait)));
+                    let timing = self.tracker.timing;
+                    let wait = after.unwrap_or_else(|| timing.backoff(1));
+                    self.held = Some((server_url.to_string(), timing.later(now, wait)));
                     self.tracker
                         .failed(&due.name, now, Some(wait), message.clone());
                     self.retrying = Some(message);
@@ -578,6 +606,7 @@ mod tests {
     use tauri::async_runtime::block_on;
 
     const EXAMPLE: &str = include_str!("../tests/fixtures/ranked-log-example.txt");
+    const TIMEOUT: Duration = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
 
     /// A log file in `dir` holding `text`, due to upload.
     fn due(dir: &Path, text: &str) -> Due {
@@ -696,6 +725,7 @@ mod tests {
             &server,
             "t",
             &[first.clone(), second.clone()],
+            TIMEOUT,
         ));
         // The first went through; the second wasn't sent (not even tried: nothing failed).
         assert_eq!((done, problem), (1, None));
@@ -717,12 +747,12 @@ mod tests {
             || {},
         );
         let start = Instant::now();
-        let sent = block_on(run.send(&uploader, &server, "t", &due(dir.path(), EXAMPLE)));
+        let sent = block_on(run.send(&uploader, &server, "t", &due(dir.path(), EXAMPLE), TIMEOUT));
         assert_eq!(sent, Ok(false));
         // Two hours, past `RETRY_MAX_SECS`, for every file to that server; not another server.
         assert!(run.held(
             &server,
-            start + Duration::from_secs(config::RETRY_MAX_SECS + 60)
+            start + Duration::from_secs(config::RETRY_MAX_SECS.default + 60)
         ));
         assert!(!run.held(&server, Instant::now() + Duration::from_secs(7200)));
         assert!(!run.held("https://test.genjiball.us", start));

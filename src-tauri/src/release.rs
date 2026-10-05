@@ -112,14 +112,21 @@ struct Cached {
 pub struct ReleaseCache(Mutex<Option<Cached>>);
 
 impl ReleaseCache {
-    /// The latest ranked release's tag and Workshop code: from memory while it's fresh, else from
-    /// GitHub (the code only when the asset changed).
-    pub async fn latest(&self) -> Result<(String, String), String> {
-        self.latest_with(find, download).await
+    /// The latest ranked release's tag and Workshop code: from memory while it's younger than
+    /// `max_age` (`config::RELEASE_CACHE_SECS`, as the host set it), else from GitHub (the code
+    /// only when the asset changed). `timeout` is each request's.
+    pub async fn latest(
+        &self,
+        max_age: Duration,
+        timeout: Duration,
+    ) -> Result<(String, String), String> {
+        self.latest_with(max_age, || find(timeout), |r| download(r, timeout))
+            .await
     }
 
     async fn latest_with<F, FF, D, DF>(
         &self,
+        max_age: Duration,
         find: F,
         download: D,
     ) -> Result<(String, String), String>
@@ -130,7 +137,6 @@ impl ReleaseCache {
         DF: Future<Output = Result<String, String>>,
     {
         let mut cached = self.0.lock().await;
-        let max_age = Duration::from_secs(config::RELEASE_CACHE_SECS);
         if let Some(c) = cached
             .as_ref()
             .filter(|c| c.checked.is_some_and(|t| t.elapsed() < max_age))
@@ -164,7 +170,7 @@ fn unreachable(e: reqwest::Error) -> String {
     format!("Couldn't reach GitHub: {}", e.without_url())
 }
 
-async fn find() -> Result<Release, String> {
+async fn find(timeout: Duration) -> Result<Release, String> {
     let url = url::Url::parse_with_params(
         &format!(
             "{}/repos/{}/releases",
@@ -174,7 +180,7 @@ async fn find() -> Result<Release, String> {
         [("per_page", config::RELEASES_SEARCHED.to_string())],
     )
     .map_err(|e| e.to_string())?;
-    let response = server::client()?
+    let response = server::client(timeout)?
         .get(url)
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -185,8 +191,8 @@ async fn find() -> Result<Release, String> {
     pick(status, &body)
 }
 
-async fn download(release: Release) -> Result<String, String> {
-    let response = server::client()?
+async fn download(release: Release, timeout: Duration) -> Result<String, String> {
+    let response = server::client(timeout)?
         .get(&release.asset_url)
         .send()
         .await
@@ -208,6 +214,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    const MAX_AGE: Duration = Duration::from_secs(config::RELEASE_CACHE_SECS.default);
 
     fn release(tag: &str, draft: bool, prerelease: bool, assets: &[&str]) -> serde_json::Value {
         serde_json::json!({
@@ -340,6 +348,7 @@ mod tests {
     ) -> Result<(String, String), String> {
         cache
             .latest_with(
+                MAX_AGE,
                 || async move { Ok(release) },
                 |_| async move {
                     downloads.fetch_add(1, Ordering::SeqCst);
@@ -401,6 +410,7 @@ mod tests {
             let cache = ReleaseCache::default();
             let failed = cache
                 .latest_with(
+                    MAX_AGE,
                     || async { Err::<Release, _>("offline".to_string()) },
                     |_| async { Ok(String::new()) },
                 )
@@ -421,6 +431,7 @@ mod tests {
                     tauri::async_runtime::spawn(async move {
                         cache
                             .latest_with(
+                                MAX_AGE,
                                 || async move {
                                     finds.fetch_add(1, Ordering::SeqCst);
                                     tokio::time::sleep(Duration::from_millis(50)).await;

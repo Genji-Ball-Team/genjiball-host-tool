@@ -12,6 +12,7 @@ mod uploader;
 mod uploads;
 mod watcher;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -96,6 +97,22 @@ struct AppState {
     has_token: bool,
     log_folder: Option<LogFolder>,
     settings_error: Option<String>,
+    /// Every `config::TUNABLES`, in order, with the host's value.
+    advanced: Vec<AdvancedSetting>,
+}
+
+/// A tunable under Advanced, as the window shows it. All in seconds.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdvancedSetting {
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    default: u64,
+    min: u64,
+    max: u64,
+    /// The host's value, `None` at the default.
+    value: Option<u64>,
 }
 
 fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> {
@@ -108,6 +125,18 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         has_token: store.tokens.get(settings.server_url())?.is_some(),
         log_folder: log_folder::current(settings.log_folder.as_deref()),
         settings_error,
+        advanced: config::TUNABLES
+            .iter()
+            .map(|t| AdvancedSetting {
+                key: t.key,
+                label: t.label,
+                help: t.help,
+                default: t.default,
+                min: t.min,
+                max: t.max,
+                value: settings.advanced.get(t.key).copied(),
+            })
+            .collect(),
     })
 }
 
@@ -122,14 +151,16 @@ async fn check_saved_token(
     store: State<'_, Store>,
     uploader: State<'_, Uploader>,
 ) -> Result<TokenCheck, String> {
-    let server_url = store.get().server_url().to_string();
+    let settings = store.get();
+    let server_url = settings.server_url().to_string();
     let token = store
         .tokens
         .get(&server_url)?
         .ok_or("No host token saved for this server")?;
     // The listed matches' status too: "Check again" after an admin accepted one.
     uploader.refresh();
-    let check = server::check_token(&server_url, &token).await;
+    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let check = server::check_token(&server_url, &token, timeout).await;
     if matches!(check, TokenCheck::Ok { .. }) {
         // The server knows it now (an admin fixed it, say): stop holding uploads for it.
         uploader.token_ok();
@@ -149,8 +180,10 @@ async fn save_token(
     if token.is_empty() {
         return Err("Paste the host token an admin gave you".into());
     }
-    let server_url = store.get().server_url().to_string();
-    let check = server::check_token(&server_url, token).await;
+    let settings = store.get();
+    let server_url = settings.server_url().to_string();
+    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let check = server::check_token(&server_url, token, timeout).await;
     if !check.is_rejected() {
         store.tokens.set(&server_url, token)?;
         // Uploads to this server start with the logs written from now on. A token saved again,
@@ -232,6 +265,22 @@ fn set_log_folder(
     app_state(&app, &store)
 }
 
+/// The Advanced values the host entered, by key. A key left out goes back to its default, so `{}`
+/// resets them all. Nothing is saved unless every value is in its range.
+#[tauri::command]
+fn set_advanced(
+    values: BTreeMap<String, u64>,
+    app: tauri::AppHandle,
+    store: State<Store>,
+    uploader: State<Uploader>,
+) -> Result<AppState, String> {
+    let values = settings::normalize_advanced(&values)?;
+    store.update(|s| s.replace_advanced(values))?;
+    // The next poll starts now, with the new values.
+    uploader.wake();
+    app_state(&app, &store)
+}
+
 /// The ranked Workshop code, for the window to copy.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,9 +307,12 @@ async fn build_ranked_code(
     store: State<'_, Store>,
     releases: State<'_, ReleaseCache>,
 ) -> Result<RankedCode, String> {
-    let server_url = store.get().server_url().to_string();
-    let (release, base) = releases.latest().await?;
-    let tags = server::rank_tags(&server_url).await?;
+    let settings = store.get();
+    let server_url = settings.server_url().to_string();
+    let keep = settings.secs(&config::RELEASE_CACHE_SECS);
+    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let (release, base) = releases.latest(keep, timeout).await?;
+    let tags = server::rank_tags(&server_url, timeout).await?;
     let filled = ranked_code::fill(&base, &tags)?;
     Ok(RankedCode {
         code: filled.code,
@@ -269,7 +321,7 @@ async fn build_ranked_code(
         tags_updated_at: tags.updated_at,
         names: filled.names,
         skipped_names: filled.skipped,
-        keep_secs: config::RELEASE_CACHE_SECS,
+        keep_secs: keep.as_secs(),
     })
 }
 
@@ -343,6 +395,7 @@ pub fn run() {
             forget_token,
             set_server_url,
             set_log_folder,
+            set_advanced,
             get_upload_status,
             build_ranked_code,
             get_upload_history,

@@ -73,3 +73,11 @@ details form { margin-top: .75rem; }
 .uploads button { padding: .2rem .65rem; font-size: .8rem; }
 .soft { color: var(--soft); }
 .pager { align-items: center; font-size: .85rem; }
+
+.tunable { margin-top: 1rem; }
+.tunable:first-child { margin-top: 0; }
+.tunable .row { align-items: center; margin-top: 0; }
+.tunable input { flex: 0 0 7rem; }
+.tunable .note { margin-top: .25rem; }
+#advanced-state { margin: .75rem 0 0; }
+#advanced-form > .row { margin-top: 1rem; }

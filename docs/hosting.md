@@ -24,6 +24,14 @@ You can close the window afterwards: the tool keeps uploading from the tray (nex
 
 Only matches played after you first saved a token for a server are uploaded to that server.
 
+## Going AFK
+
+If you have to step away but want to keep the lobby going, click **Go AFK** at the top of the tool. You keep your slot, and your rating doesn't change in rounds that start while AFK is on: the server leaves you out of them, as if you had left. Other players still count, and are rated on their order without you.
+
+- A round already under way when you click still counts for you. AFK starts with the next round.
+- AFK stays on across matches, and when you restart the tool, until you click **I'm back: turn AFK off**. While it's on, the AFK section is red and the header says **AFK**.
+- The AFK rounds go up with the match's upload. The tool shows which rounds of the latest match weren't rated for you so far.
+
 ## The upload list
 
 Under "Uploads" each log file is listed with the players in it and what happened to it.

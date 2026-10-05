@@ -38,6 +38,13 @@ dd { margin: 0; overflow-wrap: anywhere; }
 }
 #host-trust-note { margin: -.5rem 0 1rem; }
 
+/* AFK on: hard to miss, at the top and in the header. */
+#afk.on { margin-left: -1rem; padding-left: calc(1rem - 3px); border-left: 3px solid var(--bad); background: #1c1012; padding-bottom: 1rem; }
+#afk.on h2 { color: var(--bad); }
+#afk .row { align-items: center; margin-top: 0; }
+#afk .status { margin-left: 0; }
+.tag.afk { align-self: center; border-color: var(--bad); color: var(--bad); }
+
 label { display: block; color: var(--soft); font-size: .85rem; margin-bottom: .35rem; }
 .row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
 form .row { margin-top: 0; }

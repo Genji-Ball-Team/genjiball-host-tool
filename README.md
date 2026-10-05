@@ -8,7 +8,7 @@ How ranked works end to end:
 2. This tool watches the log folder and uploads the matches.
 3. The [ranked server](https://github.com/Genji-Ball-Team/genjiball-ranked) parses the log, rates each round and shows the results on the website.
 
-**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
+**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, lets the host go AFK without their rating changing, and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
 
 - **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
 
@@ -63,6 +63,7 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/updates.rs` | The self-update: checks GitHub releases, installs a signed update |
 | `src-tauri/src/watcher.rs`, `log_scan.rs` | Which log files to upload, and when |
 | `src-tauri/src/uploader.rs`, `uploads.rs` | The upload loop, and the record of what was uploaded (`uploads.json`) |
+| `src-tauri/src/afk.rs` | Host AFK: the rounds that start while it's on, per match (`afk.json`), sent as `X-Host-Afk` |
 | `src-tauri/capabilities/` | What the window is allowed to call |
 
 ## Contributing

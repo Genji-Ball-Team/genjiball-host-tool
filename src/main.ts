@@ -69,6 +69,16 @@ interface UploadStatus {
   history: HistoryPage;
   historyRevision: number;
   host: Host | null;
+  afk: AfkStatus;
+}
+
+/** Mirrors `AfkStatus` in src-tauri/src/afk.rs: what `set_afk` returns. */
+interface AfkStatus {
+  on: boolean;
+  /** The match a round was last skipped in for AFK, and those rounds. */
+  latest: { matchKey: string; rounds: number[] } | null;
+  /** Why `afk.json` couldn't be read or written. */
+  error: string | null;
 }
 
 /** Mirrors `Problem` in src-tauri/src/uploader.rs. */
@@ -375,6 +385,27 @@ function describeAnswer(answer: Answer): { text: string; tone: Tone } {
   return { text: text.charAt(0).toUpperCase() + text.slice(1), tone };
 }
 
+/** Whether AFK is on, as last shown: the button turns it the other way. */
+let afkOn = false;
+
+function renderAfk(afk: AfkStatus): void {
+  afkOn = afk.on;
+  el("afk").classList.toggle("on", afk.on);
+  el("afk-tag").hidden = !afk.on;
+  const toggle = el("afk-toggle");
+  toggle.textContent = afk.on ? "I'm back: turn AFK off" : "Go AFK";
+  toggle.className = afk.on ? "" : "quiet";
+  toggle.setAttribute("aria-pressed", String(afk.on));
+  const line = el("afk-state");
+  const rounds = afk.latest?.rounds ?? [];
+  const skipped = rounds.length ? ` Not rated for you so far: round${rounds.length === 1 ? "" : "s"} ${rounds.join(", ")} of the latest match.` : "";
+  line.textContent = afk.on ? `AFK is on.${skipped}` : "";
+  line.className = "status bad";
+  const error = el("afk-error");
+  error.hidden = !afk.error;
+  error.textContent = afk.error ?? "";
+}
+
 function renderUploads(status: UploadStatus): void {
   // A poll that began before the host changed the server or folder: not about what's shown.
   // Dropped before it touches the history, so it can't replace the new server's page.
@@ -527,7 +558,9 @@ async function show(next: AppState): Promise<void> {
   state = next;
   ready = true;
   render();
-  renderUploads(await invoke<UploadStatus>("get_upload_status"));
+  const status = await invoke<UploadStatus>("get_upload_status");
+  renderAfk(status.afk);
+  renderUploads(status);
 }
 
 async function refresh(): Promise<void> {
@@ -748,12 +781,25 @@ function showUpdateError(message: string): void {
 el("update-check").addEventListener("click", () => void busy(async () => renderUpdate(await invoke<UpdateStatus>("check_for_update")), showUpdateError));
 el("update-install").addEventListener("click", () => void busy(() => invoke("install_update"), showUpdateError));
 
+el("afk-toggle").addEventListener("click", () => {
+  void busy(
+    async () => renderAfk(await invoke<AfkStatus>("set_afk", { on: !afkOn })),
+    (m) => {
+      const error = el("afk-error");
+      error.hidden = false;
+      error.textContent = m;
+    },
+  );
+});
+
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
 void busy(async () => {
   await listen<UploadStatus>("upload-status", (event) => {
     if (!ready) return; // `show` asks for the status once the settings are known.
+    // AFK is the same whatever the settings, so even a status for others shows it.
+    renderAfk(event.payload.afk);
     // The settings file was fixed by hand (the uploader reads it again): show what's in it now.
     if (state.settingsError && event.payload.problem?.kind !== "settings") void refresh();
     else renderUploads(event.payload);

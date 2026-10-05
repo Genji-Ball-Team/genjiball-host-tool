@@ -65,6 +65,15 @@ pub const TOKENS_FALLBACK_FILE: &str = "tokens.json";
 /// what keeps a restart from uploading every file again, and what the window lists.
 pub const UPLOADS_FILE: &str = "uploads.json";
 
+/// Host AFK (`afk.rs`): whether it's on, and the rounds that weren't rated for the host, per match.
+/// In the app's config folder, so they last across restarts.
+pub const AFK_FILE: &str = "afk.json";
+
+/// How long the AFK rounds of a match are kept after the last one, for its uploads. A match is
+/// usually
+/// uploaded minutes after it ends; this leaves room for a host who stays offline for weeks.
+pub const AFK_KEEP_SECS: u64 = 30 * 24 * 3600;
+
 /// Workshop log files are `Log-<date>-<time>.txt`; anything else in the folder is left alone.
 pub const LOG_FILE_PREFIX: &str = "Log-";
 pub const LOG_FILE_SUFFIX: &str = ".txt";

@@ -1,7 +1,7 @@
 //! What the watcher needs to know about a Workshop log file (GenjiBall-CE `docs/ranked-log.md` on
-//! `v1.3.3R`): whether it holds a ranked match, how many matches in it have ended, and the players'
-//! names for the upload history. The server does the real parsing (and the match view, #16, will
-//! share its parser).
+//! `v1.3.3R`): whether it holds a ranked match, how many matches in it have ended, the players'
+//! names for the upload history, and which rounds each match has started (for host AFK, `afk.rs`).
+//! The server does the real parsing (and the match view, #16, will share its parser).
 
 use std::time::SystemTime;
 
@@ -17,6 +17,32 @@ pub struct Scan {
     pub match_ends: usize,
     /// The names in `JOIN` lines, each once, in the order they first joined.
     pub players: Vec<String>,
+    /// The `matchKey` of each `GBR` line, each once, in the order they start.
+    pub match_keys: Vec<String>,
+    /// Each `ROUND_START` after a `GBR`, with that match's key.
+    pub round_starts: Vec<RoundStart>,
+}
+
+/// A round that started: `ROUND_START|time|round|ids` in the match whose `GBR` came before it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoundStart {
+    pub match_key: String,
+    pub round: u32,
+}
+
+/// The `matchKey` of a `GBR|time|format|gameVersion|matchKey` event (text, not a number).
+fn match_key(event: &str) -> Option<&str> {
+    let key = event.strip_prefix("GBR|")?.split('|').nth(3)?;
+    (!key.is_empty()).then_some(key)
+}
+
+/// The round of a `ROUND_START|time|round|ids` event, once the round is written in full: the `|`
+/// after it is there. So the half-written last line of a file counts once its round is known.
+fn round_start(event: &str) -> Option<u32> {
+    let mut fields = event.strip_prefix("ROUND_START|")?.splitn(3, '|');
+    let (_time, round) = (fields.next()?, fields.next()?);
+    fields.next()?;
+    round.parse().ok()
 }
 
 /// The event part of a line: the Workshop's `[hh:mm:ss] ` prefix stripped, if it's there.
@@ -41,11 +67,29 @@ pub fn complete_lines(bytes: &[u8]) -> &[u8] {
 
 /// What's in the complete lines of `text` (see `complete_lines`).
 pub fn scan(text: &str) -> Scan {
-    let text = &text[..text.rfind('\n').map_or(0, |i| i + 1)];
+    read(&text[..text.rfind('\n').map_or(0, |i| i + 1)]).0
+}
+
+/// What's in these lines, and the key of the match the last of them is in.
+fn read(text: &str) -> (Scan, Option<&str>) {
     let mut found = Scan::default();
+    let mut current = None;
     for line in text.lines().map(event) {
         if line.starts_with("GBR|") {
             found.ranked = true;
+            current = match_key(line);
+            if let Some(key) = current {
+                if !found.match_keys.iter().any(|k| k == key) {
+                    found.match_keys.push(key.to_string());
+                }
+            }
+        } else if let Some(round) = round_start(line) {
+            if let Some(key) = current {
+                found.round_starts.push(RoundStart {
+                    match_key: key.to_string(),
+                    round,
+                });
+            }
         } else if line.starts_with("MATCH_END|") {
             found.match_ends += 1;
         } else if let Some(fields) = line.strip_prefix("JOIN|") {
@@ -56,7 +100,22 @@ pub fn scan(text: &str) -> Scan {
             }
         }
     }
-    found
+    (found, current)
+}
+
+/// Every round started in `text`, with the line the game may be halfway through writing once its
+/// round is written in full (`round_start`): what has already started when the host turns AFK on.
+pub fn round_starts(text: &str) -> Vec<RoundStart> {
+    let complete = text.rfind('\n').map_or(0, |i| i + 1);
+    let (found, current) = read(&text[..complete]);
+    let mut starts = found.round_starts;
+    if let (Some(round), Some(key)) = (round_start(event(&text[complete..])), current) {
+        starts.push(RoundStart {
+            match_key: key.to_string(),
+            round,
+        });
+    }
+    starts
 }
 
 /// Whether Overwatch would have named a Workshop log this.
@@ -101,8 +160,55 @@ mod tests {
                 players: ["Sparrow", "Tidal", "Mochi", "Ghost", "Nova"]
                     .map(String::from)
                     .to_vec(),
+                match_keys: vec!["482913507226".into()],
+                round_starts: [1, 2, 3].map(|round| start("482913507226", round)).to_vec(),
             }
         );
+    }
+
+    fn start(match_key: &str, round: u32) -> RoundStart {
+        RoundStart {
+            match_key: match_key.into(),
+            round,
+        }
+    }
+
+    #[test]
+    fn reads_the_rounds_of_each_match() {
+        let text =
+            "GBR|1|1|1.3.3R|111\nROUND_START|2|1|1,2\nROUND_START|3|2|1,2\nMATCH_END|4|TIME\n\
+                    [00:00:05] GBR|5|1|1.3.3R|222\n[00:00:06] ROUND_START|6|1|1,2\n";
+        let found = scan(text);
+        assert_eq!(found.match_keys, ["111", "222"]);
+        assert_eq!(
+            found.round_starts,
+            [start("111", 1), start("111", 2), start("222", 1)]
+        );
+        // A round before any `GBR` has no match, and a `GBR` without a key starts none.
+        let found = scan("ROUND_START|1|1|1\nGBR|2|1|1.3.3R|\nROUND_START|3|2|1\n");
+        assert!(found.match_keys.is_empty());
+        assert!(found.round_starts.is_empty());
+    }
+
+    #[test]
+    fn a_half_written_round_start_counts_once_its_round_is_there() {
+        let done = "GBR|1|1|1.3.3R|111\nROUND_START|2|1|1,2\n";
+        // `scan` only reads complete lines; `round_starts` takes the last one once its round is.
+        for (rest, rounds) in [
+            ("ROUND_START|3|", vec![1]),
+            ("ROUND_START|3|1", vec![1]),
+            ("ROUND_START|3|2|", vec![1, 2]),
+            ("[00:00:03] ROUND_START|3|2|1,", vec![1, 2]),
+        ] {
+            let text = format!("{done}{rest}");
+            assert_eq!(scan(&text).round_starts, [start("111", 1)], "{rest}");
+            assert_eq!(
+                round_starts(&text),
+                rounds.iter().map(|&r| start("111", r)).collect::<Vec<_>>(),
+                "{rest}"
+            );
+        }
+        assert!(round_starts("ROUND_START|1|1|1").is_empty());
     }
 
     #[test]

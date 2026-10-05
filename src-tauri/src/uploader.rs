@@ -13,8 +13,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
+use crate::afk::{AfkStatus, AfkStore};
 use crate::history::{self, Page, QueueSnapshot};
-use crate::server::{self, Host, TokenCheck, UploadOutcome};
+use crate::log_scan::RoundStart;
+use crate::server::{self, Host, TokenCheck, UploadInfo, UploadOutcome};
 use crate::uploads::{self, Answer, Record, Sent};
 use crate::watcher::{self, Due, Timing, Tracker};
 use crate::{config, log_folder, log_scan, Store};
@@ -72,6 +74,8 @@ pub struct UploadStatus {
     pub history_revision: u64,
     /// Whose token it is, as the server last said: the window shows an untrusted host.
     pub host: Option<Host>,
+    /// Whether the host is AFK, and the rounds noted for it lately.
+    pub afk: AfkStatus,
 }
 
 pub struct Uploader {
@@ -80,6 +84,8 @@ pub struct Uploader {
     /// Why `uploads.json` couldn't be read, while it can't. It holds when uploads started, so
     /// it isn't written over and nothing is uploaded until it's fixed or deleted.
     record_error: Mutex<Option<String>>,
+    /// Host AFK and its rounds (`afk.json`, next to `uploads.json`).
+    afk: Mutex<AfkStore>,
     status: Mutex<UploadStatus>,
     /// The ranked files waiting to be uploaded, as of the last poll.
     queue: Mutex<QueueSnapshot>,
@@ -103,10 +109,12 @@ impl Uploader {
             Ok(record) => (record, None),
             Err(e) => (Record::default(), Some(e)),
         };
+        let afk = AfkStore::open(record_path.with_file_name(config::AFK_FILE));
         Self {
             record_path,
             record: Mutex::new(record),
             record_error: Mutex::new(record_error),
+            afk: Mutex::new(afk),
             status: Mutex::new(UploadStatus::default()),
             queue: Mutex::new(QueueSnapshot::default()),
             retries: Mutex::new(Vec::new()),
@@ -136,8 +144,33 @@ impl Uploader {
         self.wake();
     }
 
+    /// The last poll's status, with AFK as it is now (before the first poll ends, say).
     pub fn status(&self) -> UploadStatus {
-        self.status.lock().unwrap().clone()
+        UploadStatus {
+            afk: self.afk(),
+            ..self.status.lock().unwrap().clone()
+        }
+    }
+
+    pub fn afk(&self) -> AfkStatus {
+        self.afk.lock().unwrap().status()
+    }
+
+    /// The host turned AFK on or off, with `started` the rounds in the live log now (`afk.rs`).
+    pub fn set_afk(&self, on: bool, started: &[RoundStart]) -> AfkStatus {
+        let status = self.afk.lock().unwrap().set(on, started, SystemTime::now());
+        // The window hears it from the next status too.
+        self.wake();
+        status
+    }
+
+    /// Notes the AFK rounds among `started`, the rounds read from the live log.
+    fn note_afk(&self, started: &[RoundStart]) {
+        self.afk.lock().unwrap().saw(
+            started,
+            SystemTime::now(),
+            Duration::from_secs(config::AFK_KEEP_SECS),
+        );
     }
 
     /// Page `page` of the upload history for `server_url`, with the files waiting in `folder` (the
@@ -341,6 +374,7 @@ impl Run {
             }
             status.history = uploader.history(&server_url, folder, 0);
             status.history_revision = uploader.history_revision();
+            status.afk = uploader.afk();
             status
         };
 
@@ -398,6 +432,8 @@ impl Run {
             }
         };
         status.waiting = poll.waiting;
+        // Before any upload: a file that grew with a round started while AFK sends it.
+        uploader.note_afk(self.tracker.live_rounds());
 
         let token = match token {
             Ok(Some(token)) => token,
@@ -591,6 +627,12 @@ impl Run {
         };
         let size = bytes.len() as u64;
         let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
+        // The live log may have grown since the poll read it: a round that started meanwhile is
+        // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
+        if self.tracker.live() == Some(due.name.as_str()) {
+            uploader.note_afk(&scan.round_starts);
+        }
+        let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
         let answer = if size > config::MAX_UPLOAD_BYTES {
             Answer::Refused {
                 error: "too_large".into(),
@@ -601,15 +643,13 @@ impl Run {
             }
         } else {
             let started_at = started_at(due);
-            let sent = server::upload(
-                server_url,
-                token,
-                &due.name,
-                started_at.as_deref(),
+            let info = UploadInfo {
+                file_name: &due.name,
+                started_at: started_at.as_deref(),
                 region,
-                bytes,
-                timeout,
-            );
+                host_afk: host_afk.as_deref(),
+            };
+            let sent = server::upload(server_url, token, info, bytes, timeout);
             match sent.await {
                 UploadOutcome::Stored(answer) => {
                     // The answer has no match id on the site: the status refresh brings it, so
@@ -863,6 +903,79 @@ mod tests {
         let record = uploader.record.lock().unwrap();
         assert!(record.get(&server, &first.name).is_some());
         assert!(record.get(&server, &second.name).is_none());
+    }
+
+    /// The request an upload of `text` (in `file`, rewritten first) sends, as `run` and `uploader`.
+    fn sent_request(run: &mut Run, uploader: &Uploader, file: &Due, text: &str) -> String {
+        fs::write(&file.path, text).unwrap();
+        let (seen, request) = std::sync::mpsc::channel();
+        let stored = r#"{"result":"stored","matches":[]}"#;
+        let server = server::test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{stored}",
+                stored.len()
+            ),
+            text,
+            seen,
+        );
+        let sent = block_on(run.send(uploader, target(&server), file, TIMEOUT));
+        assert_eq!(sent, Ok(true));
+        request.recv().unwrap().to_ascii_lowercase()
+    }
+
+    /// The example log up to the line that starts `round`, without it.
+    fn before_round(round: usize) -> String {
+        let (at, _) = EXAMPLE
+            .match_indices("ROUND_START|")
+            .nth(round - 1)
+            .unwrap();
+        EXAMPLE[..EXAMPLE[..at].rfind('\n').unwrap() + 1].to_string()
+    }
+
+    #[test]
+    fn sends_the_rounds_that_started_while_the_host_was_afk() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        fs::create_dir(&logs).unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let file = due(&logs, &before_round(2));
+        let poll = |run: &mut Run| {
+            run.tracker
+                .poll(
+                    &logs,
+                    Instant::now(),
+                    SystemTime::now(),
+                    SystemTime::UNIX_EPOCH,
+                    |_| None,
+                )
+                .unwrap();
+            uploader.note_afk(run.tracker.live_rounds());
+        };
+        poll(&mut run);
+        // Not AFK: no header.
+        let request = sent_request(&mut run, &uploader, &file, &before_round(2));
+        assert!(!request.contains("x-host-afk"), "{request}");
+
+        // Round 2 had started when the host turned AFK on, but wasn't read yet.
+        let started = log_scan::round_starts(&before_round(3));
+        assert!(uploader.set_afk(true, &started).on);
+        fs::write(&file.path, before_round(3)).unwrap();
+        poll(&mut run);
+        let request = sent_request(&mut run, &uploader, &file, &before_round(3));
+        assert!(!request.contains("x-host-afk"), "{request}");
+
+        // Round 3 starts after the poll read the file, just before the upload: it's sent too.
+        let request = sent_request(&mut run, &uploader, &file, EXAMPLE);
+        assert!(
+            request.contains("\r\nx-host-afk: 482913507226:3\r\n"),
+            "{request}"
+        );
+        // And kept across a restart, with AFK still on.
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let afk = uploader.afk();
+        assert!(afk.on);
+        assert_eq!(afk.latest.unwrap().rounds, [3]);
     }
 
     #[test]

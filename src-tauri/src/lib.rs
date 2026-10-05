@@ -313,6 +313,9 @@ struct RankedCode {
     server_url: String,
     /// The region the host picked when it was built (`None`: the home region), likewise.
     chosen_region: Option<String>,
+    /// The region the rank tags were asked for: the one picked, else the home region (`None`
+    /// without a token: the server's first region). The window drops a kept code for another.
+    requested_region: Option<String>,
     /// The region whose rank tags are in it, as the server said. `None` from a server without
     /// regions.
     region: Option<String>,
@@ -333,18 +336,15 @@ struct RankedCode {
 async fn build_ranked_code(
     store: State<'_, Store>,
     releases: State<'_, ReleaseCache>,
-    uploader: State<'_, Uploader>,
 ) -> Result<RankedCode, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
-    // The home region once the server said it; until then the server's first region, which the
-    // answer names.
-    let region = settings
-        .region
-        .clone()
-        .or_else(|| uploader.home_region(&server_url));
     let keep = settings.secs(&config::RELEASE_CACHE_SECS);
     let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let region = match &settings.region {
+        Some(region) => Some(region.clone()),
+        None => home_region(&store, &server_url, timeout).await?,
+    };
     let (release, base) = releases.latest(keep, timeout).await?;
     let tags = server::rank_tags(&server_url, region.as_deref(), timeout).await?;
     let filled = ranked_code::fill(&base, &tags)?;
@@ -352,6 +352,7 @@ async fn build_ranked_code(
         code: filled.code,
         server_url,
         chosen_region: settings.region,
+        requested_region: region,
         region: tags.region,
         release,
         tags_updated_at: tags.updated_at,
@@ -359,6 +360,25 @@ async fn build_ranked_code(
         skipped_names: filled.skipped,
         keep_secs: keep.as_secs(),
     })
+}
+
+/// The home region of the token saved for `server_url`, asked now: the token may have changed
+/// since the uploader last asked. `None` without a token, or when the server can't say (the
+/// server's first region then, which its answer names).
+async fn home_region(
+    store: &Store,
+    server_url: &str,
+    timeout: std::time::Duration,
+) -> Result<Option<String>, String> {
+    let Some(token) = store.tokens.get(server_url)? else {
+        return Ok(None);
+    };
+    match server::check_token(server_url, &token, timeout).await {
+        TokenCheck::Ok { host } => host.region.map(Some).ok_or_else(|| {
+            "You have no home region: pick the region you host in under Ranked server".to_string()
+        }),
+        _ => Ok(None),
+    }
 }
 
 fn show_window(app: &tauri::AppHandle) {

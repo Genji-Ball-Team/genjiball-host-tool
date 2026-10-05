@@ -140,15 +140,6 @@ impl Uploader {
         self.status.lock().unwrap().clone()
     }
 
-    /// The host's home region on `server_url`, as the server last said, if it's known.
-    pub fn home_region(&self, server_url: &str) -> Option<String> {
-        let status = self.status.lock().unwrap();
-        if status.server_url != server_url {
-            return None;
-        }
-        status.host.as_ref()?.region.clone()
-    }
-
     /// Page `page` of the upload history for `server_url`, with the files waiting in `folder` (the
     /// log folder now, `None` when there's none).
     pub fn history(&self, server_url: &str, folder: Option<&Path>, page: usize) -> Page {

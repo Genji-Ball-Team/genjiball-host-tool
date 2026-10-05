@@ -121,6 +121,8 @@ interface RankedCode {
   code: string;
   serverUrl: string;
   chosenRegion: string | null;
+  /** The region the tags were asked for: the one picked, else the home region. */
+  requestedRegion: string | null;
   /** Whose rank tags are in it. */
   region: string | null;
   release: string;
@@ -670,6 +672,8 @@ function takeUncopied(): { built: RankedCode; at: number } | null {
   const kept = uncopied;
   uncopied = null;
   if (!kept || kept.built.serverUrl !== state.serverUrl || kept.built.chosenRegion !== state.region) return null;
+  // The home region may have changed since (a new token, or an admin).
+  if (kept.built.requestedRegion !== (state.region ?? homeRegion ?? null)) return null;
   return Date.now() - kept.at < kept.built.keepSecs * 1000 ? kept : null;
 }
 

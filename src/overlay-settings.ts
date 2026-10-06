@@ -7,18 +7,21 @@ import { toast } from "./toast";
  * widgets sit is the overlay's to save (edit mode).
  */
 
-/** Mirrors `OverlaySettings` in src-tauri/src/settings.rs: what `set_overlay` takes. */
+/**
+ * Mirrors `OverlaySettings` in src-tauri/src/settings.rs: what `set_overlay` takes. Rust leaves an
+ * empty map out of what it sends.
+ */
 export interface OverlaySettings {
   on: boolean | null;
-  widgets: Record<string, boolean>;
+  widgets?: Record<string, boolean>;
   opacity: number | null;
   scale: number | null;
   onlyWithGame: boolean | null;
-  layout: Record<string, [number, number]>;
-  hotkeys: Record<string, string>;
+  layout?: Record<string, [number, number]>;
+  hotkeys?: Record<string, string>;
   stream: boolean | null;
   streamPort: number | null;
-  streamWidgets: Record<string, boolean>;
+  streamWidgets?: Record<string, boolean>;
 }
 
 interface Range {
@@ -209,7 +212,7 @@ function render(v: OverlayView): void {
   el("overlay-layout-actions").hidden = !v.on;
   const edit = el<HTMLButtonElement>("overlay-edit");
   edit.textContent = v.editing ? "Done editing" : "Edit layout";
-  el("overlay-reset").hidden = Object.keys(v.settings.layout).length === 0;
+  el("overlay-reset").hidden = Object.keys(v.settings.layout ?? {}).length === 0;
   widgetGroups(el("overlay-widgets"), v.widgetsOn, false);
   range("overlay-opacity", v.opacity, v.opacityRange);
   range("overlay-scale", v.scale, v.scaleRange);

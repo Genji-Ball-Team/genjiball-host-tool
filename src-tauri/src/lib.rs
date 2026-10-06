@@ -1222,11 +1222,12 @@ fn get_overlay_feed(request: FeedRequest, app: tauri::AppHandle) -> Feed {
 
 /// The overlay's settings from Settings → Overlay. Where the widgets are isn't changed here: the
 /// overlay saves that (`set_overlay_layout`).
+// Async: it may open the overlay window, which deadlocks from a synchronous command on Windows.
 #[tauri::command]
-fn set_overlay(
+async fn set_overlay(
     settings: OverlaySettings,
     app: tauri::AppHandle,
-    store: State<Store>,
+    store: State<'_, Store>,
 ) -> Result<AppState, String> {
     let layout = store.get().overlay.layout;
     let normalized = settings::normalize_overlay(&OverlaySettings { layout, ..settings })?;

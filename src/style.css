@@ -402,3 +402,8 @@ body.afk::after { content: ""; position: fixed; inset: 0; z-index: 30; border: 2
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { animation: none !important; transition: none !important; }
 }
+
+/* Settings → Game: a data center per region. */
+.data-centers .row { align-items: center; margin-top: .4rem; }
+.data-centers .row:first-child { margin-top: 0; }
+.data-centers label { width: 8.5rem; margin: 0; }

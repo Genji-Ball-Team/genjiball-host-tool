@@ -68,6 +68,8 @@ export interface TourneyCode {
   top: number;
   names: number;
   skippedNames: number;
+  /** The data center the code puts the lobby on, `null`: the game picks. */
+  dataCenter: string | null;
 }
 
 /** Mirrors `ScreenshotFile` in src-tauri/src/tourney.rs: what `newest_screenshot` returns. */

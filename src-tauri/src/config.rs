@@ -38,6 +38,46 @@ pub const REGIONS: [Region; 2] = [
     },
 ];
 
+/// The Workshop data centers (the code's `lobby` settings, `Data Center Preference`) a region's
+/// ranked and tourney codes can put the lobby on, by the name the code uses (OverPy's
+/// `dataCenterPreference` values, in English like the rest of the release's code). The first is the
+/// region's default; the host can pick another, or `BEST_AVAILABLE`.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct RegionDataCenters {
+    pub region: &'static str,
+    pub names: &'static [&'static str],
+}
+
+pub const DATA_CENTERS: [RegionDataCenters; 2] = [
+    RegionDataCenters {
+        region: "eu",
+        names: &[
+            "Netherlands",
+            "Germany",
+            "Germany 2",
+            "France",
+            "Ireland",
+            "Finland 2",
+        ],
+    },
+    RegionDataCenters {
+        region: "na",
+        names: &[
+            "USA - Central",
+            "USA - East",
+            "USA - East 2",
+            "USA - West",
+            "USA - West 2",
+            "USA - Northwest",
+            "USA - Southwest",
+        ],
+    },
+];
+
+/// The data center that leaves the server to the game (the best ping for the host): the code
+/// gets no `Data Center Preference` line.
+pub const BEST_AVAILABLE: &str = "Best Available";
+
 /// How long a request to the ranked server (or GitHub) may take before it counts as unreachable.
 pub const REQUEST_TIMEOUT_SECS: Tunable = Tunable {
     key: "requestTimeoutSecs",
@@ -372,6 +412,9 @@ mod tests {
                 "{}",
                 r.id
             );
+            let centers = DATA_CENTERS.iter().find(|d| d.region == r.id);
+            assert!(centers.is_some_and(|d| !d.names.is_empty()), "{}", r.id);
         }
+        assert_eq!(DATA_CENTERS.len(), REGIONS.len());
     }
 }

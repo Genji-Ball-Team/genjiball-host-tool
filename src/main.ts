@@ -50,6 +50,17 @@ interface AppState {
   updateChannel: string;
   updateChannels: string[];
   defaultUpdateChannel: string;
+  /** Per region, the data centers its codes can put the lobby on (the default first), and the one in use. */
+  dataCenters: DataCenterChoice[];
+  /** The choice that leaves the data center to the game. */
+  bestAvailable: string;
+}
+
+/** Mirrors `DataCenterChoice` in src-tauri/src/lib.rs. */
+interface DataCenterChoice {
+  region: string;
+  names: string[];
+  chosen: string;
 }
 
 /** Mirrors `Region` in src-tauri/src/config.rs. */
@@ -180,6 +191,8 @@ interface RankedCode {
   names: number;
   skippedNames: number;
   keepSecs: number;
+  /** The data center the code puts the lobby on, `null`: the game picks. */
+  dataCenter: string | null;
 }
 
 /** Mirrors `LobbyStatus` in src-tauri/src/live_lobby.rs: what `get_lobby_status` returns. */
@@ -259,6 +272,50 @@ function renderRegion(): void {
     );
   }
   select.value = state.region ?? "";
+}
+
+/** One data center choice per region, built once; each follows `state`. */
+function renderDataCenters(): void {
+  const box = el("data-centers");
+  if (!box.childElementCount) {
+    box.replaceChildren(
+      ...state.dataCenters.map((d) => {
+        const label = document.createElement("label");
+        label.htmlFor = `data-center-${d.region}`;
+        label.textContent = regionLabel(d.region);
+        const select = document.createElement("select");
+        select.id = `data-center-${d.region}`;
+        select.append(
+          ...[...d.names, state.bestAvailable].map((name, i) => {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name === state.bestAvailable ? "Best available (the game picks)" : i === 0 ? `${name} (default)` : name;
+            return option;
+          }),
+        );
+        select.addEventListener("change", () => {
+          void busy(
+            async () => {
+              const next = await invoke<AppState>("set_data_center", { region: d.region, name: select.value });
+              // A code kept for the old data center is no use now.
+              uncopied = null;
+              await show(next);
+              toast(`${regionLabel(d.region)}: ${select.value === state.bestAvailable ? "the game picks the data center" : `lobbies on ${select.value}`}`);
+            },
+            (m) => {
+              toast(`Couldn't save the data center`, m);
+              renderDataCenters();
+            },
+          );
+        });
+        const row = document.createElement("div");
+        row.className = "row";
+        row.append(label, select);
+        return row;
+      }),
+    );
+  }
+  for (const d of state.dataCenters) el<HTMLSelectElement>(`data-center-${d.region}`).value = d.chosen;
 }
 
 function setRegionStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void {
@@ -350,6 +407,7 @@ function render(): void {
   tourneyContextChanged();
 
   renderRegion();
+  renderDataCenters();
   renderLobbySettings();
   renderAdvanced();
   renderUpdateSettings();
@@ -1218,7 +1276,7 @@ async function copyRankedCode(): Promise<void> {
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
   setRankedCodeState("", "muted");
   setCodeButton("copied");
-  toast("Ranked code copied", `Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`);
+  toast("Ranked code copied", `Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.${built.dataCenter ? ` Puts the lobby on ${built.dataCenter}.` : ""}`);
 }
 
 el("ranked-code-copy").addEventListener("click", () =>
@@ -1319,12 +1377,18 @@ function homeState() {
     serverName: serverName(state.serverUrl),
     host: knownHost && { name: knownHost.name, untrusted: knownHost.trust === "untrusted" },
     token: tokenLine,
-    region: !region ? "None yet" : state.region ? regionLabel(region) : `${regionLabel(region)} (home region)`,
+    region: !region ? "None yet" : `${state.region ? regionLabel(region) : `${regionLabel(region)} (home region)`}${dataCenterNote(region)}`,
     lastUpload,
     pollSecs: state.matchViewPollSecs,
     lobbyLive: lobbyStatus?.on ? lobbyStatus.live.kind : null,
     quietSecs: quietSecs(),
   };
+}
+
+/** The data center a region's codes put the lobby on, for Home's region line. */
+function dataCenterNote(region: string): string {
+  const chosen = state.dataCenters.find((d) => d.region === region)?.chosen;
+  return !chosen ? "" : chosen === state.bestAvailable ? ", best data center" : `, lobby on ${chosen}`;
 }
 
 /** A Home problem's button. */

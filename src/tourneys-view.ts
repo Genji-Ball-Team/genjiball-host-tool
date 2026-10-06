@@ -284,7 +284,7 @@ async function copyCode(lobby: LobbyView): Promise<void> {
   const v = built.values;
   const skipped = built.skippedNames ? `, ${built.skippedNames} names left out (the Workshop can't show them)` : "";
   setCodeLine(lobby.id, {
-    text: `Copied. ${v.name}, ${v.label}: ${v.roundLimit} rounds, lobby key ${v.lobbyKey}. Genji Ball ${built.release} with ${ctx.regionLabel(built.region)}'s rank tags (top ${built.top}, ${built.names} more${skipped}). Import it, then set the preset (Workshop settings, 00 - Preset) to Tournament.`,
+    text: `Copied. ${v.name}, ${v.label}: ${v.roundLimit} rounds, lobby key ${v.lobbyKey}. Genji Ball ${built.release} with ${ctx.regionLabel(built.region)}'s rank tags (top ${built.top}, ${built.names} more${skipped})${built.dataCenter ? `, the lobby on ${built.dataCenter}` : ""}. Import it, then set the preset (Workshop settings, 00 - Preset) to Tournament.`,
     tone: "good",
   });
 }

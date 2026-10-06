@@ -53,6 +53,213 @@ pub struct Settings {
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub advanced: BTreeMap<String, u64>,
+    /// The overlay and the stream page (#49, #55), as `normalize_overlay` keeps them. Left out
+    /// while it's all at its defaults.
+    #[serde(skip_serializing_if = "OverlaySettings::is_default")]
+    pub overlay: OverlaySettings,
+}
+
+/// The overlay's settings. Each one at its default is `None`, or left out of its map, so a new
+/// default reaches every host.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OverlaySettings {
+    /// The overlay window. `None`: `config::OVERLAY_ON_BY_DEFAULT`.
+    pub on: Option<bool>,
+    /// The widgets the host switched away from their default in the overlay, by key
+    /// (`config::OVERLAY_WIDGETS`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub widgets: BTreeMap<String, bool>,
+    /// In percent. `None`: `config::OVERLAY_OPACITY`'s default.
+    pub opacity: Option<u16>,
+    /// In percent. `None`: `config::OVERLAY_SCALE`'s default.
+    pub scale: Option<u16>,
+    /// `None`: `config::OVERLAY_ONLY_WITH_GAME_BY_DEFAULT`.
+    pub only_with_game: Option<bool>,
+    /// Where the host dragged each widget, by key: its top left corner as a share of the screen's
+    /// width and height, 0 to 1. A widget that's not here sits in its default place.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub layout: BTreeMap<String, [f64; 2]>,
+    /// How big the host made each widget, by key, as a share of its normal size
+    /// (`config::OVERLAY_WIDGET_SIZE_MIN` to `_MAX`). A widget that's not here is its normal size.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sizes: BTreeMap<String, f64>,
+    /// The hotkeys the host changed, by action (`config::OVERLAY_HOTKEYS`): the keys as typed,
+    /// empty for none.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub hotkeys: BTreeMap<String, String>,
+    /// The stream page. `None`: `config::STREAM_ON_BY_DEFAULT`.
+    pub stream: Option<bool>,
+    /// `None`: `config::STREAM_PORT`'s default.
+    pub stream_port: Option<u16>,
+    /// The widgets switched away from their default on the stream page, by key.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub stream_widgets: BTreeMap<String, bool>,
+}
+
+impl OverlaySettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn on(&self) -> bool {
+        self.on.unwrap_or(config::OVERLAY_ON_BY_DEFAULT)
+    }
+
+    pub fn stream_on(&self) -> bool {
+        self.stream.unwrap_or(config::STREAM_ON_BY_DEFAULT)
+    }
+
+    pub fn opacity(&self) -> u16 {
+        self.opacity.unwrap_or(config::OVERLAY_OPACITY.default)
+    }
+
+    pub fn scale(&self) -> u16 {
+        self.scale.unwrap_or(config::OVERLAY_SCALE.default)
+    }
+
+    pub fn only_with_game(&self) -> bool {
+        self.only_with_game
+            .unwrap_or(config::OVERLAY_ONLY_WITH_GAME_BY_DEFAULT)
+    }
+
+    pub fn stream_port(&self) -> u16 {
+        self.stream_port.unwrap_or(config::STREAM_PORT.default)
+    }
+
+    /// The keys of the widgets on in the overlay, or on the stream page, in `OVERLAY_WIDGETS`
+    /// order.
+    pub fn widgets_on(&self, stream: bool) -> Vec<&'static str> {
+        let chosen = if stream {
+            &self.stream_widgets
+        } else {
+            &self.widgets
+        };
+        config::OVERLAY_WIDGETS
+            .iter()
+            .filter(|w| {
+                chosen
+                    .get(w.key)
+                    .copied()
+                    .unwrap_or(if stream { w.stream } else { w.overlay })
+            })
+            .map(|w| w.key)
+            .collect()
+    }
+
+    /// The keys of a hotkey, `None` when the host cleared it.
+    pub fn hotkey(&self, action: &str) -> Option<String> {
+        let keys = match self.hotkeys.get(action) {
+            Some(keys) => keys.clone(),
+            None => config::OVERLAY_HOTKEYS
+                .iter()
+                .find(|h| h.action == action)?
+                .default
+                .to_string(),
+        };
+        (!keys.is_empty()).then_some(keys)
+    }
+}
+
+/// The overlay settings as they're stored: values at their default left out, numbers checked
+/// against their range, layout places kept on the screen, and hotkeys checked
+/// (`parse_hotkey`), none twice. Widgets, places and hotkeys this version doesn't know are
+/// dropped.
+pub fn normalize_overlay(input: &OverlaySettings) -> Result<OverlaySettings, String> {
+    let range = |value: Option<u16>, r: &config::OverlayRange, what: &str| match value {
+        Some(v) if !(r.min..=r.max).contains(&v) => {
+            Err(format!("The {what} must be {} to {}", r.min, r.max))
+        }
+        Some(v) if v == r.default => Ok(None),
+        v => Ok(v),
+    };
+    let widgets = |chosen: &BTreeMap<String, bool>, stream: bool| {
+        config::OVERLAY_WIDGETS
+            .iter()
+            .filter_map(|w| {
+                let on = *chosen.get(w.key)?;
+                let default = if stream { w.stream } else { w.overlay };
+                (on != default).then(|| (w.key.to_string(), on))
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let layout = input
+        .layout
+        .iter()
+        .filter(|(key, _)| config::OVERLAY_WIDGETS.iter().any(|w| w.key == *key))
+        .filter(|(_, place)| place.iter().all(|v| v.is_finite()))
+        .map(|(key, [x, y])| (key.clone(), [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]))
+        .collect();
+    let sizes = input
+        .sizes
+        .iter()
+        .filter(|(key, _)| config::OVERLAY_WIDGETS.iter().any(|w| w.key == *key))
+        .filter(|(_, size)| size.is_finite())
+        .map(|(key, size)| {
+            let size = size.clamp(
+                config::OVERLAY_WIDGET_SIZE_MIN,
+                config::OVERLAY_WIDGET_SIZE_MAX,
+            );
+            (key.clone(), (size * 100.0).round() / 100.0)
+        })
+        .filter(|(_, size)| *size != 1.0)
+        .collect();
+    let mut hotkeys = BTreeMap::new();
+    let mut taken: Vec<(u32, &str)> = Vec::new();
+    for hotkey in &config::OVERLAY_HOTKEYS {
+        let typed = input.hotkeys.get(hotkey.action).map(|k| k.trim());
+        let keys = typed.unwrap_or(hotkey.default);
+        if !keys.is_empty() {
+            let id = parse_hotkey(keys).map_err(|e| format!("{}: {e}", hotkey.label))?;
+            if let Some((_, other)) = taken.iter().find(|(other, _)| *other == id) {
+                return Err(format!("{} has the same keys as {other}", hotkey.label));
+            }
+            taken.push((id, hotkey.label));
+        }
+        if let Some(typed) = typed.filter(|&t| t != hotkey.default) {
+            hotkeys.insert(hotkey.action.to_string(), typed.to_string());
+        }
+    }
+    Ok(OverlaySettings {
+        on: input.on.filter(|&on| on != config::OVERLAY_ON_BY_DEFAULT),
+        widgets: widgets(&input.widgets, false),
+        opacity: range(input.opacity, &config::OVERLAY_OPACITY, "opacity")?,
+        scale: range(input.scale, &config::OVERLAY_SCALE, "size")?,
+        only_with_game: input
+            .only_with_game
+            .filter(|&on| on != config::OVERLAY_ONLY_WITH_GAME_BY_DEFAULT),
+        layout,
+        sizes,
+        hotkeys,
+        stream: input
+            .stream
+            .filter(|&on| on != config::STREAM_ON_BY_DEFAULT),
+        stream_port: range(
+            input.stream_port,
+            &config::STREAM_PORT,
+            "stream page's port",
+        )?,
+        stream_widgets: widgets(&input.stream_widgets, true),
+    })
+}
+
+/// A hotkey's keys (`Ctrl+Alt+O`), as its id. It needs Ctrl, Alt or the Windows key: Windows
+/// takes a hotkey before the game sees it, so a plain key, or Shift and a key, would be lost to the
+/// game.
+pub fn parse_hotkey(keys: &str) -> Result<u32, String> {
+    use tauri_plugin_global_shortcut::{Modifiers, Shortcut};
+    let shortcut: Shortcut = keys
+        .parse()
+        .map_err(|_| format!("\"{keys}\" isn't a key combination, like Ctrl+Alt+O"))?;
+    if !shortcut
+        .mods
+        .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER)
+    {
+        return Err(format!(
+            "\"{keys}\" needs Ctrl, Alt or the Windows key, or the game would lose that key"
+        ));
+    }
+    Ok(shortcut.id())
 }
 
 impl Settings {
@@ -299,6 +506,12 @@ pub fn load(path: &Path) -> Result<Settings, String> {
         }
     }
     settings.data_centers = data_centers;
+    // Edited by hand. Unlike the rest, an overlay setting the window wouldn't take never holds
+    // uploads up: the overlay goes back to its defaults (off) instead.
+    settings.overlay = normalize_overlay(&settings.overlay).unwrap_or_else(|e| {
+        log::warn!("Overlay settings in {} reset: {e}", path.display());
+        OverlaySettings::default()
+    });
     // Edited by hand: a value out of range (a quiet time of 0, say) would upload every match
     // half-played.
     for tunable in config::TUNABLES {
@@ -414,6 +627,19 @@ mod tests {
             update_channel: Some("prerelease".into()),
             data_centers: BTreeMap::from([("eu".into(), "Germany".into())]),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
+            overlay: OverlaySettings {
+                on: Some(true),
+                widgets: BTreeMap::from([("killFeed".into(), true)]),
+                opacity: Some(80),
+                scale: Some(120),
+                only_with_game: Some(false),
+                layout: BTreeMap::from([("roster".into(), [0.25, 0.5])]),
+                sizes: BTreeMap::from([("roster".into(), 1.5)]),
+                hotkeys: BTreeMap::from([("afk".into(), "Ctrl+Shift+F9".into())]),
+                stream: Some(true),
+                stream_port: Some(8000),
+                stream_widgets: BTreeMap::from([("roster".into(), false)]),
+            },
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
@@ -724,6 +950,103 @@ mod tests {
         assert_eq!(load(&path).unwrap().release_tag, None);
         fs::write(&path, r#"{ "releaseTag": "1.3.3" }"#).unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn the_overlay_is_off_with_its_default_widgets_until_changed() {
+        let overlay = OverlaySettings::default();
+        assert!(!overlay.on());
+        assert!(!overlay.stream_on());
+        assert_eq!(overlay.opacity(), config::OVERLAY_OPACITY.default);
+        assert_eq!(overlay.hotkey("toggle").as_deref(), Some("Ctrl+Alt+O"));
+        let on = overlay.widgets_on(false);
+        assert!(on.contains(&"afk") && !on.contains(&"killFeed"));
+        let stream = overlay.widgets_on(true);
+        assert!(stream.contains(&"killFeed") && !stream.contains(&"afk"));
+    }
+
+    #[test]
+    fn normalizes_overlay_settings() {
+        let input = OverlaySettings {
+            on: Some(false),
+            widgets: BTreeMap::from([
+                ("afk".into(), true),
+                ("killFeed".into(), true),
+                ("fromANewerVersion".into(), true),
+            ]),
+            opacity: Some(config::OVERLAY_OPACITY.default),
+            layout: BTreeMap::from([
+                ("roster".into(), [1.5, -0.2]),
+                ("standings".into(), [f64::NAN, 0.5]),
+                ("nope".into(), [0.5, 0.5]),
+            ]),
+            sizes: BTreeMap::from([
+                ("roster".into(), 9.0),
+                ("standings".into(), 1.0),
+                ("killFeed".into(), 1.234),
+                ("nope".into(), 2.0),
+            ]),
+            hotkeys: BTreeMap::from([
+                ("toggle".into(), " Ctrl+Alt+O ".into()),
+                ("edit".into(), "".into()),
+            ]),
+            stream_widgets: BTreeMap::from([("killFeed".into(), false)]),
+            ..OverlaySettings::default()
+        };
+        let stored = normalize_overlay(&input).unwrap();
+        assert_eq!(
+            stored,
+            OverlaySettings {
+                widgets: BTreeMap::from([("killFeed".into(), true)]),
+                layout: BTreeMap::from([("roster".into(), [1.0, 0.0])]),
+                // Kept in range, rounded, and left out at the normal size.
+                sizes: BTreeMap::from([
+                    ("killFeed".into(), 1.23),
+                    ("roster".into(), config::OVERLAY_WIDGET_SIZE_MAX),
+                ]),
+                hotkeys: BTreeMap::from([("edit".into(), "".into())]),
+                stream_widgets: BTreeMap::from([("killFeed".into(), false)]),
+                ..OverlaySettings::default()
+            }
+        );
+        assert_eq!(stored.hotkey("edit"), None);
+        assert!(normalize_overlay(&OverlaySettings::default())
+            .unwrap()
+            .is_default());
+    }
+
+    #[test]
+    fn overlay_numbers_and_hotkeys_are_checked() {
+        let with = |change: fn(&mut OverlaySettings)| {
+            let mut overlay = OverlaySettings::default();
+            change(&mut overlay);
+            normalize_overlay(&overlay)
+        };
+        assert!(with(|o| o.opacity = Some(5)).is_err());
+        assert!(with(|o| o.stream_port = Some(80)).is_err());
+        assert!(with(|o| o.hotkeys = BTreeMap::from([("afk".into(), "Banana".into())])).is_err());
+        // A key the game would lose.
+        assert!(with(|o| o.hotkeys = BTreeMap::from([("afk".into(), "F".into())])).is_err());
+        assert!(with(|o| o.hotkeys = BTreeMap::from([("afk".into(), "Shift+F".into())])).is_err());
+        // The same keys as another action, typed another way.
+        assert!(
+            with(|o| o.hotkeys = BTreeMap::from([("afk".into(), "alt+control+o".into())])).is_err()
+        );
+        assert!(with(|o| o.hotkeys = BTreeMap::from([("afk".into(), "Ctrl+F9".into())])).is_ok());
+    }
+
+    #[test]
+    fn bad_overlay_settings_in_the_file_reset_the_overlay_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{ "region": "na", "overlay": { "on": true, "hotkeys": { "afk": "Q" } } }"#,
+        )
+        .unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(settings.region.as_deref(), Some("na"));
+        assert_eq!(settings.overlay, OverlaySettings::default());
     }
 
     #[test]

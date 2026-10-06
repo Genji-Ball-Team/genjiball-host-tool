@@ -71,7 +71,8 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/tourney.rs`, `tourneys.rs`, `src/tourneys-view.ts` | Tourneys: the host's assigned lobbies and their notifications, the tourney code's rule, the region a tourney log is uploaded as, and the verify screenshot |
 | `src-tauri/src/logging.rs`, `diagnostics.rs` | The tool's own log, and the diagnostics export for bug reports |
 | `src-tauri/src/debug.rs`, `src/debug-view.ts` | The debug panel: the latest uploads and dry runs, and the newest log's last events |
-| `src-tauri/capabilities/` | What the window is allowed to call |
+| `src-tauri/src/overlay.rs`, `overlay_window.rs`, `ratings.rs`, `stream.rs`, `src/overlay/`, `src/overlay-settings.ts` | The overlay (experimental): its window over the game, hotkeys, what it shows, the lobby's ratings, and the stream page for OBS |
+| `src-tauri/capabilities/` | What each window is allowed to call |
 
 ## Contributing
 

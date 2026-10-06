@@ -294,6 +294,223 @@ pub async fn leaderboard(
     read_leaderboard(status, &body)
 }
 
+/// A tier as the public API gives it on the leaderboard and in a player search.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TierView {
+    pub label: String,
+    /// RGB, 0–255.
+    pub color: [u8; 3],
+}
+
+/// A player's standing in a region, from the leaderboard or a name search: the overlay's roster
+/// (#51).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Standing {
+    pub id: i64,
+    /// Their display name now.
+    pub name: String,
+    /// Their place on the leaderboard: only the leaderboard says, and only from
+    /// `minRankedRounds` rated rounds.
+    #[serde(default)]
+    pub rank: Option<u32>,
+    /// Their display rating, `None` with no rated round in the region.
+    #[serde(default)]
+    pub rating: Option<f64>,
+    #[serde(default)]
+    pub tier: Option<TierView>,
+}
+
+/// A page of `GET /api/leaderboard`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StandingsPage {
+    pub players: Vec<Standing>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+pub fn read_standings_page(status: u16, body: &str) -> Result<StandingsPage, String> {
+    match status {
+        200 => serde_json::from_str(body)
+            .map_err(|_| "The server's leaderboard wasn't what the host tool expected".into()),
+        _ => Err(format!(
+            "The server answered {status} when asked for the leaderboard"
+        )),
+    }
+}
+
+/// Page `page` (from 1) of a region's leaderboard. Public: no token.
+pub async fn leaderboard_page(
+    server_url: &str,
+    region: Option<&str>,
+    page: u32,
+    timeout: Duration,
+) -> Result<StandingsPage, String> {
+    let mut url =
+        url::Url::parse(&format!("{server_url}/api/leaderboard")).map_err(|e| e.to_string())?;
+    if let Some(region) = region {
+        url.query_pairs_mut().append_pair("region", region);
+    }
+    url.query_pairs_mut().append_pair("page", &page.to_string());
+    let (status, body) = get_public(url, timeout).await?;
+    read_standings_page(status, &body)
+}
+
+/// A player a name search found.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundPlayer {
+    #[serde(flatten)]
+    pub standing: Standing,
+    /// The old name that matched, `None` when their name now did.
+    #[serde(default)]
+    pub matched_alias: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PlayerSearch {
+    players: Vec<FoundPlayer>,
+}
+
+pub fn read_player_search(status: u16, body: &str) -> Result<Vec<FoundPlayer>, String> {
+    match status {
+        200 => serde_json::from_str::<PlayerSearch>(body)
+            .map(|s| s.players)
+            .map_err(|_| "The server's player search wasn't what the host tool expected".into()),
+        _ => Err(format!(
+            "The server answered {status} when asked for a player"
+        )),
+    }
+}
+
+/// The players whose name or an old name holds `name`, rated in `region` (`/api/players?search=`).
+/// Public: no token. Each search reads every alias on the server: ask once per name, then cache.
+pub async fn search_players(
+    server_url: &str,
+    region: Option<&str>,
+    name: &str,
+    timeout: Duration,
+) -> Result<Vec<FoundPlayer>, String> {
+    let mut url =
+        url::Url::parse(&format!("{server_url}/api/players")).map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("search", name);
+    if let Some(region) = region {
+        url.query_pairs_mut().append_pair("region", region);
+    }
+    let (status, body) = get_public(url, timeout).await?;
+    read_player_search(status, &body)
+}
+
+/// A public match's result (`GET /api/matches/:id`): the overlay's match summary and session
+/// (#53). Ratings are the server's.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchResult {
+    pub id: i64,
+    pub played_at: Option<String>,
+    pub rounds: usize,
+    pub rated_rounds: usize,
+    pub players: Vec<MatchPlayer>,
+}
+
+impl MatchResult {
+    /// The server has rated it: every player who was rated has a rating after it. A match with no
+    /// rated round never will be.
+    pub fn rated(&self) -> bool {
+        self.rated_rounds == 0 || self.players.iter().any(|p| p.rating_after.is_some())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchPlayer {
+    pub name: String,
+    #[serde(default)]
+    pub round_wins: Option<u32>,
+    #[serde(default)]
+    pub kills: Option<u32>,
+    #[serde(default)]
+    pub place: Option<u32>,
+    #[serde(default)]
+    pub rating_before: Option<f64>,
+    #[serde(default)]
+    pub rating_after: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MatchWire {
+    id: i64,
+    #[serde(default)]
+    played_at: Option<String>,
+    #[serde(default)]
+    rounds: Vec<RoundWire>,
+    players: Vec<MatchPlayer>,
+}
+
+#[derive(Deserialize)]
+struct RoundWire {
+    #[serde(default)]
+    rated: bool,
+}
+
+#[derive(Deserialize)]
+struct MatchAnswer {
+    #[serde(rename = "match")]
+    found: MatchWire,
+}
+
+/// What a `GET /api/matches/:id` answer means. `None` for a match that isn't public (yet): in
+/// review, rejected, or not on the server.
+pub fn read_match(status: u16, body: &str) -> Result<Option<MatchResult>, String> {
+    match status {
+        200 => {
+            let wire = serde_json::from_str::<MatchAnswer>(body)
+                .map_err(|_| "The server's match wasn't what the host tool expected".to_string())?
+                .found;
+            Ok(Some(MatchResult {
+                id: wire.id,
+                played_at: wire.played_at,
+                rounds: wire.rounds.len(),
+                rated_rounds: wire.rounds.iter().filter(|r| r.rated).count(),
+                players: wire.players,
+            }))
+        }
+        404 => Ok(None),
+        _ => Err(format!(
+            "The server answered {status} when asked for a match"
+        )),
+    }
+}
+
+/// Asks the server for a public match. Public: no token.
+pub async fn match_result(
+    server_url: &str,
+    match_id: i64,
+    timeout: Duration,
+) -> Result<Option<MatchResult>, String> {
+    let url = url::Url::parse(&format!("{server_url}/api/matches/{match_id}"))
+        .map_err(|e| e.to_string())?;
+    let (status, body) = get_public(url, timeout).await?;
+    read_match(status, &body)
+}
+
+/// A `GET` of a public route: its status and body.
+async fn get_public(url: url::Url, timeout: Duration) -> Result<(u16, String), String> {
+    let response = client(timeout)?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    Ok((status, body))
+}
+
 /// The tourney a lobby is in, as `GET /api/host/tourneys` gives it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1353,6 +1570,41 @@ mod tests {
                 ],
             }
         );
+    }
+
+    #[test]
+    fn reads_standings_searches_and_matches() {
+        let page = read_standings_page(
+            200,
+            r#"{"region":"eu","page":2,"pageSize":50,"hasMore":true,"players":[
+                {"rank":51,"id":7,"name":"Kenzo","rating":1712.4,"rounds":40,"wins":9,"lastPlayedAt":null,"tier":{"label":"Master","color":[255,215,0],"threshold":1600},"inactiveSince":null}]}"#,
+        )
+        .unwrap();
+        assert!(page.has_more);
+        assert_eq!(page.players[0].rank, Some(51));
+        assert_eq!(page.players[0].tier.as_ref().unwrap().label, "Master");
+
+        let found = read_player_search(
+            200,
+            r#"{"region":"eu","players":[{"id":3,"name":"Nova","rating":null,"tier":null,"matchedAlias":"nova_old"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(found[0].standing.rating, None);
+        assert_eq!(found[0].matched_alias.as_deref(), Some("nova_old"));
+        assert!(read_player_search(400, "{}").is_err());
+
+        let result = read_match(
+            200,
+            r#"{"match":{"id":12,"playedAt":"2026-10-06T20:00:00Z","rounds":[{"rated":true},{"rated":false}],
+                "players":[{"id":1,"name":"Kenzo","rounds":2,"wins":1,"roundWins":1,"kills":3,"place":1,"ratingBefore":1500,"ratingAfter":1521.5}]}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((result.rounds, result.rated_rounds), (2, 1));
+        assert_eq!(result.players[0].rating_after, Some(1521.5));
+        assert!(result.rated());
+        assert_eq!(read_match(404, r#"{"error":"not_found"}"#).unwrap(), None);
+        assert!(read_match(500, "").is_err());
     }
 
     #[test]

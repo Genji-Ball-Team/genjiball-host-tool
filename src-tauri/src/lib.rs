@@ -11,11 +11,15 @@ mod log_folder;
 mod log_scan;
 mod logging;
 mod match_log;
+mod overlay;
+mod overlay_window;
 mod ranked_code;
+mod ratings;
 mod release;
 mod server;
 mod settings;
 mod snap;
+mod stream;
 mod tourney;
 mod tourneys;
 mod updates;
@@ -38,9 +42,12 @@ use credentials::Tokens;
 use history::Page;
 use live_lobby::{LiveLobby, LobbyStatus};
 use log_folder::LogFolder;
+use overlay::{Feed, FeedRequest, OverlayState};
+use overlay_window::OverlayWindow;
 use release::ReleaseCache;
 use server::TokenCheck;
-use settings::Settings;
+use settings::{OverlaySettings, Settings};
+use stream::StreamServer;
 use tourneys::{Tourneys, TourneysStatus};
 use updates::{UpdateStatus, Updates};
 use uploader::{UploadStatus, Uploader};
@@ -148,6 +155,80 @@ struct AppState {
     /// one in use (`config::BEST_AVAILABLE` for none).
     data_centers: Vec<DataCenterChoice>,
     best_available: &'static str,
+    /// The overlay and the stream page (#49, #55).
+    overlay: OverlayView,
+}
+
+/// The overlay's settings, as Settings → Overlay shows them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayView {
+    /// As stored: `None` and left out at the defaults.
+    settings: OverlaySettings,
+    on: bool,
+    widgets: &'static [config::OverlayWidget],
+    /// The widgets on, in the overlay and on the stream page.
+    widgets_on: Vec<&'static str>,
+    stream_widgets_on: Vec<&'static str>,
+    opacity: u16,
+    opacity_range: &'static config::OverlayRange,
+    scale: u16,
+    scale_range: &'static config::OverlayRange,
+    only_with_game: bool,
+    hotkeys: Vec<HotkeyChoice>,
+    hotkey_errors: Vec<String>,
+    editing: bool,
+    stream: bool,
+    stream_port: u16,
+    stream_port_range: &'static config::OverlayRange,
+    /// The page's address for OBS, while it's served.
+    stream_url: Option<String>,
+    stream_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HotkeyChoice {
+    action: &'static str,
+    label: &'static str,
+    default: &'static str,
+    /// `None`: none.
+    keys: Option<String>,
+}
+
+fn overlay_view(app: &tauri::AppHandle, settings: &Settings) -> OverlayView {
+    let o = &settings.overlay;
+    let window = app.state::<OverlayWindow>();
+    let stream = app.state::<StreamServer>();
+    OverlayView {
+        settings: o.clone(),
+        on: o.on(),
+        widgets: &config::OVERLAY_WIDGETS,
+        widgets_on: o.widgets_on(false),
+        stream_widgets_on: o.widgets_on(true),
+        opacity: o.opacity(),
+        opacity_range: &config::OVERLAY_OPACITY,
+        scale: o.scale(),
+        scale_range: &config::OVERLAY_SCALE,
+        only_with_game: o.only_with_game(),
+        hotkeys: config::OVERLAY_HOTKEYS
+            .iter()
+            .map(|h| HotkeyChoice {
+                action: h.action,
+                label: h.label,
+                default: h.default,
+                keys: o.hotkey(h.action),
+            })
+            .collect(),
+        hotkey_errors: window.hotkey_errors(),
+        editing: window.editing(),
+        stream: o.stream_on(),
+        stream_port: o.stream_port(),
+        stream_port_range: &config::STREAM_PORT,
+        stream_url: (o.stream_on() && stream.error().is_none())
+            .then(|| stream::url(o.stream_port())),
+        stream_error: stream.error(),
+    }
 }
 
 /// A region's data center choice, as the window shows it.
@@ -226,6 +307,7 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
             })
             .collect(),
         best_available: config::BEST_AVAILABLE,
+        overlay: overlay_view(app, &settings),
     })
 }
 
@@ -338,6 +420,14 @@ fn set_afk(on: bool, store: State<Store>, uploader: State<Uploader>) -> Result<A
         None => Vec::new(),
     };
     Ok(uploader.set_afk(on, &started))
+}
+
+/// Turns AFK the other way: the overlay's AFK hotkey.
+pub(crate) fn toggle_afk(app: &tauri::AppHandle) -> Result<AfkStatus, String> {
+    let on = !app.state::<Uploader>().afk().on;
+    let status = set_afk(on, app.state::<Store>(), app.state::<Uploader>())?;
+    log::info!("AFK {} with its hotkey", if on { "on" } else { "off" });
+    Ok(status)
 }
 
 /// The rounds started in the live log (the newest in `folder`), now.
@@ -788,8 +878,12 @@ struct RankedCode {
 async fn build_ranked_code(
     store: State<'_, Store>,
     releases: State<'_, ReleaseCache>,
+    overlay: State<'_, OverlayState>,
 ) -> Result<RankedCode, String> {
     let built = ranked_code(&store, &releases).await;
+    if built.is_ok() {
+        overlay.code_built();
+    }
     match &built {
         Ok(code) => log::info!(
             "Built the ranked code from release {} for {} (region {}): top {}, {} more names, {} left out",
@@ -1120,6 +1214,87 @@ fn set_screenshot_folder(
     app_state(&app, &store)
 }
 
+/// What the overlay window shows now (#49). Async, so its file reads every poll stay off the main
+/// thread.
+#[tauri::command]
+async fn get_overlay_feed(request: FeedRequest, app: tauri::AppHandle) -> Feed {
+    overlay::feed(&app, &request, false)
+}
+
+/// The overlay's settings from Settings → Overlay. Where the widgets are isn't changed here: the
+/// overlay saves that (`set_overlay_layout`).
+// Async: it may open the overlay window, which deadlocks from a synchronous command on Windows.
+#[tauri::command]
+async fn set_overlay(
+    settings: OverlaySettings,
+    app: tauri::AppHandle,
+    store: State<'_, Store>,
+) -> Result<AppState, String> {
+    let current = store.get().overlay;
+    let normalized = settings::normalize_overlay(&OverlaySettings {
+        layout: current.layout,
+        sizes: current.sizes,
+        ..settings
+    })?;
+    store.update(|s| s.overlay = normalized)?;
+    log::info!("Overlay settings changed");
+    overlay_window::apply(&app);
+    stream::apply(&app);
+    app_state(&app, &store)
+}
+
+/// Where the host dragged the widgets, by key (a share of the screen, 0 to 1), and how big they
+/// made them (a share of their normal size). Both `{}` put them all back in their default places
+/// and sizes.
+#[tauri::command]
+fn set_overlay_layout(
+    layout: BTreeMap<String, [f64; 2]>,
+    sizes: BTreeMap<String, f64>,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<(), String> {
+    let current = store.get().overlay;
+    let normalized = settings::normalize_overlay(&OverlaySettings {
+        layout,
+        sizes,
+        ..current
+    })?;
+    store.update(|s| s.overlay = normalized)?;
+    let _ = app.emit(overlay_window::CHANGED_EVENT, ());
+    Ok(())
+}
+
+/// Switches one widget of the overlay on or off: "Hide this widget" in edit mode.
+#[tauri::command]
+fn set_overlay_widget(
+    key: String,
+    on: bool,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<(), String> {
+    if !config::OVERLAY_WIDGETS.iter().any(|w| w.key == key) {
+        return Err(format!("There's no widget {key}"));
+    }
+    let mut overlay = store.get().overlay;
+    overlay.widgets.insert(key.clone(), on);
+    let normalized = settings::normalize_overlay(&overlay)?;
+    store.update(|s| s.overlay = normalized)?;
+    log::info!("Overlay widget {key} {}", if on { "on" } else { "off" });
+    let _ = app.emit(overlay_window::CHANGED_EVENT, ());
+    Ok(())
+}
+
+/// Starts or ends placing the overlay's widgets, from Settings or the overlay's "Done".
+#[tauri::command]
+fn set_overlay_editing(
+    on: bool,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<AppState, String> {
+    overlay_window::set_editing(&app, on);
+    app_state(&app, &store)
+}
+
 fn show_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -1182,8 +1357,13 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE)
+                // The overlay follows the game's window: nothing to keep.
+                .with_denylist(&[overlay_window::LABEL])
                 .build(),
         )
+        // The overlay's hotkeys (#49), registered only while it's on. Rust only: no window has a
+        // shortcut permission.
+        .plugin(overlay_window::hotkeys_plugin())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let store = Store::open(&dir);
@@ -1198,15 +1378,24 @@ pub fn run() {
             app.manage(Updates::default());
             app.manage(LiveLobby::default());
             app.manage(Tourneys::default());
+            app.manage(OverlayState::default());
+            app.manage(OverlayWindow::default());
+            app.manage(StreamServer::default());
             uploader::start(app.handle().clone());
             live_lobby::start(app.handle().clone());
             tourneys::start(app.handle().clone());
             updates::start(app.handle().clone());
             tray(app)?;
+            overlay_window::apply(app.handle());
+            stream::apply(app.handle());
             Ok(())
         })
         // Closing the window keeps the tool uploading from the tray; Quit there stops it.
         .on_window_event(|window, event| {
+            // The overlay is never closed by the host: it goes with its setting.
+            if window.label() != "main" {
+                return;
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 // Saved now too, not only on quit: an update's restart skips the quit.
@@ -1253,7 +1442,12 @@ pub fn run() {
             set_screenshot_folder,
             get_update_status,
             check_for_update,
-            install_update
+            install_update,
+            get_overlay_feed,
+            set_overlay,
+            set_overlay_layout,
+            set_overlay_widget,
+            set_overlay_editing
         ])
         .build(tauri::generate_context!())
         .expect("error while running the host tool")

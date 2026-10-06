@@ -23,7 +23,7 @@ pub struct LogText {
 }
 
 /// The file and size the window last read, so an unchanged log isn't sent again each poll.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Known {
     pub file: String,

@@ -301,6 +301,11 @@ impl Uploader {
         queue + self.record.lock().unwrap().revision()
     }
 
+    /// Every match uploaded to `server_url`, newest first (`Record::known_matches`).
+    pub fn known_matches(&self, server_url: &str) -> Vec<uploads::KnownMatch> {
+        self.record.lock().unwrap().known_matches(server_url)
+    }
+
     /// Whether a match uploaded to `server_url` has this id on the site and is public there.
     pub fn has_public_match(&self, server_url: &str, match_id: i64) -> bool {
         self.record

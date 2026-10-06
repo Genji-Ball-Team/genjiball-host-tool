@@ -10,6 +10,7 @@ import { flash, homeFolderChanged, renderHome, setupHome } from "./home-view";
 import { renderTourneys, screenshotsDue, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
 import { setupTitlebar } from "./titlebar";
 import { toast } from "./toast";
+import { renderOverlaySettings, setupOverlaySettings, type OverlayView } from "./overlay-settings";
 import { currentView, markView, onViewChange, setupViews, showPane, showView } from "./views";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
@@ -54,6 +55,8 @@ interface AppState {
   dataCenters: DataCenterChoice[];
   /** The choice that leaves the data center to the game. */
   bestAvailable: string;
+  /** The overlay and the stream page (Settings → Overlay). */
+  overlay: OverlayView;
 }
 
 /** Mirrors `DataCenterChoice` in src-tauri/src/lib.rs. */
@@ -412,6 +415,7 @@ function render(): void {
   renderAdvanced();
   renderUpdateSettings();
   renderDebug();
+  renderOverlaySettings(state.overlay);
   renderHome();
 }
 
@@ -1466,6 +1470,11 @@ void busy(async () => {
     busy,
     isBusy: () => running > 0,
   }));
+  setupOverlaySettings({ busy, show: (next) => show(next as AppState) });
+  // Edit mode ended from the overlay, or with its hotkey.
+  await listen("overlay-changed", () => {
+    if (ready) void refresh();
+  });
   await listen<UpdateStatus>("update-status", (event) => {
     if (ready) renderUpdate(event.payload);
   });

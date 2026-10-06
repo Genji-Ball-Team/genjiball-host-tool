@@ -33,6 +33,7 @@ tauri-plugin-log = "2.10.0"
 log = "0.4.34"
 tauri-plugin-notification = "2.5.1"
 tauri-plugin-window-state = "2"
+tauri-plugin-global-shortcut = "2"
 
 # Small release binary: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
@@ -46,4 +47,4 @@ strip = true
 tempfile = "3.27.0"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Cryptography", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

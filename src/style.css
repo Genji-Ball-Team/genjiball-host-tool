@@ -407,3 +407,27 @@ body.afk::after { content: ""; position: fixed; inset: 0; z-index: 30; border: 2
 .data-centers .row { align-items: center; margin-top: .4rem; }
 .data-centers .row:first-child { margin-top: 0; }
 .data-centers label { width: 8.5rem; margin: 0; }
+
+/* Settings → Overlay (#49, #55). */
+#pane-overlay .switch-card h2 { display: flex; align-items: center; gap: .5rem; }
+#pane-overlay .switch-card .tag { margin-left: 0; border-color: var(--gold); color: var(--gold); font-weight: 500; }
+#pane-overlay .switch-card + details.hint { margin-top: .6rem; }
+#pane-overlay h3 { margin: 1.1rem 0 .4rem; font-size: .9rem; font-weight: 600; }
+.widget-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .75rem 1.5rem; }
+.widget-groups fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.widget-groups legend { padding: 0; margin-bottom: .35rem; color: var(--muted); font-size: .8rem; }
+.widget-groups label.check { display: grid; grid-template-columns: 1rem 1fr; gap: 0 .5rem; margin-bottom: .45rem; }
+.widget-groups label.check small { grid-column: 2; color: var(--muted); font-size: .78rem; line-height: 1.35; }
+.ranges { display: grid; grid-template-columns: 5rem minmax(8rem, 16rem) 3rem; align-items: center; gap: .4rem .75rem; margin-bottom: .9rem; }
+.ranges label { margin: 0; }
+.ranges input[type="range"] { width: 100%; padding: 0; accent-color: var(--good); }
+.ranges output { color: var(--soft); font-variant-numeric: tabular-nums; }
+.hotkeys { display: grid; grid-template-columns: minmax(9rem, max-content) 10rem auto; align-items: center; gap: .4rem .75rem; justify-content: start; }
+.hotkeys label { margin: 0; }
+.hotkeys input.hotkey { width: 10rem; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; caret-color: transparent; }
+.hotkeys input.hotkey:focus { border-color: var(--good); }
+.hotkeys button { padding: .2rem .65rem; font-size: .8rem; }
+#stream-settings { margin-top: .5rem; }
+#stream-settings .row { align-items: center; }
+#stream-port-form label { margin: 0; }
+#stream-port { flex: none; width: 7rem; }

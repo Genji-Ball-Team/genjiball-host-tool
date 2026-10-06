@@ -60,6 +60,17 @@ If you have to step away but want to keep the lobby going, turn on the **AFK** s
 - AFK stays on across matches, and when you restart the tool, until you switch it off. While it's on, a red edge runs round the window and the title bar says **AFK**.
 - The AFK rounds go up with the match's upload. The tool shows which rounds of the latest match weren't rated for you so far.
 
+## The overlay (experimental)
+
+Settings → **Overlay** puts the tool's status, the lobby's ranks and the match over the game, in its own see-through window. It's off until you switch it on.
+
+- **It never touches the game.** It's a separate window that Windows draws over Overwatch: it lets every click through and never takes the focus. It reads your Workshop logs and the ranked site, like the rest of the tool, and nothing of the game's.
+- Play in **borderless windowed** (or windowed). Exclusive fullscreen hides every other window, the overlay too.
+- Pick the widgets you want: logging and upload status, AFK, how many files the match is split over, how old your ranked code is, the lobby with each player's tier and rating, eliminations, standings, the kill feed with the deflects that led to each kill, the last round's result, the match summary with each player's rating change once the server has rated it, your session, and a tourney panel that reminds you to take the verify screenshot.
+- **Edit layout** (or its hotkey, Ctrl+Alt+L) lets you drag the widgets anywhere; **Done** keeps them there, at any resolution.
+- Hotkeys, each one changeable: **Ctrl+Alt+O** shows or hides the overlay, **Ctrl+Alt+L** edits the layout, **Ctrl+Alt+A** turns AFK on or off. Windows hands them to the tool before the game sees them, so they need Ctrl, Alt or the Windows key: pick keys you don't use in Overwatch.
+- **Stream page for OBS**: the same widgets, with their own choice, as a page on your PC. In OBS add a Browser source with the address Settings shows (`http://127.0.0.1:47623/`) and your canvas's size. It works with exclusive fullscreen, since nothing is drawn over the game, and only your PC can open it.
+
 ## The upload list
 
 In the **Uploads** view each log file is listed with the players in it and what happened to it.

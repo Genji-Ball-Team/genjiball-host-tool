@@ -128,6 +128,11 @@ struct AppState {
     release_tag_suffix: &'static str,
     /// Whether uploads are a dry run (Advanced, Debug).
     dry_run: bool,
+    /// Whether the tool looks for updates by itself, and the channel it reads.
+    auto_update_check: bool,
+    update_channel: String,
+    update_channels: &'static [&'static str],
+    default_update_channel: &'static str,
 }
 
 /// A tunable under Advanced, as the window shows it. All in seconds.
@@ -178,6 +183,10 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         release_tag: settings.release_tag.clone(),
         release_tag_suffix: config::RELEASE_TAG_SUFFIX,
         dry_run: settings.dry_run_on(),
+        auto_update_check: settings.auto_update_check_on(),
+        update_channel: settings.update_channel().to_string(),
+        update_channels: &config::UPDATE_CHANNELS,
+        default_update_channel: config::DEFAULT_UPDATE_CHANNEL,
     })
 }
 
@@ -536,6 +545,34 @@ fn get_debug(store: State<Store>, uploader: State<Uploader>) -> DebugInfo {
     }
 }
 
+/// Whether the tool looks for updates by itself, and the channel it reads (`None`: the default).
+/// A new channel is checked at once: an update found on the other one may not be on this one.
+#[tauri::command]
+fn set_updates(
+    auto_check: bool,
+    channel: Option<String>,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<AppState, String> {
+    let channel = settings::normalize_update_channel(channel.as_deref())?;
+    let before = store.get().update_channel().to_string();
+    store.update(|s| {
+        s.set_auto_update_check(auto_check);
+        s.update_channel = channel;
+    })?;
+    let settings = store.get();
+    log::info!(
+        "Update checks {}, channel {}",
+        if auto_check { "on" } else { "off" },
+        settings.update_channel()
+    );
+    if settings.update_channel() != before {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { updates::check(&app).await });
+    }
+    app_state(&app, &store)
+}
+
 /// Opens the tool's log folder in Explorer, through the opener's Rust API.
 #[tauri::command]
 fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
@@ -831,6 +868,7 @@ pub fn run() {
             set_release_tag,
             set_dry_run,
             get_debug,
+            set_updates,
             open_log_folder,
             export_diagnostics,
             get_upload_status,

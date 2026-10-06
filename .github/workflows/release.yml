@@ -1,6 +1,7 @@
 name: Release
 
 # Pushing a tag like v0.2.0 checks, builds the Windows installer and attaches it to a GitHub release.
+# A tag with a hyphen (v1.1.0-beta.1) makes a pre-release: only the app's pre-release channel offers it.
 # The tag must match `version` in package.json. The installer is signed for the app's updater (the
 # TAURI_SIGNING_PRIVATE_KEY secrets) and `latest.json`, which the updater reads, is attached too.
 on:
@@ -96,7 +97,10 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:GITHUB_REF_NAME @files --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME @files --title $env:GITHUB_REF_NAME --generate-notes
+            # A pre-release is never GitHub's "latest", so the stable channel's endpoint skips it.
+            $prerelease = @()
+            if ($env:GITHUB_REF_NAME.Contains("-")) { $prerelease = @("--prerelease") }
+            gh release create $env:GITHUB_REF_NAME @files --title $env:GITHUB_REF_NAME --generate-notes @prerelease
           }
           if ($LASTEXITCODE -ne 0) { throw "Publishing the release failed" }
       - name: Keep the installer from a manual run

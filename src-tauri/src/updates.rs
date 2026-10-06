@@ -3,7 +3,7 @@
 //! and installs it when the host asks. The checks run here, not in the window, so they go on from
 //! the tray. On the `prerelease` channel the newest release counts, pre-releases too.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -63,11 +63,24 @@ pub struct Updates {
     last_check: Mutex<Option<Instant>>,
     /// A check or an install is running: a second one waits for it.
     busy: AtomicBool,
+    /// Goes up each time the host picks another channel: a check under way then checks again.
+    switches: AtomicU64,
 }
 
 impl Updates {
     pub fn status(&self) -> UpdateStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// The host picked another channel: the update the other one offered is dropped, and a check
+    /// under way checks again for this one. The status, for the window.
+    pub fn switched(&self) -> UpdateStatus {
+        self.switches.fetch_add(1, Ordering::AcqRel);
+        *self.update.lock().unwrap() = None;
+        *self.last_check.lock().unwrap() = None;
+        let mut status = self.status.lock().unwrap();
+        *status = UpdateStatus::default();
+        status.clone()
     }
 
     /// Takes `busy` until the guard is dropped, or `None` if something else holds it.
@@ -85,20 +98,28 @@ impl Drop for Busy<'_> {
 }
 
 /// Looks for an update now and tells the window the result. Returns the status as it stands if a
-/// check or install is already running.
+/// check or install is already running (a running check checks again if the channel changed).
 pub async fn check(app: &AppHandle) -> UpdateStatus {
     let updates = app.state::<Updates>();
     let Some(_busy) = updates.begin() else {
         return updates.status();
     };
-    let settings = app.state::<Store>().get();
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
-    let prerelease = settings.update_channel() == "prerelease";
-    // The timeout wraps the check rather than going on the updater: there it would also cut the
-    // download of the installer short.
-    let found = match tokio::time::timeout(timeout, look(app, prerelease, timeout)).await {
-        Ok(result) => result,
-        Err(_) => Err("the update server didn't answer in time".to_string()),
+    let found = loop {
+        let switches = updates.switches.load(Ordering::Acquire);
+        let settings = app.state::<Store>().get();
+        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let prerelease = settings.update_channel() == "prerelease";
+        // The timeout wraps the check rather than going on the updater: there it would also cut
+        // the download of the installer short.
+        let found = match tokio::time::timeout(timeout, look(app, prerelease, timeout)).await {
+            Ok(result) => result,
+            Err(_) => Err("the update server didn't answer in time".to_string()),
+        };
+        // The host picked another channel meanwhile: this answer is the other channel's.
+        if updates.switches.load(Ordering::Acquire) == switches {
+            break found;
+        }
+        log::debug!("The update channel changed during the check: checking again");
     };
     let version = found
         .as_ref()
@@ -335,5 +356,18 @@ mod tests {
         assert!(updates.begin().is_none());
         drop(first);
         assert!(updates.begin().is_some());
+    }
+
+    #[test]
+    fn another_channel_drops_the_update_the_old_one_offered() {
+        let updates = Updates::default();
+        *updates.status.lock().unwrap() = status(Some("1.1.0-beta.1"));
+        *updates.last_check.lock().unwrap() = Some(Instant::now());
+        let after = updates.switched();
+        assert_eq!(after, UpdateStatus::default());
+        assert_eq!(updates.status(), UpdateStatus::default());
+        // The loop checks the new channel at its next tick.
+        assert_eq!(*updates.last_check.lock().unwrap(), None);
+        assert_eq!(updates.switches.load(Ordering::Acquire), 1);
     }
 }

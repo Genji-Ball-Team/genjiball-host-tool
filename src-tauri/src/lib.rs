@@ -28,7 +28,7 @@ use afk::AfkStatus;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, RunEvent, State, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 
 use credentials::Tokens;
 use history::Page;
@@ -546,13 +546,15 @@ fn get_debug(store: State<Store>, uploader: State<Uploader>) -> DebugInfo {
 }
 
 /// Whether the tool looks for updates by itself, and the channel it reads (`None`: the default).
-/// A new channel is checked at once: an update found on the other one may not be on this one.
+/// A new channel is checked at once, and the update the other one offered is dropped: it may not
+/// be on this one.
 #[tauri::command]
 fn set_updates(
     auto_check: bool,
     channel: Option<String>,
     app: tauri::AppHandle,
     store: State<Store>,
+    updates: State<Updates>,
 ) -> Result<AppState, String> {
     let channel = settings::normalize_update_channel(channel.as_deref())?;
     let before = store.get().update_channel().to_string();
@@ -567,6 +569,7 @@ fn set_updates(
         settings.update_channel()
     );
     if settings.update_channel() != before {
+        let _ = app.emit("update-status", updates.switched());
         let app = app.clone();
         tauri::async_runtime::spawn(async move { updates::check(&app).await });
     }

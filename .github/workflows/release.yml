@@ -93,13 +93,16 @@ jobs:
           $dir = "src-tauri/target/release/bundle/nsis"
           $files = @("$dir/genjiball-host-tool_${version}_x64-setup.exe", "$dir/latest.json")
           foreach ($file in $files) { if (-not (Test-Path $file)) { throw "$file wasn't built" } }
+          # A pre-release is never GitHub's "latest", so the stable channel's endpoint skips it.
+          $prerelease = @()
+          if ($env:GITHUB_REF_NAME.Contains("-")) { $prerelease = @("--prerelease") }
           gh release view $env:GITHUB_REF_NAME *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:GITHUB_REF_NAME @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Uploading to the release failed" }
+            # A release made by hand for a hyphenated tag is a pre-release too.
+            if ($prerelease) { gh release edit $env:GITHUB_REF_NAME --prerelease }
           } else {
-            # A pre-release is never GitHub's "latest", so the stable channel's endpoint skips it.
-            $prerelease = @()
-            if ($env:GITHUB_REF_NAME.Contains("-")) { $prerelease = @("--prerelease") }
             gh release create $env:GITHUB_REF_NAME @files --title $env:GITHUB_REF_NAME --generate-notes @prerelease
           }
           if ($LASTEXITCODE -ne 0) { throw "Publishing the release failed" }

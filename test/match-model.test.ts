@@ -1,9 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { example } from "./fixture";
 import { readLog, type MatchView } from "../src/match-model";
-
-// The spec's example log (GenjiBall-CE `docs/ranked-log-example.txt`), shared with the Rust tests.
-const example = readFileSync(new URL("../src-tauri/tests/fixtures/ranked-log-example.txt", import.meta.url), "utf8");
 
 function only(text: string): MatchView {
   const { matches } = readLog(text);

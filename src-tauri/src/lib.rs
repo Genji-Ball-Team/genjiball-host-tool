@@ -7,6 +7,7 @@ mod live_lobby;
 mod lobby;
 mod log_folder;
 mod log_scan;
+mod match_log;
 mod ranked_code;
 mod release;
 mod server;
@@ -113,6 +114,8 @@ struct AppState {
     settings_error: Option<String>,
     /// Every `config::TUNABLES`, in order, with the host's value.
     advanced: Vec<AdvancedSetting>,
+    /// `config::MATCH_VIEW_POLL_SECS` as the host set it.
+    match_view_poll_secs: u64,
 }
 
 /// A tunable under Advanced, as the window shows it. All in seconds.
@@ -156,6 +159,7 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
                 value: settings.advanced.get(t.key).copied(),
             })
             .collect(),
+        match_view_poll_secs: settings.get(&config::MATCH_VIEW_POLL_SECS),
     })
 }
 
@@ -270,6 +274,35 @@ fn live_round_starts(folder: &Path) -> Result<Vec<log_scan::RoundStart>, String>
     let bytes = std::fs::read(&path)
         .map_err(|e| format!("Couldn't read the match log ({e}). Try again"))?;
     Ok(log_scan::round_starts(&String::from_utf8_lossy(&bytes)))
+}
+
+/// The log folder in use, if it's there.
+fn current_log_folder(store: &Store) -> Result<PathBuf, String> {
+    log_folder::current(store.get().log_folder.as_deref())
+        .filter(|f| f.exists)
+        .map(|f| f.path)
+        .ok_or_else(|| "The Workshop log folder isn't there yet".to_string())
+}
+
+/// A log's complete lines for the match view, by file name in the log folder in use (`match_log`).
+/// No text when the window already has it at that size (`known`).
+#[tauri::command]
+fn read_match_log(
+    file: String,
+    known: Option<match_log::Known>,
+    store: State<Store>,
+) -> Result<match_log::LogText, String> {
+    match_log::read(&current_log_folder(&store)?, &file, known.as_ref())
+}
+
+/// The live log (the newest in the log folder) for the match view's current match; `None` while
+/// there's no log.
+#[tauri::command]
+fn read_live_log(
+    known: Option<match_log::Known>,
+    store: State<Store>,
+) -> Result<Option<match_log::LogText>, String> {
+    match_log::read_live(&current_log_folder(&store)?, known.as_ref())
 }
 
 /// Tries a failed upload again now, through the upload queue.
@@ -580,6 +613,8 @@ pub fn run() {
             set_live_lobby,
             get_lobby_status,
             open_match,
+            read_match_log,
+            read_live_log,
             get_update_status,
             check_for_update,
             install_update

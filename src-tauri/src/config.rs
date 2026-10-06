@@ -260,6 +260,21 @@ pub const DIAGNOSTICS_LOG_BYTES: u64 = 2 * 1024 * 1024;
 /// The file name a diagnostics export is offered under, before the date: `<prefix>-<date>.json`.
 pub const DIAGNOSTICS_FILE_PREFIX: &str = "genjiball-host-tool-diagnostics";
 
+/// Dry run (Advanced → Debug): the uploader picks the logs to upload as usual but sends nothing,
+/// and the debug panel shows what it would have sent. For a host who hasn't switched it
+/// (`Settings::dry_run`).
+pub const DRY_RUN_BY_DEFAULT: bool = false;
+
+/// How many of the latest uploads and dry runs the debug panel lists, newest first. Kept in memory
+/// only: a restart starts the list afresh.
+pub const DEBUG_UPLOADS_KEPT: usize = 20;
+
+/// The debug panel shows at most this much of a server's answer to an upload.
+pub const DEBUG_ANSWER_BYTES: usize = 16 * 1024;
+
+/// How many of the live log's last lines (its newest events) the debug panel shows.
+pub const DEBUG_EVENTS_SHOWN: usize = 40;
+
 /// Every `Tunable`, in the order the window lists them.
 pub const TUNABLES: [&Tunable; 9] = [
     &POLL_INTERVAL_SECS,

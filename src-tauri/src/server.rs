@@ -381,6 +381,55 @@ pub struct UploadInfo<'a> {
     pub host_afk: Option<&'a str>,
 }
 
+impl UploadInfo<'_> {
+    /// The headers an upload sends besides the token, in order. The debug panel shows the same.
+    pub fn headers(&self) -> Vec<(&'static str, String)> {
+        let mut headers = vec![
+            ("Content-Type", "text/plain; charset=utf-8".to_string()),
+            ("X-Log-File", self.file_name.to_string()),
+        ];
+        if let Some(started_at) = self.started_at {
+            headers.push(("X-Log-Started-At", started_at.to_string()));
+        }
+        if let Some(region) = self.region {
+            headers.push(("X-Region", region.to_string()));
+        }
+        if let Some(host_afk) = self.host_afk {
+            headers.push(("X-Host-Afk", host_afk.to_string()));
+        }
+        headers
+    }
+}
+
+/// An answer as the server sent it, for the debug panel: its HTTP status and body, cut to
+/// `config::DEBUG_ANSWER_BYTES`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawAnswer {
+    pub status: u16,
+    pub body: String,
+}
+
+impl RawAnswer {
+    fn new(status: u16, body: &str) -> Self {
+        let mut end = body.len().min(config::DEBUG_ANSWER_BYTES);
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self {
+            status,
+            body: body[..end].to_string(),
+        }
+    }
+}
+
+/// What came of an upload, and the answer as it came (`None` when there was none).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Uploaded {
+    pub outcome: UploadOutcome,
+    pub answer: Option<RawAnswer>,
+}
+
 /// Sends a log file, unchanged, to `POST /api/upload`, with the headers in `info`.
 pub async fn upload(
     server_url: &str,
@@ -388,57 +437,58 @@ pub async fn upload(
     info: UploadInfo<'_>,
     body: Vec<u8>,
     timeout: Duration,
-) -> UploadOutcome {
-    let UploadInfo {
-        file_name,
-        started_at,
-        region,
-        host_afk,
-    } = info;
-    let retry = |e: reqwest::Error| UploadOutcome::Retry {
-        message: format!("Couldn't reach the server: {}", e.without_url()),
-        after: None,
+) -> Uploaded {
+    let unanswered = |outcome| Uploaded {
+        outcome,
+        answer: None,
+    };
+    let retry = |e: reqwest::Error| {
+        unanswered(UploadOutcome::Retry {
+            message: format!("Couldn't reach the server: {}", e.without_url()),
+            after: None,
+        })
     };
     let client = match client(timeout) {
         Ok(client) => client,
         Err(message) => {
-            return UploadOutcome::Retry {
+            return unanswered(UploadOutcome::Retry {
                 message,
                 after: None,
-            }
+            })
         }
     };
     let mut request = client
         .post(format!("{server_url}/api/upload"))
         .bearer_auth(token)
-        .header("Content-Type", "text/plain; charset=utf-8")
-        .header("X-Log-File", file_name)
         .body(body);
-    if let Some(started_at) = started_at {
-        request = request.header("X-Log-Started-At", started_at);
-    }
-    if let Some(region) = region {
-        request = request.header("X-Region", region);
-    }
-    if let Some(host_afk) = host_afk {
-        request = request.header("X-Host-Afk", host_afk);
+    for (name, value) in info.headers() {
+        request = request.header(name, value);
     }
     let response = match request.send().await {
         Ok(response) => response,
         Err(e) => return retry(e),
     };
     let status = response.status().as_u16();
-    log::debug!("{server_url} answered {status} to the upload of {file_name}");
+    log::debug!(
+        "{server_url} answered {status} to the upload of {}",
+        info.file_name
+    );
     let retry_after = response
         .headers()
         .get("Retry-After")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    match response.text().await {
-        Ok(body) => read_upload(status, retry_after.as_deref(), &body),
+    let (outcome, body) = match response.text().await {
+        Ok(body) => (read_upload(status, retry_after.as_deref(), &body), body),
         // The status alone says the token or the file won't do: the body only explains it.
-        Err(_) if matches!(status, 401 | 403 | 413 | 422) => read_upload(status, None, ""),
-        Err(e) => retry(e),
+        Err(_) if matches!(status, 401 | 403 | 413 | 422) => {
+            (read_upload(status, None, ""), String::new())
+        }
+        Err(e) => return retry(e),
+    };
+    Uploaded {
+        outcome,
+        answer: Some(RawAnswer::new(status, &body)),
     }
 }
 
@@ -769,6 +819,43 @@ mod tests {
     }
 
     #[test]
+    fn an_upload_sends_only_the_headers_it_has() {
+        let names = |info: UploadInfo| -> Vec<&str> {
+            info.headers().into_iter().map(|(name, _)| name).collect()
+        };
+        let plain = UploadInfo {
+            file_name: "Log-a.txt",
+            ..UploadInfo::default()
+        };
+        assert_eq!(names(plain), ["Content-Type", "X-Log-File"]);
+        let full = UploadInfo {
+            started_at: Some("2026-10-02T20:15:33+02:00"),
+            region: Some("eu"),
+            host_afk: Some("482913507226:3"),
+            ..plain
+        };
+        assert_eq!(
+            names(full),
+            [
+                "Content-Type",
+                "X-Log-File",
+                "X-Log-Started-At",
+                "X-Region",
+                "X-Host-Afk"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_answer_is_cut_for_the_debug_panel() {
+        let long = "é".repeat(config::DEBUG_ANSWER_BYTES);
+        let answer = RawAnswer::new(500, &long);
+        assert!(answer.body.len() <= config::DEBUG_ANSWER_BYTES);
+        assert!(long.starts_with(&answer.body));
+        assert_eq!(RawAnswer::new(200, "{}").body, "{}");
+    }
+
+    #[test]
     fn reads_a_stored_upload() {
         let body = r#"{"result":"stored","uploadId":12,"region":"eu","matches":[{"matchKey":"482913507226","lineCount":57,"region":"eu","action":"insert","status":"review","rejection":null,"reviewReasons":["duplicate_name"]}]}"#;
         assert_eq!(
@@ -895,7 +982,8 @@ mod tests {
             },
             b"x".to_vec(),
             timeout,
-        ));
+        ))
+        .outcome;
         assert!(matches!(outcome, UploadOutcome::Stored(a) if a.region.as_deref() == Some("na")));
         let request = request.recv().unwrap().to_ascii_lowercase();
         assert!(request.contains("\r\nx-region: na\r\n"), "{request}");
@@ -1151,7 +1239,8 @@ mod tests {
                 },
                 b"x".to_vec(),
                 timeout
-            )),
+            ))
+            .outcome,
             UploadOutcome::TokenRejected { revoked: false }
         );
         let too_big = cut_off_server("HTTP/1.1 413 Payload Too Large\r\n", "x");
@@ -1165,7 +1254,8 @@ mod tests {
                 },
                 b"x".to_vec(),
                 timeout
-            )),
+            ))
+            .outcome,
             UploadOutcome::Refused { .. }
         ));
         // Any other answer cut off is worth another try.
@@ -1180,7 +1270,8 @@ mod tests {
                 },
                 b"x".to_vec(),
                 timeout
-            )),
+            ))
+            .outcome,
             UploadOutcome::Retry { .. }
         ));
     }

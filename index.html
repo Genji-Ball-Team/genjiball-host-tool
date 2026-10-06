@@ -16,6 +16,7 @@
       </header>
 
       <p class="banner bad" id="settings-error" hidden></p>
+      <p class="banner" id="dry-run-banner" hidden>Dry run is on: nothing is uploaded. Turn it off under Advanced → Debug.</p>
 
       <div class="banner update" id="update-banner" hidden>
         <span id="update-banner-text"></span>
@@ -183,6 +184,22 @@
           </div>
           <p id="debug-state" role="status" hidden></p>
           <p class="note">Saves one file to send with a bug report: the tool's version, its settings, what was uploaded, the recent log and the names of the files in your log folder. Never your host token.</p>
+          <label class="check dry-run"><input id="dry-run" type="checkbox" /> Dry run: send nothing, only show what would be uploaded</label>
+          <p class="note">Logs are picked as usual, but none goes to the server: the debug panel lists each with what its upload would send, and "Show match" shows it as the server will read it. They're uploaded once you turn the dry run off.</p>
+        </details>
+        <details id="debug-panel">
+          <summary>Debug panel</summary>
+          <h3>Waiting to upload</h3>
+          <ul class="debug-list" id="debug-queue"></ul>
+          <p class="note" id="debug-queue-empty">Nothing waiting.</p>
+          <h3>Latest uploads</h3>
+          <ul class="uploads" id="debug-uploads"></ul>
+          <p class="note" id="debug-uploads-empty">None since the tool started.</p>
+          <h3>Newest log's last events</h3>
+          <p class="path muted" id="debug-events-file"></p>
+          <ol class="events" id="debug-events"></ol>
+          <p class="note bad" id="debug-error" hidden></p>
+          <p class="note">Read again while this panel is open. What was sent never includes your host token.</p>
         </details>
       </section>
     </main>

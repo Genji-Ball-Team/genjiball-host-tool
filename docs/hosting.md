@@ -83,5 +83,7 @@ Under **Advanced → Debug**:
 - **Export diagnostics...** saves one file (offered in your Downloads folder) to attach to a bug report or send to an admin. It holds the tool's version, its settings, what it uploaded, its recent log and the names of the files in your Workshop log folder (not the logs themselves). It never holds your host token.
 - If the problem is hard to catch, set **Log level** to **debug** first, make it happen again, then export. Set it back to **info** afterwards.
 - **Open log folder** shows the tool's own log files, if you'd rather look yourself.
+- **Dry run** stops uploads without stopping the tool: ranked logs are picked as usual, but nothing is sent. Use it to check what the tool would upload. Turn it off when you're done: the logs it held back are uploaded then.
+- **Debug panel** lists the logs waiting to upload, the latest uploads (and dry runs) with what was sent and what the server answered, and the last events in your newest log. "Show match" shows an upload's matches as the server reads them.
 
 Under **Advanced → Ranked code release** you can build the ranked code on an older Genji Ball release by its tag (like `1.3.2R`). Leave it empty unless an admin asks: empty always uses the latest ranked release.

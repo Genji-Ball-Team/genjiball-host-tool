@@ -67,6 +67,7 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/lobby.rs`, `live_lobby.rs` | The live lobby: lists the host's lobby on the site while a ranked match is played |
 | `src-tauri/src/release.rs`, `ranked_code.rs` | The ranked code: the GenjiBall-CE release it's built on, and the rank tags filled in |
 | `src-tauri/src/logging.rs`, `diagnostics.rs` | The tool's own log, and the diagnostics export for bug reports |
+| `src-tauri/src/debug.rs`, `src/debug-view.ts` | The debug panel: the latest uploads and dry runs, and the newest log's last events |
 | `src-tauri/capabilities/` | What the window is allowed to call |
 
 ## Contributing

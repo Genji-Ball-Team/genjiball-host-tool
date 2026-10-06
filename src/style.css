@@ -114,11 +114,6 @@ dd { margin: 0; overflow-wrap: anywhere; }
 }
 #host-trust-note { margin: -.5rem 0 1rem; }
 
-/* AFK on: hard to miss, at the top and in the header. */
-#afk.on { margin-left: -1rem; padding: 1rem 1rem 1rem calc(1rem - 3px); border-left: 3px solid var(--bad); background: #1c1012; }
-#afk.on h2 { color: var(--bad); }
-#afk .row { align-items: center; margin-top: 0; }
-#afk .status { margin-left: 0; }
 .tag.afk { align-self: center; border-color: var(--bad); color: var(--bad); }
 
 label { display: block; color: var(--soft); font-size: .85rem; margin-bottom: .35rem; }
@@ -265,3 +260,71 @@ pre.raw {
 .match-view .note { margin-top: .75rem; }
 .match-view .problems { margin-top: .5rem; }
 .match-view .problems ul { margin: .35rem 0 0; padding-left: 1.25rem; color: var(--muted); font-size: .8rem; }
+
+/* Home (#34). The status card is the one loud thing: its edge and dot follow the state. */
+#home, #setup { margin-top: 1.25rem; }
+#home > * + * { margin-top: 1rem; }
+.status-card { --tone: var(--good); padding: .9rem 1rem 1rem; border: 1px solid var(--line); border-left: 3px solid var(--tone); border-radius: 4px; background: var(--panel); }
+.status-card[data-tone="warn"] { --tone: var(--gold); }
+.status-card[data-tone="bad"] { --tone: var(--bad); }
+.status-line { display: flex; align-items: center; gap: .55rem; margin: 0; font-size: 1.1rem; }
+.status-line b { font-weight: 650; }
+.status-dot { flex: none; width: .6rem; height: .6rem; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent); }
+.status-card > .muted { margin: .15rem 0 0 1.15rem; font-size: .85rem; }
+.facts { margin: .8rem 0 0; gap: .25rem 1.25rem; font-size: .85rem; }
+.facts .status { margin-left: .35rem; }
+.facts .tag { margin-left: .2rem; }
+#home-log { font-family: ui-monospace, Consolas, monospace; font-size: .8rem; color: var(--soft); }
+
+.problems { list-style: none; margin: 0; padding: 0; }
+.problems:empty { display: none; }
+.problems li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .75rem; border-left: 3px solid var(--bad); background: #1c1012; font-size: .85rem; }
+.problems li + li { margin-top: .35rem; }
+.problems button { flex: none; padding: .2rem .65rem; font-size: .8rem; }
+
+.home-code { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
+.home-code > div { flex: 1 1 12rem; min-width: 0; }
+.home-code details.hint { margin-top: 0; }
+#ranked-code-state { margin: 0 0 .2rem; font-size: .85rem; }
+button.big { padding: .7rem 1.4rem; font-size: 1rem; }
+
+.switches { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
+.switch-card { padding: .7rem .9rem .8rem; border: 1px solid var(--line); border-radius: 4px; }
+.switch-card h2 { margin: 0; }
+.switch-card p { margin: .35rem 0 0; font-size: .85rem; }
+.switch-card .status { margin-left: 0; }
+.switch-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+/* AFK on: hard to miss, here and in the sidebar. */
+#afk.on { border-color: #4a2125; background: #1c1012; }
+#afk.on h2 { color: var(--bad); }
+
+/* A switch: a button (role="switch", aria-checked) or a checkbox. */
+.switch {
+  position: relative; flex: none; width: 2.5rem; height: 1.4rem; margin: 0; padding: 0;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--raised); cursor: pointer; appearance: none;
+}
+.switch::after { content: ""; position: absolute; top: .15rem; left: .15rem; width: 1rem; height: 1rem; border-radius: 50%; background: var(--muted); transition: transform .15s, background-color .15s; }
+.switch[aria-checked="true"], .switch:checked { border-color: var(--good); background: #10301f; }
+.switch[aria-checked="true"]::after, .switch:checked::after { transform: translateX(1.1rem); background: var(--good); }
+#afk-toggle[aria-checked="true"] { border-color: var(--bad); background: #3a1517; }
+#afk-toggle[aria-checked="true"]::after { background: var(--bad); }
+input.switch:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
+
+.last-upload h2 { margin: 0; }
+#home-last { display: flex; flex-wrap: wrap; gap: .1rem 1rem; margin: .35rem 0 0; font-size: .85rem; }
+#home-last .path { flex: 1 1 100%; }
+button.link { padding: 0; border: 0; background: none; color: var(--soft); font-weight: 500; font-size: .8rem; text-decoration: underline; text-underline-offset: .2em; }
+button.link:hover { color: var(--fg); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* First start: the setup. A real sequence, so numbered. */
+#setup h1 { margin-top: .25rem; }
+#setup .lede { margin-top: .35rem; }
+.steps { margin: 1.25rem 0 0; padding: 0; list-style: none; counter-reset: step; }
+.steps li { display: flex; align-items: center; gap: .9rem; padding: .75rem 0; border-top: 1px solid var(--line); counter-increment: step; }
+.steps li::before { content: counter(step); flex: none; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border: 1px solid var(--border); border-radius: 50%; color: var(--soft); font-size: .8rem; font-weight: 600; }
+.steps li.done::before { content: "✓"; border-color: var(--good); color: var(--good); }
+.steps li > div { flex: 1; min-width: 0; }
+.steps b { display: block; font-weight: 600; }
+.steps .muted { font-size: .85rem; }

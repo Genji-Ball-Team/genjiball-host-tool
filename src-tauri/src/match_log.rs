@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{log_scan, watcher};
@@ -56,18 +57,46 @@ pub fn read(folder: &Path, file: &str, known: Option<&Known>) -> Result<LogText,
     })
 }
 
-/// The live log: the newest in `folder` (`watcher::newest_log`), `None` while there's none.
-pub fn read_live(folder: &Path, known: Option<&Known>) -> Result<Option<LogText>, String> {
+/// The live log's name: the newest in `folder` (`watcher::newest_log`), `None` while there's none.
+fn live_name(folder: &Path) -> Result<Option<String>, String> {
     let newest =
         watcher::newest_log(folder).map_err(|e| format!("Couldn't read the log folder: {e}"))?;
-    let Some(name) = newest
+    Ok(newest
         .as_deref()
         .and_then(Path::file_name)
         .and_then(|n| n.to_str())
-    else {
+        .map(str::to_string))
+}
+
+/// The live log, `None` while there's none.
+pub fn read_live(folder: &Path, known: Option<&Known>) -> Result<Option<LogText>, String> {
+    match live_name(folder)? {
+        Some(name) => read(folder, &name, known).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The live log's name and when it last grew, for Home (#34): no text.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveFile {
+    pub file: String,
+    /// RFC 3339.
+    pub written_at: String,
+}
+
+/// The live log without its text, `None` while there's none.
+pub fn live_file(folder: &Path) -> Result<Option<LiveFile>, String> {
+    let Some(file) = live_name(folder)? else {
         return Ok(None);
     };
-    read(folder, name, known).map(Some)
+    let modified = fs::metadata(folder.join(&file))
+        .and_then(|m| m.modified())
+        .map_err(|e| format!("Couldn't read {file}: {e}"))?;
+    Ok(Some(LiveFile {
+        file,
+        written_at: DateTime::<Utc>::from(modified).to_rfc3339_opts(SecondsFormat::Secs, true),
+    }))
 }
 
 #[cfg(test)]
@@ -134,5 +163,15 @@ mod tests {
             (live.file.as_str(), live.text.as_deref()),
             (NAME, Some("new\n"))
         );
+        let file = live_file(dir.path()).unwrap().unwrap();
+        assert_eq!(file.file, NAME);
+        assert!(file.written_at.ends_with('Z'), "{}", file.written_at);
+    }
+
+    #[test]
+    fn no_live_file_without_a_log() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("notes.txt"), "not a log\n").unwrap();
+        assert_eq!(live_file(dir.path()).unwrap(), None);
     }
 }

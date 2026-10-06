@@ -4,8 +4,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { watchDebug } from "./debug-view";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
-import { renderTourneys, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
-import { currentView, markView, onViewChange, setupViews, showPane } from "./views";
+import type { Fix } from "./home-model";
+import { homeFolderChanged, renderHome, setupHome } from "./home-view";
+import { renderTourneys, screenshotsDue, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
+import { currentView, markView, onViewChange, setupViews, showPane, showView } from "./views";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
 interface AppState {
@@ -218,10 +220,17 @@ let state: AppState;
 let ready = false;
 let editingToken = false;
 
+/** The token's state as last said, for Home too. */
+let tokenLine: { text: string; tone: "good" | "bad" | "muted" } = { text: "", tone: "muted" };
+/** The last token check's result, and why it couldn't reach the server. */
+let tokenCheck: TokenCheck | null = null;
+
 function setStatus(text: string, tone: "good" | "bad" | "muted" = "muted"): void {
   const status = el("token-status");
   status.textContent = text;
   status.className = `status ${tone}`;
+  tokenLine = { text, tone };
+  if (ready) renderHome();
 }
 
 /** The host's home region as the server last said (`null`: none), `undefined` while not known. */
@@ -255,8 +264,12 @@ function setRegionStatus(text: string, tone: "good" | "bad" | "muted" = "muted")
   status.className = `status ${tone}`;
 }
 
+/** The host as last known, for Home. */
+let knownHost: Host | null = null;
+
 /** The host's name and, while they're untrusted, a tag saying so. `null` hides both. */
 function showHost(host: Host | null): void {
+  knownHost = host;
   homeRegion = host ? host.region : undefined;
   renderRegion();
   el("host").textContent = host?.name ?? "";
@@ -266,6 +279,7 @@ function showHost(host: Host | null): void {
 }
 
 function showCheck(check: TokenCheck): void {
+  tokenCheck = check;
   switch (check.result) {
     case "ok":
       showHost(check.host);
@@ -291,7 +305,6 @@ function render(): void {
   settingsError.hidden = !state.settingsError;
   settingsError.textContent = state.settingsError ? `${state.settingsError}. Uploads are paused until it's fixed. The defaults are shown; changing a setting writes a new file.` : "";
 
-  el("dry-run-banner").hidden = !state.dryRun;
   el("welcome").hidden = state.hasToken;
   el("server").textContent = state.serverUrl;
   el("default-server").textContent = state.defaultServerUrl;
@@ -338,6 +351,7 @@ function render(): void {
   renderAdvanced();
   renderUpdateSettings();
   renderDebug();
+  renderHome();
 }
 
 const updateChannelLabels: Record<string, string> = { stable: "Stable", prerelease: "Pre-release" };
@@ -527,15 +541,12 @@ function renderAfk(afk: AfkStatus): void {
   afkOn = afk.on;
   el("afk").classList.toggle("on", afk.on);
   el("afk-tag").hidden = !afk.on;
-  const toggle = el("afk-toggle");
-  toggle.textContent = afk.on ? "I'm back: turn AFK off" : "Go AFK";
-  toggle.className = afk.on ? "" : "quiet";
-  toggle.setAttribute("aria-pressed", String(afk.on));
+  el("afk-toggle").setAttribute("aria-checked", String(afk.on));
   const line = el("afk-state");
   const rounds = afk.latest?.rounds ?? [];
   const skipped = rounds.length ? ` Not rated for you so far: round${rounds.length === 1 ? "" : "s"} ${rounds.join(", ")} of the latest match.` : "";
-  line.textContent = afk.on ? `AFK is on.${skipped}` : "";
-  line.className = "status bad";
+  line.textContent = afk.on ? `On.${skipped}` : "Off: your rounds are rated.";
+  line.className = afk.on ? "status bad" : "status muted";
   const error = el("afk-error");
   error.hidden = !afk.error;
   error.textContent = afk.error ?? "";
@@ -545,6 +556,7 @@ function renderUploads(status: UploadStatus): void {
   // A poll that began before the host changed the server or folder: not about what's shown.
   // Dropped before it touches the history, so it can't replace the new server's page.
   if (status.serverUrl !== state.serverUrl || status.logFolder !== (state.logFolder?.path ?? null) || status.chosenRegion !== state.region) return;
+  uploadStatus = status;
   if (status.host) showHost(status.host);
   else if (status.problem?.kind === "tokenRejected") showHost(null);
   renderUploadRegion(status);
@@ -566,7 +578,8 @@ function renderUploads(status: UploadStatus): void {
 
   const retrying = el("upload-retrying");
   retrying.hidden = !status.retrying;
-  markView("uploads", Boolean(status.problem || status.retrying));
+  // No token yet: Home shows the setup instead.
+  markView("uploads", Boolean((status.problem && status.problem.kind !== "noToken") || status.retrying));
   retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
 
   // The status carries the newest page. An older one is asked for again when anything in the
@@ -579,7 +592,11 @@ function renderUploads(status: UploadStatus): void {
   } else if (changed) {
     showHistoryPage(historyPage).catch(showUploadsError);
   }
+  renderHome();
 }
+
+/** The last upload status for the settings shown, `null` before one. */
+let uploadStatus: UploadStatus | null = null;
 
 /** The region uploads go as, as the upload status last said (`null`: not known). */
 let uploadRegion: string | null = null;
@@ -812,10 +829,10 @@ function setLobbyFormState(text: string, tone: "good" | "bad"): void {
   line.className = tone;
 }
 
-async function saveLobby(): Promise<void> {
+async function saveLobbyName(): Promise<void> {
   setLobbyFormState("", "good");
   const name = el<HTMLInputElement>("lobby-name");
-  const next = await invoke<AppState>("set_live_lobby", { on: el<HTMLInputElement>("lobby-on").checked, name: name.value });
+  const next = await invoke<AppState>("set_live_lobby", { on: state.liveLobby, name: name.value });
   // Shown as saved: spaces around it dropped.
   name.value = next.lobbyName ?? "";
   await show(next);
@@ -832,6 +849,7 @@ async function show(next: AppState): Promise<void> {
   renderUploads(status);
   renderLobby(await invoke<LobbyStatus>("get_lobby_status"));
   renderTourneys(await invoke<TourneysStatus>("get_tourneys"));
+  renderHome();
 }
 
 async function refresh(): Promise<void> {
@@ -1168,13 +1186,19 @@ el("afk-toggle").addEventListener("click", () => {
 
 el("lobby-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  void busy(saveLobby, (m) => setLobbyFormState(m, "bad"));
+  void busy(saveLobbyName, (m) => setLobbyFormState(m, "bad"));
 });
 el("lobby-on").addEventListener("change", () => {
-  void busy(saveLobby, (m) => {
-    setLobbyFormState(m, "bad");
-    renderLobbySettings();
-  });
+  void busy(
+    async () => {
+      setLine("lobby-error", "", "bad");
+      await show(await invoke<AppState>("set_live_lobby", { on: el<HTMLInputElement>("lobby-on").checked, name: state.lobbyName ?? "" }));
+    },
+    (m) => {
+      setLine("lobby-error", m, "bad");
+      renderLobbySettings();
+    },
+  );
 });
 
 /** The current match view, reading the live log while the Match view is shown. */
@@ -1190,6 +1214,7 @@ function watchLiveMatch(shown: boolean): void {
 
 /** Another log folder: the match views read their logs from it afresh. */
 function logFolderChanged(): void {
+  homeFolderChanged();
   for (const shown of shownMatches.values()) shown.watch.stop();
   shownMatches.clear();
   if (liveWatch) {
@@ -1202,6 +1227,65 @@ function logFolderChanged(): void {
 
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
+
+/** What Home shows, from the state above. */
+function homeState() {
+  const entry = uploadStatus?.history.page === 0 ? uploadStatus.history.entries[0] : undefined;
+  let lastUpload = null;
+  if (entry) {
+    const now = entry.queued ? describeQueued(entry.queued) : entry.answer ? describeAnswer(entry.answer) : { text: "", tone: "muted" as Tone };
+    lastUpload = { file: entry.file, when: entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet", ...now };
+  }
+  const region = uploadStatus?.region ?? state.region ?? homeRegion ?? null;
+  return {
+    hasToken: state.hasToken,
+    logFolder: state.logFolder,
+    dryRun: state.dryRun,
+    settingsError: Boolean(state.settingsError),
+    upload: uploadStatus,
+    tokenCheck: tokenCheck?.result ?? null,
+    unreachable: tokenCheck?.result === "unreachable" ? tokenCheck.message : null,
+    screenshotsDue: screenshotsDue(),
+    serverName: serverName(state.serverUrl),
+    host: knownHost && { name: knownHost.name, untrusted: knownHost.trust === "untrusted" },
+    token: tokenLine,
+    region: !region ? "None yet" : state.region ? regionLabel(region) : `${regionLabel(region)} (home region)`,
+    lastUpload,
+    pollSecs: state.matchViewPollSecs,
+  };
+}
+
+/** A Home problem's button. */
+function homeFix(target: Fix): void {
+  switch (target.kind) {
+    case "pane":
+      showPane(target.pane);
+      break;
+    case "view":
+      showView(target.view);
+      break;
+    case "changeToken":
+      editingToken = true;
+      render();
+      showPane("account");
+      el("token").focus();
+      break;
+    case "checkToken":
+      void busy(checkSaved);
+      break;
+    case "dryRunOff":
+      void busy(async () => show(await invoke<AppState>("set_dry_run", { on: false })));
+      break;
+  }
+}
+
+el("home-region-change").addEventListener("click", () => showPane("game"));
+el("home-uploads").addEventListener("click", () => showView("uploads"));
+el("setup-token-add").addEventListener("click", () => {
+  showPane("account");
+  el("token").focus();
+});
+el("setup-folder-choose").addEventListener("click", () => showPane("game"));
 
 // The live log is read once the settings (its poll time) are known.
 onViewChange((view) => {
@@ -1222,7 +1306,9 @@ void busy(async () => {
     if (ready) renderLobby(event.payload);
   });
   await listen<TourneysStatus>("tourneys-status", (event) => {
-    if (ready) renderTourneys(event.payload);
+    if (!ready) return;
+    renderTourneys(event.payload);
+    renderHome();
   });
   await setupTourneys(() => ({
     serverUrl: state.serverUrl,
@@ -1239,11 +1325,9 @@ void busy(async () => {
   });
   await refresh();
   watchLiveMatch(currentView() === "match");
+  setupHome(homeState, homeFix);
   renderUpdate(await invoke<UpdateStatus>("get_update_status"));
   if (state.hasToken) await checkSaved();
-  else {
-    // First start: the token is all that's missing.
-    showPane("account");
-    el("token").focus();
-  }
+  // First start: Home shows the setup.
+  else showView("home");
 });

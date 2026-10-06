@@ -8,7 +8,7 @@ How ranked works end to end:
 2. This tool watches the log folder and uploads the matches.
 3. The [ranked server](https://github.com/Genji-Ball-Team/genjiball-ranked) parses the log, rates each round and shows the results on the website.
 
-**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, lets the host go AFK without their rating changing, and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
+**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, shows the current match and each uploaded one the way the site will (and why one won't count), lets the host go AFK without their rating changing, and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
 
 - **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
 

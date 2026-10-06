@@ -56,6 +56,12 @@ Under "Uploads" each log file is listed with the players in it and what happened
 
 The status can change later: an admin may accept, reject or void a match after you uploaded it. "Check again" asks the server straight away.
 
+## Watching a match
+
+"Current match", near the top, shows the match in your newest log while you play, laid out like its page on the site: the map, the players, the round in progress (who's still in, who's out and who got them), round wins and kills so far, and a grid of every finished round. "Show match" on a file in the upload list shows the same for that file.
+
+It also says, before you upload, whether the match will count the way the server reads it: **Won't count** with the reasons the game logged (a bot, the wrong map or preset, add-ons on) or no rated round, and **two players with the same name**, which sends it to an admin. Ratings aren't shown: only the server works them out, from every host's matches. Once a match is accepted, "View on the site" shows them.
+
 ## The line above the list
 
 | It says | What to do |

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { watchLog, type LogWatch } from "./match-view";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
 interface AppState {
@@ -18,6 +19,8 @@ interface AppState {
   lobbyNameMax: number;
   settingsError: string | null;
   advanced: AdvancedSetting[];
+  /** How often the match view reads its log again, in seconds. */
+  matchViewPollSecs: number;
 }
 
 /** Mirrors `Region` in src-tauri/src/config.rs. */
@@ -551,8 +554,40 @@ function historyItem(entry: HistoryEntry): HTMLLIElement {
   for (const match of matches) {
     actions.append(button(matches.length > 1 ? `Match ${match.matchId} on the site` : "View on the site", () => invoke<void>("open_match", { matchId: match.matchId })));
   }
-  if (actions.childElementCount) item.append(actions);
+  actions.append(matchToggle(entry, item));
+  item.append(actions);
+  const shown = shownMatches.get(entry.file);
+  if (shown) item.append(shown.box);
   return item;
+}
+
+/** The match views open in the upload list, by file: kept while the list is drawn again. */
+const shownMatches = new Map<string, { box: HTMLElement; watch: LogWatch }>();
+
+const matchViewPollSecs = () => state.matchViewPollSecs;
+
+/** "Show match": the file's matches as the server will read them, under its line. */
+function matchToggle(entry: HistoryEntry, item: HTMLLIElement): HTMLButtonElement {
+  const open = shownMatches.has(entry.file);
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "quiet";
+  toggle.textContent = open ? "Hide match" : "Show match";
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.addEventListener("click", () => {
+    const shown = shownMatches.get(entry.file);
+    if (shown) {
+      shown.watch.stop();
+      shownMatches.delete(entry.file);
+    } else {
+      const box = document.createElement("div");
+      shownMatches.set(entry.file, { box, watch: watchLog(box, { kind: "file", file: entry.file }, matchViewPollSecs) });
+    }
+    const next = historyItem(entry);
+    item.replaceWith(next);
+    next.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
+  });
+  return toggle;
 }
 
 /** The history page the host asked for, from 0 (the newest). */
@@ -565,6 +600,12 @@ let historyRevision = -1;
 function renderHistory(page: HistoryPage): void {
   // Past the end gives the last page: stay there.
   historyPage = page.page;
+  // A match view stops reading once its file is off the page.
+  for (const [file, shown] of shownMatches) {
+    if (page.entries.some((e) => e.file === file)) continue;
+    shown.watch.stop();
+    shownMatches.delete(file);
+  }
   el("uploads").replaceChildren(...page.entries.map(historyItem));
   const first = page.page * page.pageSize;
   el("uploads-pager").hidden = page.total <= page.pageSize;
@@ -819,12 +860,16 @@ el("log-folder-choose").addEventListener("click", () => {
   void busy(async () => {
     const path = await open({ directory: true, defaultPath: state.logFolder?.path, title: "Workshop log folder" });
     if (typeof path !== "string") return;
-    await show(await invoke<AppState>("set_log_folder", { path }));
+    const next = await invoke<AppState>("set_log_folder", { path });
+    logFolderChanged();
+    await show(next);
   });
 });
 el("log-folder-reset").addEventListener("click", () => {
   void busy(async () => {
-    await show(await invoke<AppState>("set_log_folder", { path: null }));
+    const next = await invoke<AppState>("set_log_folder", { path: null });
+    logFolderChanged();
+    await show(next);
   });
 });
 
@@ -920,6 +965,37 @@ el("lobby-on").addEventListener("change", () => {
   });
 });
 
+/** Whether the host hid the current match: `localStorage` keeps it across restarts. */
+const LIVE_HIDDEN_KEY = "liveMatchHidden";
+/** The current match view, reading the live log while it's shown. */
+let liveWatch: LogWatch | null = null;
+
+function showLiveMatch(shown: boolean): void {
+  localStorage.setItem(LIVE_HIDDEN_KEY, shown ? "" : "1");
+  el("live-match").hidden = !shown;
+  const toggle = el("live-toggle");
+  toggle.textContent = shown ? "Hide" : "Show";
+  toggle.setAttribute("aria-expanded", String(shown));
+  if (shown && !liveWatch) liveWatch = watchLog(el("live-match"), { kind: "live" }, matchViewPollSecs);
+  if (!shown && liveWatch) {
+    liveWatch.stop();
+    liveWatch = null;
+  }
+}
+
+/** Another log folder: the match views read their logs from it afresh. */
+function logFolderChanged(): void {
+  for (const shown of shownMatches.values()) shown.watch.stop();
+  shownMatches.clear();
+  if (liveWatch) {
+    liveWatch.stop();
+    liveWatch = null;
+    showLiveMatch(true);
+  }
+}
+
+el("live-toggle").addEventListener("click", () => showLiveMatch(!liveWatch));
+
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
@@ -939,6 +1015,7 @@ void busy(async () => {
     if (ready) renderUpdate(event.payload);
   });
   await refresh();
+  showLiveMatch(!localStorage.getItem(LIVE_HIDDEN_KEY));
   renderUpdate(await invoke<UpdateStatus>("get_update_status"));
   if (state.hasToken) await checkSaved();
   else el("token").focus();

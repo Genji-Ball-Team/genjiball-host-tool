@@ -123,6 +123,17 @@ pub const RETRY_MAX_SECS: Tunable = Tunable {
     max: 24 * 3600,
 };
 
+/// How often the window's match view reads the log again, while the window is open and the view is
+/// shown (#16): the live match follows the game this closely. Only a log that grew is sent again.
+pub const MATCH_VIEW_POLL_SECS: Tunable = Tunable {
+    key: "matchViewPollSecs",
+    label: "Match view refresh",
+    help: "How often the match view reads the log again while this window shows it.",
+    default: 2,
+    min: 1,
+    max: 60,
+};
+
 /// How many uploads the window lists on a page of the upload history, newest first. Older ones are
 /// on the next pages.
 pub const UPLOADS_PAGE_SIZE: usize = 8;
@@ -222,9 +233,10 @@ pub const UPDATE_CHECK_SECS: Tunable = Tunable {
 pub const UPDATE_TICK_SECS: u64 = 60;
 
 /// Every `Tunable`, in the order the window lists them.
-pub const TUNABLES: [&Tunable; 8] = [
+pub const TUNABLES: [&Tunable; 9] = [
     &POLL_INTERVAL_SECS,
     &QUIET_SECS,
+    &MATCH_VIEW_POLL_SECS,
     &REQUEST_TIMEOUT_SECS,
     &RETRY_FIRST_SECS,
     &RETRY_MAX_SECS,

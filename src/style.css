@@ -2,6 +2,7 @@
   /* genjiball.us's palette, the same as the ranked site */
   --bg: #090b10; --panel: #0e1117; --raised: #151922; --line: #1d222b; --border: #252a34;
   --fg: #eef1f7; --soft: #b4bbc7; --muted: #858d9a; --faint: #5d6573; --good: #67d49a; --bad: #ef6b6b;
+  --gold: #f3cf6b;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -101,3 +102,58 @@ details form { margin-top: .75rem; }
 .tunable .note { margin-top: .25rem; }
 #advanced-state { margin: .75rem 0 0; }
 #advanced-form > .row { margin-top: 1rem; }
+
+/* Match view (#16): the ranked site's match page (genjiball-ranked public/style.css), its colours
+   and structure: facts, the winner, standings, then players down and rounds across. */
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
+.section-head h2 { margin: 0; }
+.section-head button { padding: .2rem .65rem; font-size: .8rem; }
+.warn { color: var(--gold); }
+.uploads .match-view { margin-top: .5rem; padding: .25rem 0 .5rem .9rem; border-left: 2px solid var(--line); }
+.match-view .match + .match { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+.match-view p { margin: 0; }
+.match-view h3 { margin: 0; font-size: 1.15rem; font-weight: 650; }
+.match-view h4 { margin: 1.25rem 0 0; font-size: .75rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.match-view .headline { display: flex; align-items: center; gap: .4rem .75rem; flex-wrap: wrap; }
+.match-view .chip {
+  display: inline-block; padding: .05rem .5rem .1rem; border-radius: 4px; background: var(--raised); color: var(--soft);
+  font-size: .75rem; font-weight: 650; letter-spacing: .02em; line-height: 1.4; white-space: nowrap;
+}
+.match-view .chip.bad { background: #3a1517; color: #ffb3b3; }
+.match-view .chip.good { background: #10301f; color: var(--good); }
+.match-view .chip.live { background: var(--bad); color: var(--bg); }
+.match-view .player .chip { margin-left: .15rem; font-size: .7rem; vertical-align: .1em; }
+.match-view .facts { display: flex; flex-wrap: wrap; gap: .15rem 1.25rem; margin: .5rem 0 0; padding: 0; list-style: none; color: var(--soft); }
+.match-view .outlook { margin: .6rem 0 0; padding: 0; list-style: none; }
+.match-view .live-round { margin-top: 1rem; padding: .5rem .75rem; border-left: 3px solid var(--bad); background: var(--panel); }
+.match-view .live-round h4 { margin: 0 0 .35rem; color: var(--fg); }
+.match-view .live-round dl { margin: 0; gap: .15rem 1rem; }
+.match-view .podium { display: flex; align-items: center; gap: .9rem; margin: 1rem 0 0; }
+.match-view .podium span { display: flex; flex-direction: column; line-height: 1.25; }
+.match-view .podium small { color: var(--muted); font-size: .8rem; }
+.match-view .podium b { font-size: 1.4rem; font-weight: 700; color: var(--gold); }
+.match-view .scroll { overflow-x: auto; margin-top: .75rem; }
+.match-view .num { font-variant-numeric: tabular-nums; }
+.match-view .standings { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.match-view .standings th, .match-view .standings td { padding: .4rem .5rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.match-view thead th { color: var(--muted); font-weight: 400; font-size: .75rem; }
+.match-view .standings .place { width: 2.5rem; text-align: left; color: var(--muted); padding-left: 0; }
+.match-view .standings .name { text-align: left; width: 100%; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; }
+.match-view td.name { font-weight: 600; }
+.match-view .standings tr.first .place { color: var(--gold); font-weight: 700; }
+.match-view tbody tr:hover td { background: var(--panel); }
+.match-view .grid { border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+.match-view .grid th, .match-view .grid td { padding: .4rem .5rem; text-align: center; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.match-view .grid .name {
+  position: sticky; left: 0; z-index: 1; background: var(--bg); text-align: left;
+  max-width: 10rem; overflow: hidden; text-overflow: ellipsis; padding-left: 0;
+}
+.match-view .grid .r { min-width: 2rem; padding: .4rem .15rem; color: var(--muted); font-size: .85rem; }
+.match-view .grid td.r.first { color: var(--bg); font-weight: 700; }
+.match-view .grid td.r.first span { display: inline-block; min-width: 1.5rem; border-radius: 3px; background: var(--good); }
+.match-view .grid td.r.left { color: var(--faint); }
+.match-view .grid .r.unrated { color: var(--faint); background: repeating-linear-gradient(135deg, transparent 0 4px, #ffffff06 4px 8px); }
+.match-view .grid thead th.r.unrated { text-decoration: line-through; }
+.match-view .note { margin-top: .75rem; }
+.match-view .problems { margin-top: .5rem; }
+.match-view .problems ul { margin: .35rem 0 0; padding-left: 1.25rem; color: var(--muted); font-size: .8rem; }

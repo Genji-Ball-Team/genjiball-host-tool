@@ -30,6 +30,8 @@ Then follow the [hosting guide](docs/hosting.md).
 
 The [release workflow](.github/workflows/release.yml) runs the checks, builds the installer, signs it and attaches it to a GitHub release for the tag, together with `latest.json`, which the installed apps read to find the new version. It fails if the tag and `package.json` disagree, or if the signing key is missing.
 
+**A test version** for a few hosts first: give it a pre-release number (`1.1.0-beta.1`, in both files) and tag it `v1.1.0-beta.1`. The workflow publishes a tag with a hyphen as a GitHub pre-release, which only apps on the pre-release channel (Advanced → Updates) are offered. Everyone else gets the next plain version.
+
 **The updater signing key.** Updates are signed, and the app only installs one signed with our key (its public half is in `src-tauri/tauri.conf.json`). The private key and its password are the repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A backup of the private key is kept by the team outside the repo: whoever holds it can sign releases. If it's lost, installed apps can't update any more: a new key means everyone installs the next version by hand once.
 
 ## Build it

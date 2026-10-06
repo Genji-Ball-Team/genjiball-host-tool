@@ -142,7 +142,7 @@
           <button type="button" id="update-check">Check for updates</button>
           <span class="status muted" id="update-state" role="status"></span>
         </div>
-        <p class="note">The tool looks for a new version when it starts and every few hours, and installs one only when you click "Install and restart". The window closes while it installs; uploads carry on once the new version has started.</p>
+        <p class="note"><span id="update-auto-note"></span> It installs one only when you click "Install and restart". The window closes while it installs; uploads carry on once the new version has started.</p>
       </section>
 
       <section>
@@ -170,6 +170,16 @@
             <p id="release-state" role="status" hidden></p>
           </form>
           <p class="note">The release "Copy ranked code" builds on, by its tag (like <span id="release-example"></span>). Leave it empty for the latest ranked release, which suits every host unless an admin asks for another.</p>
+        </details>
+        <details id="updates">
+          <summary>Updates</summary>
+          <label class="check"><input id="update-auto" type="checkbox" /> Look for new versions by itself</label>
+          <label for="update-channel">Channel</label>
+          <div class="row">
+            <select id="update-channel"></select>
+          </div>
+          <p id="updates-state" role="status" hidden></p>
+          <p class="note">"Stable" gets each version once it's released to everyone. "Pre-release" gets test versions too, before they are: pick it only if an admin asks you to try one. With the automatic checks off, use "Check for updates" yourself now and then.</p>
         </details>
         <details id="debug">
           <summary>Debug</summary>

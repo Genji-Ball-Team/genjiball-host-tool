@@ -1,16 +1,17 @@
 //! The tool updating itself from GitHub releases (`tauri-plugin-updater`): looks for a newer
-//! signed installer at startup and every `UPDATE_CHECK_SECS`, and installs it when the host asks.
-//! The checks run here, not in the window, so they go on from the tray.
+//! signed installer at startup and every `UPDATE_CHECK_SECS` (unless the host switched that off),
+//! and installs it when the host asks. The checks run here, not in the window, so they go on from
+//! the tray. On the `prerelease` channel the newest release counts, pre-releases too.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::{config, Store};
+use crate::{config, server, Store};
 
 /// What the window shows about updates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -62,11 +63,24 @@ pub struct Updates {
     last_check: Mutex<Option<Instant>>,
     /// A check or an install is running: a second one waits for it.
     busy: AtomicBool,
+    /// Goes up each time the host picks another channel: a check under way then checks again.
+    switches: AtomicU64,
 }
 
 impl Updates {
     pub fn status(&self) -> UpdateStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// The host picked another channel: the update the other one offered is dropped, and a check
+    /// under way checks again for this one. The status, for the window.
+    pub fn switched(&self) -> UpdateStatus {
+        self.switches.fetch_add(1, Ordering::AcqRel);
+        *self.update.lock().unwrap() = None;
+        *self.last_check.lock().unwrap() = None;
+        let mut status = self.status.lock().unwrap();
+        *status = UpdateStatus::default();
+        status.clone()
     }
 
     /// Takes `busy` until the guard is dropped, or `None` if something else holds it.
@@ -84,21 +98,28 @@ impl Drop for Busy<'_> {
 }
 
 /// Looks for an update now and tells the window the result. Returns the status as it stands if a
-/// check or install is already running.
+/// check or install is already running (a running check checks again if the channel changed).
 pub async fn check(app: &AppHandle) -> UpdateStatus {
     let updates = app.state::<Updates>();
     let Some(_busy) = updates.begin() else {
         return updates.status();
     };
-    let timeout = app
-        .state::<Store>()
-        .get()
-        .secs(&config::REQUEST_TIMEOUT_SECS);
-    // The timeout wraps the check rather than going on the updater: there it would also cut the
-    // download of the installer short.
-    let found = match tokio::time::timeout(timeout, look(app)).await {
-        Ok(result) => result,
-        Err(_) => Err("the update server didn't answer in time".to_string()),
+    let found = loop {
+        let switches = updates.switches.load(Ordering::Acquire);
+        let settings = app.state::<Store>().get();
+        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let prerelease = settings.update_channel() == "prerelease";
+        // The timeout wraps the check rather than going on the updater: there it would also cut
+        // the download of the installer short.
+        let found = match tokio::time::timeout(timeout, look(app, prerelease, timeout)).await {
+            Ok(result) => result,
+            Err(_) => Err("the update server didn't answer in time".to_string()),
+        };
+        // The host picked another channel meanwhile: this answer is the other channel's.
+        if updates.switches.load(Ordering::Acquire) == switches {
+            break found;
+        }
+        log::debug!("The update channel changed during the check: checking again");
     };
     let version = found
         .as_ref()
@@ -123,9 +144,86 @@ pub async fn check(app: &AppHandle) -> UpdateStatus {
     status
 }
 
-async fn look(app: &AppHandle) -> Result<Option<Update>, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
+/// The update on offer, if any: from `tauri.conf.json`'s endpoint (the latest release), or with
+/// `prerelease` from the newest release's `config::UPDATE_MANIFEST`.
+async fn look(
+    app: &AppHandle,
+    prerelease: bool,
+    timeout: Duration,
+) -> Result<Option<Update>, String> {
+    let updater = if prerelease {
+        let manifest = newest_manifest(timeout).await?;
+        log::debug!("Pre-release channel: reading {manifest}");
+        let url = url::Url::parse(&manifest).map_err(|e| e.to_string())?;
+        app.updater_builder()
+            .endpoints(vec![url])
+            .and_then(|b| b.build())
+            .map_err(|e| e.to_string())?
+    } else {
+        app.updater().map_err(|e| e.to_string())?
+    };
     updater.check().await.map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    assets: Vec<GithubAsset>,
+}
+
+/// The `config::UPDATE_MANIFEST` of the newest published release in a
+/// `GET /repos/{repo}/releases` answer (newest first), pre-release or not.
+fn pick_manifest(status: u16, body: &str) -> Result<String, String> {
+    match status {
+        200 => {}
+        403 | 429 => {
+            return Err("GitHub is limiting requests from this PC. Try again in a while".into())
+        }
+        _ => return Err(format!("GitHub answered {status} when asked for releases")),
+    }
+    let releases: Vec<GithubRelease> = serde_json::from_str(body)
+        .map_err(|_| "GitHub's list of releases wasn't what the host tool expected")?;
+    releases
+        .into_iter()
+        .filter(|r| !r.draft)
+        .find_map(|r| {
+            r.assets
+                .into_iter()
+                .find(|a| a.name == config::UPDATE_MANIFEST)
+        })
+        .map(|a| a.browser_download_url)
+        .ok_or_else(|| "No release has an update to offer yet".to_string())
+}
+
+/// The newest release's `config::UPDATE_MANIFEST` URL, asked of GitHub.
+async fn newest_manifest(timeout: Duration) -> Result<String, String> {
+    let url = url::Url::parse_with_params(
+        &format!(
+            "{}/repos/{}/releases",
+            config::GITHUB_API_URL,
+            config::APP_REPO
+        ),
+        [("per_page", config::UPDATE_RELEASES_SEARCHED.to_string())],
+    )
+    .map_err(|e| e.to_string())?;
+    let unreachable = |e: reqwest::Error| format!("Couldn't reach GitHub: {}", e.without_url());
+    let response = server::client(timeout)?
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(unreachable)?;
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(unreachable)?;
+    pick_manifest(status, &body)
 }
 
 /// Downloads the update the last check found, checks its signature and runs the installer, which
@@ -153,13 +251,15 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     app.restart();
 }
 
-/// Checks at startup and then every `UPDATE_CHECK_SECS`, read from the settings each time.
+/// Checks at startup and then every `UPDATE_CHECK_SECS`, read from the settings each time, while
+/// the host has the automatic checks on.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            let interval = app.state::<Store>().get().secs(&config::UPDATE_CHECK_SECS);
+            let settings = app.state::<Store>().get();
+            let interval = settings.secs(&config::UPDATE_CHECK_SECS);
             let last = *app.state::<Updates>().last_check.lock().unwrap();
-            if due(last, Instant::now(), interval) {
+            if settings.auto_update_check_on() && due(last, Instant::now(), interval) {
                 check(&app).await;
             }
             tokio::time::sleep(Duration::from_secs(config::UPDATE_TICK_SECS)).await;
@@ -226,6 +326,29 @@ mod tests {
     }
 
     #[test]
+    fn the_prerelease_channel_reads_the_newest_release_with_a_manifest() {
+        let body = serde_json::json!([
+            { "draft": true, "assets": [{ "name": "latest.json", "browser_download_url": "https://x/draft/latest.json" }] },
+            // Still being built: no manifest yet.
+            { "assets": [] },
+            { "prerelease": true, "assets": [
+                { "name": "genjiball-host-tool_1.1.0-beta.1_x64-setup.exe", "browser_download_url": "https://x/setup.exe" },
+                { "name": "latest.json", "browser_download_url": "https://x/v1.1.0-beta.1/latest.json" }
+            ] },
+            { "assets": [{ "name": "latest.json", "browser_download_url": "https://x/v1.0.0/latest.json" }] }
+        ])
+        .to_string();
+        assert_eq!(
+            pick_manifest(200, &body),
+            Ok("https://x/v1.1.0-beta.1/latest.json".into())
+        );
+        assert!(pick_manifest(200, "[]").is_err());
+        assert!(pick_manifest(403, "")
+            .unwrap_err()
+            .contains("limiting requests"));
+    }
+
+    #[test]
     fn only_one_check_or_install_runs_at_a_time() {
         let updates = Updates::default();
         let first = updates.begin();
@@ -233,5 +356,18 @@ mod tests {
         assert!(updates.begin().is_none());
         drop(first);
         assert!(updates.begin().is_some());
+    }
+
+    #[test]
+    fn another_channel_drops_the_update_the_old_one_offered() {
+        let updates = Updates::default();
+        *updates.status.lock().unwrap() = status(Some("1.1.0-beta.1"));
+        *updates.last_check.lock().unwrap() = Some(Instant::now());
+        let after = updates.switched();
+        assert_eq!(after, UpdateStatus::default());
+        assert_eq!(updates.status(), UpdateStatus::default());
+        // The loop checks the new channel at its next tick.
+        assert_eq!(*updates.last_check.lock().unwrap(), None);
+        assert_eq!(updates.switches.load(Ordering::Acquire), 1);
     }
 }

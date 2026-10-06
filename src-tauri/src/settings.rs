@@ -36,6 +36,11 @@ pub struct Settings {
     /// Whether uploads are a dry run: picked as usual, but not sent. `None`:
     /// `config::DRY_RUN_BY_DEFAULT`.
     pub dry_run: Option<bool>,
+    /// Whether the tool looks for updates by itself. `None`: `config::AUTO_UPDATE_CHECK_BY_DEFAULT`.
+    pub auto_update_check: Option<bool>,
+    /// Where updates come from, one of `config::UPDATE_CHANNELS`. `None`:
+    /// `config::DEFAULT_UPDATE_CHANNEL`.
+    pub update_channel: Option<String>,
     /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -67,6 +72,24 @@ impl Settings {
     /// Switches the dry run on or off. At the default it's stored as `None`.
     pub fn set_dry_run(&mut self, on: bool) {
         self.dry_run = (on != config::DRY_RUN_BY_DEFAULT).then_some(on);
+    }
+
+    /// Whether the tool looks for updates by itself.
+    pub fn auto_update_check_on(&self) -> bool {
+        self.auto_update_check
+            .unwrap_or(config::AUTO_UPDATE_CHECK_BY_DEFAULT)
+    }
+
+    /// Switches the automatic update checks on or off. At the default it's stored as `None`.
+    pub fn set_auto_update_check(&mut self, on: bool) {
+        self.auto_update_check = (on != config::AUTO_UPDATE_CHECK_BY_DEFAULT).then_some(on);
+    }
+
+    /// The update channel the host picked, or the default.
+    pub fn update_channel(&self) -> &str {
+        self.update_channel
+            .as_deref()
+            .unwrap_or(config::DEFAULT_UPDATE_CHANNEL)
     }
 
     /// The host's value for `tunable`, or its default.
@@ -162,6 +185,18 @@ pub fn normalize_log_level(level: Option<&str>) -> Result<Option<String>, String
     }
 }
 
+/// An update channel the host picked, as it's stored: `None` for the default (or nothing picked).
+pub fn normalize_update_channel(channel: Option<&str>) -> Result<Option<String>, String> {
+    match channel {
+        None => Ok(None),
+        Some(channel) if channel == config::DEFAULT_UPDATE_CHANNEL => Ok(None),
+        Some(channel) if config::UPDATE_CHANNELS.contains(&channel) => {
+            Ok(Some(channel.to_string()))
+        }
+        Some(channel) => Err(format!("There's no update channel {channel}")),
+    }
+}
+
 /// The GenjiBall-CE release tag the host typed, as it's stored: `None` (empty) for the latest
 /// ranked release. A ranked tag ends in `config::RELEASE_TAG_SUFFIX`; only letters, digits, `.`,
 /// `-` and `_`, so it goes in a GitHub URL as it is.
@@ -210,6 +245,8 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     }
     // Edited by hand, like the region: stored as the window would have.
     settings.log_level = normalize_log_level(settings.log_level.as_deref())
+        .map_err(|e| format!("{e} in {}", path.display()))?;
+    settings.update_channel = normalize_update_channel(settings.update_channel.as_deref())
         .map_err(|e| format!("{e} in {}", path.display()))?;
     if let Some(tag) = &settings.release_tag {
         settings.release_tag =
@@ -325,6 +362,8 @@ mod tests {
             log_level: Some("debug".into()),
             release_tag: Some("1.3.3R".into()),
             dry_run: Some(true),
+            auto_update_check: Some(false),
+            update_channel: Some("prerelease".into()),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
@@ -552,6 +591,30 @@ mod tests {
         assert_eq!(load(&path).unwrap().log_level, None);
         fs::write(&path, r#"{ "logLevel": "loud" }"#).unwrap();
         assert!(load(&path).unwrap_err().contains("log level"));
+    }
+
+    #[test]
+    fn update_channels_are_stored_as_null_at_the_default() {
+        assert_eq!(normalize_update_channel(Some("stable")), Ok(None));
+        assert_eq!(
+            normalize_update_channel(Some("prerelease")),
+            Ok(Some("prerelease".into()))
+        );
+        assert!(normalize_update_channel(Some("nightly")).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{ "updateChannel": "nightly" }"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("update channel"));
+    }
+
+    #[test]
+    fn update_checks_are_on_until_switched_off() {
+        let mut settings = Settings::default();
+        assert!(settings.auto_update_check_on());
+        settings.set_auto_update_check(false);
+        assert_eq!(settings.auto_update_check, Some(false));
+        settings.set_auto_update_check(true);
+        assert_eq!(settings.auto_update_check, None);
     }
 
     #[test]

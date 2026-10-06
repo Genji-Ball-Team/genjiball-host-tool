@@ -31,6 +31,11 @@ interface AppState {
   releaseTagSuffix: string;
   /** Whether uploads are a dry run: picked as usual, but not sent. */
   dryRun: boolean;
+  /** Whether the tool looks for updates by itself, and the channel it reads. */
+  autoUpdateCheck: boolean;
+  updateChannel: string;
+  updateChannels: string[];
+  defaultUpdateChannel: string;
 }
 
 /** Mirrors `Region` in src-tauri/src/config.rs. */
@@ -308,7 +313,31 @@ function render(): void {
   renderRegion();
   renderLobbySettings();
   renderAdvanced();
+  renderUpdateSettings();
   renderDebug();
+}
+
+const updateChannelLabels: Record<string, string> = { stable: "Stable", prerelease: "Pre-release" };
+
+/** The update checks' switch and channel, under Advanced. */
+function renderUpdateSettings(): void {
+  el<HTMLInputElement>("update-auto").checked = state.autoUpdateCheck;
+  const select = el<HTMLSelectElement>("update-channel");
+  if (select.options.length !== state.updateChannels.length) {
+    select.replaceChildren(
+      ...state.updateChannels.map((channel) => {
+        const option = document.createElement("option");
+        option.value = channel;
+        option.textContent = updateChannelLabels[channel] ?? channel;
+        return option;
+      }),
+    );
+  }
+  select.value = state.updateChannel;
+  el("update-auto-note").textContent = state.autoUpdateCheck
+    ? "The tool looks for a new version when it starts and every few hours."
+    : "The tool doesn't look for new versions by itself (Advanced → Updates).";
+  if (!state.autoUpdateCheck || state.updateChannel !== state.defaultUpdateChannel) el<HTMLDetailsElement>("updates").open = true;
 }
 
 /** The ranked code release and the log level, under Advanced. */
@@ -956,6 +985,24 @@ function watchDebugPanel(open: boolean): void {
 }
 
 el("debug-panel").addEventListener("toggle", () => watchDebugPanel(el<HTMLDetailsElement>("debug-panel").open));
+function saveUpdateSettings(): void {
+  void busy(
+    async () => {
+      setLine("updates-state", "", "muted");
+      const autoCheck = el<HTMLInputElement>("update-auto").checked;
+      const channel = el<HTMLSelectElement>("update-channel").value;
+      await show(await invoke<AppState>("set_updates", { autoCheck, channel }));
+      setLine("updates-state", "Saved.", "good");
+    },
+    (m) => {
+      setLine("updates-state", m, "bad");
+      renderUpdateSettings();
+    },
+  );
+}
+
+el("update-auto").addEventListener("change", saveUpdateSettings);
+el("update-channel").addEventListener("change", saveUpdateSettings);
 
 el("log-open").addEventListener("click", () => void busy(() => invoke<void>("open_log_folder"), (m) => setLine("debug-state", m, "bad")));
 

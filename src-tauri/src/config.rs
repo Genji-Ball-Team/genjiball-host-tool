@@ -229,6 +229,26 @@ pub const UPDATE_CHECK_SECS: Tunable = Tunable {
     max: 7 * 24 * 3600,
 };
 
+/// Whether the tool looks for updates by itself (at startup and every `UPDATE_CHECK_SECS`), for a
+/// host who hasn't switched it (`Settings::auto_update_check`). "Check for updates" works either way.
+pub const AUTO_UPDATE_CHECK_BY_DEFAULT: bool = true;
+
+/// The update channels the host picks from under Advanced → Updates. `stable` reads the updater
+/// endpoint in `tauri.conf.json` (`latest.json` on the latest release, which is never a
+/// pre-release); `prerelease` the `UPDATE_MANIFEST` of the newest release, pre-releases too.
+pub const UPDATE_CHANNELS: [&str; 2] = ["stable", "prerelease"];
+pub const DEFAULT_UPDATE_CHANNEL: &str = "stable";
+
+/// The repo the tool's own releases are published in, by the release workflow.
+pub const APP_REPO: &str = "Genji-Ball-Team/genjiball-host-tool";
+
+/// The release asset the updater reads: the version, its installer and the installer's signature.
+pub const UPDATE_MANIFEST: &str = "latest.json";
+
+/// How many of the newest releases the `prerelease` channel searches for one with an
+/// `UPDATE_MANIFEST` (a release still being built has none yet).
+pub const UPDATE_RELEASES_SEARCHED: u32 = 10;
+
 /// How often the update loop looks at the clock to see whether a check is due, so a changed
 /// `UPDATE_CHECK_SECS` counts within this long.
 pub const UPDATE_TICK_SECS: u64 = 60;
@@ -304,6 +324,7 @@ mod tests {
             );
         }
         assert!(LOG_LEVELS.contains(&DEFAULT_LOG_LEVEL));
+        assert!(UPDATE_CHANNELS.contains(&DEFAULT_UPDATE_CHANNEL));
         for (i, r) in REGIONS.iter().enumerate() {
             assert!(
                 REGIONS[..i].iter().all(|other| other.id != r.id),

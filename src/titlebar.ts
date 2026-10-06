@@ -21,10 +21,11 @@ function el<T extends Element = HTMLElement>(id: string): T {
 }
 
 /** The connection state next to the title: what Home's status card says, in a word or two. */
-export function setTitlebarState(text: string, tone: "good" | "warn" | "bad"): void {
+export function setTitlebarState(text: string, tone: "good" | "warn" | "bad", playing = false): void {
   const state = el("titlebar-state");
   state.hidden = !text;
   state.dataset.tone = tone;
+  state.classList.toggle("playing", playing);
   el("titlebar-state-text").textContent = text;
 }
 

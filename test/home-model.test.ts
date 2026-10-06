@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, headline, problems, type HomeInput } from "../src/home-model";
+import { ago, headline, matchInProgress, problems, type HomeInput } from "../src/home-model";
 
 const fine: HomeInput = {
   hasToken: true,
@@ -53,5 +53,21 @@ describe("ago", () => {
     expect(ago("2026-10-06T11:59:48Z", now)).toBe("12 s ago");
     expect(ago("2026-10-06T11:57:00Z", now)).toBe("3 min ago");
     expect(ago("2026-10-06T09:00:00Z", now)).toBe("3 h ago");
+  });
+});
+
+describe("matchInProgress", () => {
+  const now = Date.parse("2026-10-06T12:00:00Z");
+
+  it("takes the live lobby's word while it's on", () => {
+    expect(matchInProgress("playing", null, 60, now)).toBe(true);
+    // An unranked match grows the log too, but isn't one.
+    expect(matchInProgress("unranked", "2026-10-06T11:59:58Z", 60, now)).toBe(false);
+  });
+
+  it("else goes by the live log growing within the quiet time", () => {
+    expect(matchInProgress(null, "2026-10-06T11:59:30Z", 60, now)).toBe(true);
+    expect(matchInProgress(null, "2026-10-06T11:58:00Z", 60, now)).toBe(false);
+    expect(matchInProgress(null, null, 60, now)).toBe(false);
   });
 });

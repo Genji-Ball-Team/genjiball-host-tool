@@ -100,3 +100,13 @@ export function ago(iso: string, now: number): string {
   if (hours < 24) return `${hours} h ago`;
   return new Date(iso).toLocaleDateString();
 }
+
+/**
+ * Whether a ranked match is being played now. The live lobby knows (it reads the live log), but
+ * only while it's on (`lobby`: what it saw, `null` while off); else the live log having grown
+ * within the quiet time says so.
+ */
+export function matchInProgress(lobby: "idle" | "unranked" | "playing" | null, writtenAt: string | null, quietSecs: number, now: number): boolean {
+  if (lobby !== null) return lobby === "playing";
+  return writtenAt !== null && now - new Date(writtenAt).getTime() < quietSecs * 1000;
+}

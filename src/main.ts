@@ -6,7 +6,7 @@ import { setupDesktop } from "./desktop";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import type { Fix } from "./home-model";
-import { homeFolderChanged, renderHome, setupHome } from "./home-view";
+import { flash, homeFolderChanged, renderHome, setupHome } from "./home-view";
 import { renderTourneys, screenshotsDue, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
 import { setupTitlebar } from "./titlebar";
 import { toast } from "./toast";
@@ -543,6 +543,7 @@ let afkOn = false;
 function renderAfk(afk: AfkStatus): void {
   afkOn = afk.on;
   el("afk").classList.toggle("on", afk.on);
+  document.body.classList.toggle("afk", afk.on);
   el("afk-tag").hidden = !afk.on;
   el("afk-toggle").setAttribute("aria-checked", String(afk.on));
   const line = el("afk-state");
@@ -729,6 +730,12 @@ let historyRequest = 0;
 /** `UploadStatus.historyRevision` last seen. */
 let historyRevision = -1;
 
+/** The newest page's uploads at its last drawing, by file and time: a new one is lit up. */
+let seenUploads: { server: string; keys: Set<string> } | null = null;
+/** When each new upload came in, while it's lit up (the `.fresh` animation's length). */
+const freshSince = new Map<string, number>();
+const FRESH_MS = 2000;
+
 function renderHistory(page: HistoryPage): void {
   // Past the end gives the last page: stay there.
   historyPage = page.page;
@@ -738,7 +745,23 @@ function renderHistory(page: HistoryPage): void {
     shown.watch.stop();
     shownMatches.delete(file);
   }
-  el("uploads").replaceChildren(...page.entries.map(historyItem));
+  const items = page.entries.map(historyItem);
+  el("uploads").replaceChildren(...items);
+  // New since the last newest page of this server: lit up once, and still while it's drawn again.
+  const keys = page.entries.map((e) => `${e.file}|${e.at ?? ""}`);
+  if (page.page === 0) {
+    const now = Date.now();
+    if (seenUploads?.server === state.serverUrl) {
+      for (const key of keys) if (!seenUploads.keys.has(key)) freshSince.set(key, now);
+    } else freshSince.clear();
+    seenUploads = { server: state.serverUrl, keys: new Set(keys) };
+    items.forEach((item, i) => {
+      const since = freshSince.get(keys[i] ?? "");
+      if (since === undefined) return;
+      if (now - since > FRESH_MS) freshSince.delete(keys[i] ?? "");
+      else flash(item, now - since);
+    });
+  }
   const first = page.page * page.pageSize;
   el("uploads-pager").hidden = page.total <= page.pageSize;
   el("uploads-newer").hidden = page.page === 0;
@@ -792,9 +815,20 @@ function players(n: number): string {
   return n === 1 ? "1 player" : `${n} players`;
 }
 
+/** The live lobby's last status for the settings shown, `null` before one. */
+let lobbyStatus: LobbyStatus | null = null;
+
+/** The quiet time in use (Settings → Advanced → Timing), in seconds. */
+function quietSecs(): number {
+  const quiet = state.advanced.find((t) => t.key === "quietSecs");
+  return quiet ? (quiet.value ?? quiet.default) : 0;
+}
+
 function renderLobby(status: LobbyStatus): void {
   // A poll that began before the host changed the server: not about what's shown.
   if (status.serverUrl !== state.serverUrl) return;
+  lobbyStatus = status;
+  renderHome();
   const line = el("lobby-state");
   const listed = status.listed;
   let text: string;
@@ -1134,6 +1168,19 @@ function takeUncopied(): { built: RankedCode; at: number } | null {
   return Date.now() - kept.at < kept.built.keepSecs * 1000 ? kept : null;
 }
 
+/** How long "Copy ranked code" says "Copied" after a copy, in milliseconds. */
+const COPIED_MS = 1600;
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** The ranked code button's look: at rest, building (a sweep runs across it), or just copied. */
+function setCodeButton(mode: "idle" | "building" | "copied"): void {
+  clearTimeout(copiedTimer);
+  const copy = el("ranked-code-copy");
+  copy.dataset.mode = mode;
+  copy.textContent = mode === "building" ? "Building the code…" : mode === "copied" ? "Copied ✓" : "Copy ranked code";
+  if (mode === "copied") copiedTimer = setTimeout(() => setCodeButton("idle"), COPIED_MS);
+}
+
 async function copyRankedCode(): Promise<void> {
   const build = ++rankedBuild;
   const kept = takeUncopied();
@@ -1143,7 +1190,8 @@ async function copyRankedCode(): Promise<void> {
     built = kept.built;
     builtAt = kept.at;
   } else {
-    setRankedCodeState("Building the code…", "muted");
+    setRankedCodeState("", "muted");
+    setCodeButton("building");
     built = await invoke<RankedCode>("build_ranked_code");
     builtAt = Date.now();
     // A newer click, or a server change, while this one ran: its tags may be from the wrong server.
@@ -1169,6 +1217,7 @@ async function copyRankedCode(): Promise<void> {
   const tiers = built.names === 1 ? "1 more with their rank" : `${built.names} more with their rank`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
   setRankedCodeState("", "muted");
+  setCodeButton("copied");
   toast("Ranked code copied", `Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`);
 }
 
@@ -1177,6 +1226,9 @@ el("ranked-code-copy").addEventListener("click", () =>
     setRankedCodeState(m, "bad");
     // Copied with Ctrl+Shift+C from another view: the line on Home isn't in sight.
     if (currentView() !== "home") toast("Couldn't copy the ranked code", m);
+  }).then(() => {
+    // Failed, or a newer click took over: back at rest.
+    if (el("ranked-code-copy").dataset.mode === "building") setCodeButton("idle");
   }),
 );
 
@@ -1270,6 +1322,8 @@ function homeState() {
     region: !region ? "None yet" : state.region ? regionLabel(region) : `${regionLabel(region)} (home region)`,
     lastUpload,
     pollSecs: state.matchViewPollSecs,
+    lobbyLive: lobbyStatus?.on ? lobbyStatus.live.kind : null,
+    quietSecs: quietSecs(),
   };
 }
 

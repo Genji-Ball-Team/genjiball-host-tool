@@ -1,19 +1,24 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
-import { VIEWS, markView, onViewChange, savedView, setupViews, showView } from "../src/views";
+import { PANES, VIEWS, markView, onViewChange, savedPane, savedView, setupViews, showPane, showView } from "../src/views";
 
 describe("savedView", () => {
   it("opens the view kept from last time, else Home", () => {
     expect(savedView("uploads")).toBe("uploads");
     expect(savedView(null)).toBe("home");
     expect(savedView("an old view")).toBe("home");
+    expect(savedPane("advanced")).toBe("advanced");
+    expect(savedPane(null)).toBe("account");
   });
 });
 
 describe("the sidebar", () => {
   beforeEach(() => {
     localStorage.clear();
-    document.body.innerHTML = VIEWS.map((v) => `<button id="nav-${v}" title="${v}"><i id="nav-${v}-dot" hidden></i></button><section id="view-${v}"></section>`).join("");
+    document.body.innerHTML = [
+      ...VIEWS.map((v) => `<button id="nav-${v}" title="${v}"><i id="nav-${v}-dot" hidden></i></button><section id="view-${v}"></section>`),
+      ...PANES.map((p) => `<button id="pane-${p}-tab"></button><div id="pane-${p}"></div>`),
+    ].join("");
   });
 
   it("shows one view, marks its button and keeps it for the next start", () => {
@@ -35,6 +40,19 @@ describe("the sidebar", () => {
     // Showing the view already shown changes nothing.
     showView("match");
     expect(seen).toEqual(["settings", "match"]);
+  });
+
+  it("opens a Settings pane, in the Settings view", () => {
+    setupViews();
+    showPane("game");
+    expect(document.getElementById("view-settings")?.hidden).toBe(false);
+    expect(document.getElementById("pane-game")?.hidden).toBe(false);
+    expect(document.getElementById("pane-account")?.hidden).toBe(true);
+    expect(localStorage.getItem("settingsPane")).toBe("game");
+
+    document.getElementById("pane-lobby-tab")?.click();
+    expect(document.getElementById("pane-lobby")?.hidden).toBe(false);
+    expect(document.getElementById("pane-game")?.hidden).toBe(true);
   });
 
   it("says when a view needs the host, in its dot and its name", () => {

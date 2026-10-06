@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { watchLog, type LogWatch } from "./match-view";
 
 /**
- * The debug panel (Advanced → Debug panel): the files waiting to upload, the latest uploads and dry
+ * The debug panel (Settings → Advanced → Debug panel): the files waiting to upload, the latest uploads and dry
  * runs with what was sent and what the server answered, and the newest log's last events. Read
  * again while the panel is open. Log lines and answers are untrusted: they go in with `textContent`.
  */

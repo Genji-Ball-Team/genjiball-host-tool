@@ -356,6 +356,12 @@ fn read_live_log(
     match_log::read_live(&current_log_folder(&store)?, known.as_ref())
 }
 
+/// The live log's name and when it last grew, for Home; `None` while there's none.
+#[tauri::command]
+fn get_live_file(store: State<Store>) -> Result<Option<match_log::LiveFile>, String> {
+    match_log::live_file(&current_log_folder(&store)?)
+}
+
 /// Tries a failed upload again now, through the upload queue.
 #[tauri::command]
 fn retry_upload(file: String, uploader: State<Uploader>) {
@@ -1164,6 +1170,7 @@ pub fn run() {
             open_match,
             read_match_log,
             read_live_log,
+            get_live_file,
             get_tourneys,
             check_tourneys,
             build_tourney_code,

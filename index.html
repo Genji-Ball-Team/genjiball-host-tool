@@ -17,7 +17,7 @@
         <div class="nav">
           <button type="button" id="nav-home" data-view="home" aria-controls="view-home" aria-label="Home" title="Home">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 9.5 10 4l7 5.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-5V17H4a1 1 0 0 1-1-1Z" /></svg>
-            <span>Home</span>
+            <span>Home</span><i class="dot" id="nav-home-dot" hidden></i>
           </button>
           <button type="button" id="nav-match" data-view="match" aria-controls="view-match" aria-label="Match" title="Match">
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" /><path d="M10 6.5V10l2.5 1.5" /></svg>
@@ -45,7 +45,6 @@
       <main>
         <div class="banners">
           <p class="banner bad" id="settings-error" hidden></p>
-          <p class="banner" id="dry-run-banner" hidden>Dry run is on: nothing is uploaded. Turn it off under Settings → Advanced → Debug.</p>
           <div class="banner update" id="update-banner" hidden>
             <span id="update-banner-text"></span>
             <button type="button" id="update-install">Install and restart</button>
@@ -53,30 +52,83 @@
         </div>
 
         <section class="view" id="view-home">
-          <header class="view-head"><h1>Home</h1></header>
           <div class="view-body">
-            <div class="group" id="afk">
-              <h2>AFK</h2>
-              <div class="row">
-                <button type="button" class="quiet" id="afk-toggle" aria-pressed="false" aria-describedby="afk-note">Go AFK</button>
-                <span class="status" id="afk-state" role="status"></span>
-              </div>
-              <p class="note" id="afk-note">Your rating doesn't change in rounds that start while AFK is on. Other players still count. AFK stays on across matches until you turn it off.</p>
-              <p class="note bad" id="afk-error" hidden></p>
+            <div id="setup" hidden>
+              <h1>Set up the host tool</h1>
+              <p class="lede">Three things, then it uploads your ranked matches by itself.</p>
+              <ol class="steps">
+                <li id="setup-token">
+                  <div><b>Host token</b><span class="muted">From an admin. Kept on this PC, encrypted.</span></div>
+                  <button type="button" id="setup-token-add">Add token</button>
+                </li>
+                <li id="setup-folder">
+                  <div><b>Workshop log folder</b><span class="muted" id="setup-folder-state"></span></div>
+                  <button type="button" class="quiet" id="setup-folder-choose">Choose folder</button>
+                </li>
+                <li id="setup-logs">
+                  <div><b>Log files on in the game</b><span class="muted">Overwatch options → Gameplay → General → Enable Workshop Inspector Log File.</span></div>
+                </li>
+              </ol>
             </div>
 
-            <div class="group">
-              <h2>Ranked code</h2>
-              <div class="row">
-                <button type="button" id="ranked-code-copy">Copy ranked code</button>
+            <div id="home">
+              <div class="status-card" id="home-status" data-tone="good">
+                <p class="status-line"><span class="status-dot" aria-hidden="true"></span><b id="home-headline"></b></p>
+                <p class="muted" id="home-detail"></p>
+                <dl class="facts">
+                  <dt>Host</dt>
+                  <dd><span id="home-host"></span> <span class="tag" id="home-host-trust" hidden>Untrusted</span> <span class="status" id="home-token"></span></dd>
+                  <dt>Region</dt>
+                  <dd><span id="home-region"></span> <button type="button" class="link" id="home-region-change">Change</button></dd>
+                  <dt>Workshop log</dt>
+                  <dd id="home-log"></dd>
+                </dl>
               </div>
-              <p id="ranked-code-state" role="status" hidden></p>
-              <p class="note">The latest ranked release of Genji Ball (or the one picked under Advanced), with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
-            </div>
 
-            <div class="group" id="lobby">
-              <h2>Live lobby</h2>
-              <p id="lobby-state" role="status"></p>
+              <ul class="problems" id="home-problems"></ul>
+
+              <div class="home-code">
+                <button type="button" class="big" id="ranked-code-copy">Copy ranked code</button>
+                <div>
+                  <p id="ranked-code-state" role="status" hidden></p>
+                  <details class="hint">
+                    <summary>Paste it into the Workshop's import. <span class="more">More</span></summary>
+                    <p>The latest ranked release of Genji Ball (or the one picked under Settings → Advanced), with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. The tags are as new as the code: get a new one when the leaderboard changes.</p>
+                  </details>
+                </div>
+              </div>
+
+              <div class="switches">
+                <div class="switch-card" id="afk">
+                  <div class="switch-head">
+                    <h2>AFK</h2>
+                    <button type="button" class="switch" id="afk-toggle" role="switch" aria-checked="false" aria-describedby="afk-note"><span class="visually-hidden">AFK</span></button>
+                  </div>
+                  <p class="status" id="afk-state" role="status"></p>
+                  <details class="hint" id="afk-note">
+                    <summary>Rounds that start while you're AFK aren't rated for you. <span class="more">More</span></summary>
+                    <p>Other players still count. AFK stays on across matches until you turn it off.</p>
+                  </details>
+                  <p class="note bad" id="afk-error" hidden></p>
+                </div>
+
+                <div class="switch-card" id="lobby">
+                  <div class="switch-head">
+                    <h2><label for="lobby-on">Live lobby</label></h2>
+                    <input type="checkbox" class="switch" id="lobby-on" role="switch" />
+                  </div>
+                  <p id="lobby-state" role="status"></p>
+                  <p id="lobby-error" role="status" hidden></p>
+                </div>
+              </div>
+
+              <div class="last-upload">
+                <div class="head-row">
+                  <h2>Last upload</h2>
+                  <button type="button" class="link" id="home-uploads">All uploads</button>
+                </div>
+                <p id="home-last"></p>
+              </div>
             </div>
           </div>
         </section>
@@ -221,10 +273,8 @@
 
             <div class="pane" id="pane-lobby" hidden>
               <div class="group">
-                <h2>Live lobby</h2>
+                <h2><label for="lobby-name">Lobby name</label></h2>
                 <form id="lobby-form">
-                  <label class="check"><input id="lobby-on" type="checkbox" /> List my lobby on the site while I host a ranked match</label>
-                  <label for="lobby-name">Lobby name (optional)</label>
                   <div class="row">
                     <input id="lobby-name" type="text" autocomplete="off" placeholder="Shown on the site next to your host name" />
                     <button type="submit">Save</button>
@@ -232,7 +282,7 @@
                   <p id="lobby-form-state" role="status" hidden></p>
                 </form>
                 <details class="hint">
-                  <summary>Listed only while a ranked match is played. <span class="more">More</span></summary>
+                  <summary>Optional. The live lobby is switched on and off on Home. <span class="more">More</span></summary>
                   <p>While a ranked match is played in your newest Workshop log, the site lists your lobby in your region with how many players are in it. It's taken off when the match ends, the log stops growing (the game closed) or you quit the tool.</p>
                 </details>
               </div>

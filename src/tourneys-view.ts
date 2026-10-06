@@ -129,6 +129,11 @@ function describeProblem(problem: TourneyProblem): string {
   }
 }
 
+/** How many lobbies wait for the host's verify screenshot. */
+export function screenshotsDue(): number {
+  return status?.lobbies.filter((l) => l.needsScreenshot).length ?? 0;
+}
+
 /** The lobby's name for the upload history, by its key: `null` when the tool doesn't know it. */
 export function tourneyLabel(lobbyKey: string): string | null {
   const lobby = status?.lobbies.find((l) => l.lobbyKey === lobbyKey);

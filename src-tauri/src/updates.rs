@@ -104,6 +104,11 @@ pub async fn check(app: &AppHandle) -> UpdateStatus {
         .as_ref()
         .map(|update| update.as_ref().map(|u| u.version.clone()))
         .map_err(Clone::clone);
+    match &version {
+        Ok(Some(v)) => log::info!("Update check: version {v} is available"),
+        Ok(None) => log::info!("Update check: up to date"),
+        Err(e) => log::warn!("Update check failed: {e}"),
+    }
     let now = chrono::Local::now().to_rfc3339();
     let status = {
         let mut status = updates.status.lock().unwrap();
@@ -136,10 +141,14 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     let _busy = updates
         .begin()
         .ok_or("An update check or install is already running")?;
+    log::info!("Installing version {}", update.version);
     update
         .download_and_install(|_, _| {}, || {})
         .await
-        .map_err(|e| format!("Couldn't install the update: {e}"))?;
+        .map_err(|e| {
+            log::error!("Couldn't install version {}: {e}", update.version);
+            format!("Couldn't install the update: {e}")
+        })?;
     // Windows' installer ends the tool; elsewhere the new version needs a start.
     app.restart();
 }

@@ -266,6 +266,7 @@ pub fn start(app: AppHandle) {
             let uploader = app.state::<Uploader>();
             let changed = {
                 let mut current = uploader.status.lock().unwrap();
+                log_problem(current.problem.as_ref(), status.problem.as_ref());
                 let changed = *current != status;
                 *current = status.clone();
                 changed
@@ -432,6 +433,10 @@ impl Run {
             }
         };
         status.waiting = poll.waiting;
+        if !poll.due.is_empty() {
+            let names: Vec<_> = poll.due.iter().map(|d| d.name.as_str()).collect();
+            log::info!("Logs to upload: {}", names.join(", "));
+        }
         // Before any upload: a file that grew with a round started while AFK sends it.
         uploader.note_afk(self.tracker.live_rounds());
 
@@ -540,10 +545,13 @@ impl Run {
         }
         self.refreshed = Some((server_url.to_string(), token.to_string(), Instant::now()));
 
-        match server::check_token(server_url, token, timeout).await {
+        let check = server::check_token(server_url, token, timeout).await;
+        log::debug!("Token check for {server_url}: {}", check.summary());
+        match check {
             TokenCheck::Ok { host } => self.host = Some(host),
             check @ (TokenCheck::Unknown | TokenCheck::Revoked) => {
                 let revoked = check == TokenCheck::Revoked;
+                log::warn!("{server_url} turned the token down: {}", check.summary());
                 self.host = None;
                 self.rejected = Some((server_url.to_string(), token.to_string(), revoked));
                 return Err(Problem::TokenRejected { revoked });
@@ -563,7 +571,7 @@ impl Run {
                     let mut record = uploader.record.lock().unwrap();
                     record.update_states(server_url, &states);
                 }
-                Err(message) => eprintln!("Couldn't refresh the match status: {message}"),
+                Err(message) => log::warn!("Couldn't refresh the match status: {message}"),
             }
         }
         // A save that fails is tried again at the next poll, before any upload.
@@ -619,6 +627,7 @@ impl Run {
             }
             Err(e) => {
                 let message = format!("Couldn't read {}: {e}", due.name);
+                log::warn!("{message}. Trying again later");
                 self.tracker
                     .failed(&due.name, Instant::now(), None, message.clone());
                 self.retrying = Some(message);
@@ -649,6 +658,11 @@ impl Run {
                 region,
                 host_afk: host_afk.as_deref(),
             };
+            log::info!(
+                "Uploading {} ({size} bytes) to {server_url} as {}",
+                due.name,
+                region.unwrap_or("the home region")
+            );
             let sent = server::upload(server_url, token, info, bytes, timeout);
             match sent.await {
                 UploadOutcome::Stored(answer) => {
@@ -661,15 +675,28 @@ impl Run {
                 }
                 UploadOutcome::Refused { error, message } => Answer::Refused { error, message },
                 UploadOutcome::NoRegion => {
+                    log::warn!("{server_url} won't take {}: no region", due.name);
                     // Not recorded: the file goes once there's a region.
                     self.no_region = Some((server_url.to_string(), token.to_string()));
                     return Err(Problem::NoRegion);
                 }
                 UploadOutcome::TokenRejected { revoked } => {
+                    log::warn!(
+                        "{server_url} turned the token down uploading {} (revoked: {revoked})",
+                        due.name
+                    );
                     self.rejected = Some((server_url.to_string(), token.to_string(), revoked));
                     return Err(Problem::TokenRejected { revoked });
                 }
                 UploadOutcome::Retry { message, after } => {
+                    log::warn!(
+                        "Upload of {} failed, trying again {}: {message}",
+                        due.name,
+                        match after {
+                            Some(wait) => format!("in {}s, as the server asked", wait.as_secs()),
+                            None => "after a backoff".into(),
+                        }
+                    );
                     self.tracker
                         .failed(&due.name, Instant::now(), after, message.clone());
                     self.retrying = Some(message);
@@ -680,6 +707,10 @@ impl Run {
                     let now = Instant::now();
                     let timing = self.tracker.timing;
                     let wait = after.unwrap_or_else(|| timing.backoff(1));
+                    log::warn!(
+                        "{server_url} asked to slow down: no uploads for {}s ({message})",
+                        wait.as_secs()
+                    );
                     self.held = Some((server_url.to_string(), timing.later(now, wait)));
                     self.tracker
                         .failed(&due.name, now, Some(wait), message.clone());
@@ -688,6 +719,7 @@ impl Run {
                 }
             }
         };
+        log::info!("{}: {}", due.name, describe(&answer));
         self.tracker.sent(&due.name);
         self.retrying = None;
         uploader.record.lock().unwrap().put(
@@ -705,6 +737,44 @@ impl Run {
             .save()
             .map(|()| true)
             .map_err(|message| Problem::Local { message })
+    }
+}
+
+/// Logs uploads stopping, starting again or stopping for another reason.
+fn log_problem(before: Option<&Problem>, now: Option<&Problem>) {
+    if before == now {
+        return;
+    }
+    match now {
+        Some(problem) => log::warn!("Uploads wait: {problem:?}"),
+        None => log::info!("Uploads go on"),
+    }
+}
+
+/// The server's answer to an upload, for the log: its result and each match's status.
+fn describe(answer: &Answer) -> String {
+    match answer {
+        Answer::Answered(answer) => {
+            let matches: Vec<_> = answer
+                .matches
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{} {} {}",
+                        m.match_key.as_deref().unwrap_or("?"),
+                        m.action,
+                        m.status
+                    )
+                })
+                .collect();
+            format!(
+                "{} as {}, matches: [{}]",
+                answer.result,
+                answer.region.as_deref().unwrap_or("?"),
+                matches.join(", ")
+            )
+        }
+        Answer::Refused { error, message } => format!("refused, {error}: {message}"),
     }
 }
 

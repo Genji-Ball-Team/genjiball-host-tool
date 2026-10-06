@@ -41,6 +41,21 @@ impl TokenCheck {
     pub fn is_rejected(&self) -> bool {
         matches!(self, TokenCheck::Unknown | TokenCheck::Revoked)
     }
+
+    /// What the check found, for the log: whose token it is, never the token.
+    pub fn summary(&self) -> String {
+        match self {
+            TokenCheck::Ok { host } => format!(
+                "works (host {}, {}, home region {})",
+                host.name,
+                host.trust,
+                host.region.as_deref().unwrap_or("none")
+            ),
+            TokenCheck::Unknown => "unknown to the server (401)".into(),
+            TokenCheck::Revoked => "revoked (403)".into(),
+            TokenCheck::Unreachable { message } => format!("not checked: {message}"),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -413,6 +428,7 @@ pub async fn upload(
         Err(e) => return retry(e),
     };
     let status = response.status().as_u16();
+    log::debug!("{server_url} answered {status} to the upload of {file_name}");
     let retry_after = response
         .headers()
         .get("Retry-After")
@@ -597,6 +613,7 @@ pub async fn check_token(server_url: &str, token: &str, timeout: Duration) -> To
         Err(e) => return unreachable(e),
     };
     let status = response.status().as_u16();
+    log::debug!("{server_url} answered {status} to a token check");
     match response.text().await {
         Ok(body) => read_token_check(status, &body),
         // The status alone says the token is turned down.

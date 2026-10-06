@@ -102,7 +102,7 @@
           <button type="button" id="ranked-code-copy">Copy ranked code</button>
         </div>
         <p id="ranked-code-state" role="status" hidden></p>
-        <p class="note">The latest ranked release of Genji Ball, with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
+        <p class="note">The latest ranked release of Genji Ball (or the one picked under Advanced), with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
       </section>
 
       <section id="lobby">
@@ -157,6 +157,32 @@
             <p id="advanced-state" role="status" hidden></p>
           </form>
           <p class="note">Leave a value empty for its default. The defaults suit most hosts.</p>
+        </details>
+        <details id="release">
+          <summary>Ranked code release</summary>
+          <form id="release-form">
+            <label for="release-tag">Genji Ball release</label>
+            <div class="row">
+              <input id="release-tag" type="text" spellcheck="false" placeholder="Latest ranked release" />
+              <button type="submit">Save</button>
+            </div>
+            <p id="release-state" role="status" hidden></p>
+          </form>
+          <p class="note">The release "Copy ranked code" builds on, by its tag (like <span id="release-example"></span>). Leave it empty for the latest ranked release, which suits every host unless an admin asks for another.</p>
+        </details>
+        <details id="debug">
+          <summary>Debug</summary>
+          <label for="log-level">Log level</label>
+          <div class="row">
+            <select id="log-level"></select>
+            <button type="button" class="quiet" id="log-open">Open log folder</button>
+          </div>
+          <p class="note">How much the tool writes to its log. "debug" adds every token check and each answer's status; turn it on while you look into a problem.</p>
+          <div class="row">
+            <button type="button" id="diagnostics-export">Export diagnostics…</button>
+          </div>
+          <p id="debug-state" role="status" hidden></p>
+          <p class="note">Saves one file to send with a bug report: the tool's version, its settings, what was uploaded, the recent log and the names of the files in your log folder. Never your host token.</p>
         </details>
       </section>
     </main>

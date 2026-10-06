@@ -160,7 +160,8 @@ pub const GITHUB_API_URL: &str = "https://api.github.com";
 pub const RELEASE_REPO: &str = "Genji-Ball-Team/GenjiBall-CE";
 
 /// Only releases whose tag ends in this are ranked builds (`1.3.3R`); the latest one is the base
-/// of the ranked code.
+/// of the ranked code, unless the host pinned one (`releaseTag` in the settings, which must end in
+/// this too).
 pub const RELEASE_TAG_SUFFIX: &str = "R";
 
 /// The release asset holding the Workshop code is `<prefix><tag><suffix>`: `genjiball-v1.3.3R.txt`,
@@ -232,6 +233,33 @@ pub const UPDATE_CHECK_SECS: Tunable = Tunable {
 /// `UPDATE_CHECK_SECS` counts within this long.
 pub const UPDATE_TICK_SECS: u64 = 60;
 
+/// The tool's own log (`logging.rs`), `<name>.log` in the app's log folder
+/// (`%LOCALAPPDATA%\us.genjiball.hosttool\logs`). Older ones are `<name>_<date>.log` next to it.
+pub const LOG_FILE_NAME: &str = "host-tool";
+
+/// The tool's log starts a new file once it's this big.
+pub const LOG_MAX_BYTES: u64 = 1024 * 1024;
+
+/// How many older log files are kept besides the current one. With `LOG_MAX_BYTES`, the log folder
+/// never holds much more than 5 MB.
+pub const LOG_FILES_KEPT: usize = 4;
+// The log plugin keeps `LOG_FILES_KEPT - 1` when it starts a new file.
+const _: () = assert!(LOG_FILES_KEPT > 0 && LOG_MAX_BYTES > 0);
+
+/// The log levels the host picks from under Advanced → Debug, least to most detailed. Each logs
+/// what the ones before it do, and more.
+pub const LOG_LEVELS: [&str; 4] = ["error", "warn", "info", "debug"];
+
+/// The log level when the host hasn't picked one: uploads, checks and errors, not every poll.
+pub const DEFAULT_LOG_LEVEL: &str = "info";
+
+/// A diagnostics export (`diagnostics.rs`) holds at most this much of the tool's own log, newest
+/// first: the current file, then older ones while they fit, the last cut to its end.
+pub const DIAGNOSTICS_LOG_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The file name a diagnostics export is offered under, before the date: `<prefix>-<date>.json`.
+pub const DIAGNOSTICS_FILE_PREFIX: &str = "genjiball-host-tool-diagnostics";
+
 /// Every `Tunable`, in the order the window lists them.
 pub const TUNABLES: [&Tunable; 9] = [
     &POLL_INTERVAL_SECS,
@@ -260,6 +288,7 @@ mod tests {
                 t.key
             );
         }
+        assert!(LOG_LEVELS.contains(&DEFAULT_LOG_LEVEL));
         for (i, r) in REGIONS.iter().enumerate() {
             assert!(
                 REGIONS[..i].iter().all(|other| other.id != r.id),

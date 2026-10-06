@@ -1,6 +1,6 @@
 [package]
 name = "genjiball-host-tool"
-version = "1.2.0-beta.1"
+version = "1.2.0-beta.2"
 description = "Genji Ball Ranked host tool"
 authors = ["Genji Ball Team"]
 repository = "https://github.com/Genji-Ball-Team/genjiball-host-tool"

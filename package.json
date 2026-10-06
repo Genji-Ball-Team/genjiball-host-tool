@@ -1,7 +1,7 @@
 {
   "name": "genjiball-host-tool",
   "private": true,
-  "version": "1.2.0-beta.1",
+  "version": "1.2.0-beta.2",
   "description": "Genji Ball Ranked host tool: watches the Workshop log folder and uploads ranked matches (Tauri)",
   "type": "module",
   "scripts": {

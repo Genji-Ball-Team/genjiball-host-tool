@@ -7,25 +7,80 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+html, body { height: 100%; }
 body {
-  margin: 0; min-height: 100vh;
+  margin: 0; overflow: hidden;
   background: var(--bg); color: var(--fg);
-  font: 400 .95rem/1.5 system-ui, sans-serif;
+  font: 400 .9rem/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
 }
-main { padding: 1.75rem 2.25rem 2.5rem; max-width: 44rem; }
 
-header { display: flex; align-items: baseline; gap: .75rem; }
-h1 { margin: 0; font-size: 1.5rem; line-height: 1.1; border-left: 4px solid var(--good); padding-left: .75rem; }
-h2 { margin: 0 0 .75rem; font-size: .8rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-section { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
-#welcome { border-top: 0; padding-top: 0; margin-top: 1rem; }
+/* The app shell (#33): the sidebar, then one view that fills the rest. Only a view's body scrolls. */
+.app { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); height: 100vh; }
+.sidebar { display: flex; flex-direction: column; min-height: 0; padding: .9rem .6rem .75rem; background: var(--panel); border-right: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: .55rem; padding: 0 .5rem 1.1rem; font-weight: 650; }
+/* The app's icon (app-icon.svg), the same mark as the ranked site's. */
+.brand-mark { flex: none; width: 1.4rem; height: 1.4rem; }
+.nav { display: flex; flex-direction: column; gap: .15rem; }
+.nav button {
+  position: relative; display: flex; align-items: center; gap: .65rem; width: 100%; padding: .45rem .55rem;
+  border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-weight: 500; text-align: left;
+}
+.nav button:hover { background: var(--raised); color: var(--fg); }
+.nav button[aria-current="page"] { background: var(--raised); color: var(--fg); }
+.nav button[aria-current="page"]::before { content: ""; position: absolute; left: -.6rem; top: .35rem; bottom: .35rem; width: 3px; border-radius: 0 2px 2px 0; background: var(--good); }
+.nav svg { flex: none; width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+/* Something on that view needs the host. */
+.nav .dot { position: absolute; left: 1.55rem; top: .4rem; width: .45rem; height: .45rem; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 2px var(--panel); }
+.sidebar-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: auto; padding: 0 .5rem; font-size: .8rem; }
+.sidebar-foot .tag { margin-left: 0; }
+
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.banners:not(:has(> :not([hidden]))) { display: none; }
+.banners { padding: .75rem 1.5rem 0; }
+.view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.view-head { padding: 1.1rem 1.5rem .8rem; border-bottom: 1px solid var(--line); }
+.view-head p { margin: .3rem 0 0; }
+.view-head .muted { font-size: .85rem; max-width: 40rem; }
+.head-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.head-row button { padding: .2rem .65rem; font-size: .8rem; }
+.view-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 1.5rem 1.5rem; }
+.view-body > :first-child { margin-top: 1rem; }
+.view-body > * { max-width: 44rem; }
+.view-foot { margin: 0; padding: .5rem 1.5rem; border-top: 1px solid var(--line); }
+
+/* Narrow window: the sidebar keeps its icons only. */
+@media (max-width: 600px) {
+  .app { grid-template-columns: 3.25rem minmax(0, 1fr); }
+  .sidebar { padding-inline: .4rem; }
+  .brand { justify-content: center; padding-inline: 0; }
+  .brand-name, .nav span, #version { display: none; }
+  .nav button { justify-content: center; padding-inline: 0; }
+  .nav button[aria-current="page"]::before { left: -.4rem; }
+  .nav .dot { left: auto; right: .45rem; }
+  .sidebar-foot { justify-content: center; padding: 0; }
+  .banners { padding-inline: 1rem; }
+  .view-head, .view-foot { padding-inline: 1rem; }
+  .view-body { padding-inline: 1rem; }
+}
+
+/* Short window: headers take less of it. */
+@media (max-height: 480px) {
+  .view-head { padding-block: .6rem .5rem; }
+  .banners { padding-top: .5rem; }
+  .banner { padding-block: .4rem; }
+}
+
+h1 { margin: 0; font-size: 1.2rem; font-weight: 650; line-height: 1.25; }
+h2 { margin: 0 0 .6rem; font-size: .95rem; font-weight: 600; color: var(--fg); }
+.group { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+.view-body > .group:first-child, .view-body > [hidden]:first-child + .group { margin-top: 1rem; padding-top: 0; border-top: 0; }
 
 .lede { color: var(--soft); margin: 0; max-width: 36rem; }
 .note { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
 .muted { color: var(--muted); }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
-.banner { margin: 1rem 0 0; padding: .6rem .8rem; border-left: 3px solid var(--bad); background: #1c1012; }
+.banner { margin: 0 0 .5rem; padding: .6rem .8rem; border-left: 3px solid var(--bad); background: #1c1012; }
 .banner.update { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; border-left-color: var(--good); background: #0f1c15; }
 .path { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
 
@@ -40,7 +95,7 @@ dd { margin: 0; overflow-wrap: anywhere; }
 #host-trust-note { margin: -.5rem 0 1rem; }
 
 /* AFK on: hard to miss, at the top and in the header. */
-#afk.on { margin-left: -1rem; padding-left: calc(1rem - 3px); border-left: 3px solid var(--bad); background: #1c1012; padding-bottom: 1rem; }
+#afk.on { margin-left: -1rem; padding: 1rem 1rem 1rem calc(1rem - 3px); border-left: 3px solid var(--bad); background: #1c1012; }
 #afk.on h2 { color: var(--bad); }
 #afk .row { align-items: center; margin-top: 0; }
 #afk .status { margin-left: 0; }
@@ -63,7 +118,6 @@ label.check input { flex: none; width: 1rem; height: 1rem; margin: 0; padding: 0
 #lobby-state { margin: 0 0 .75rem; }
 #lobby-form-state { margin: .5rem 0 0; }
 #region-note { margin: -.5rem 0 1rem; }
-#upload-region { margin: 0 0 .5rem; }
 #upload-region strong { font-weight: 650; }
 select:focus-visible, input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
 button {
@@ -79,9 +133,8 @@ summary { cursor: pointer; color: var(--muted); font-size: .85rem; width: max-co
 summary:hover { color: var(--fg); }
 details form { margin-top: .75rem; }
 
-#upload-state { margin: 0; }
 #ranked-code-state { margin: .75rem 0 0; }
-.uploads { list-style: none; margin: .75rem 0 0; padding: 0; }
+.uploads { list-style: none; margin: .5rem 0 0; padding: 0; }
 .uploads:empty { display: none; }
 .uploads li {
   display: grid; grid-template-columns: 1fr max-content; gap: .1rem 1rem;
@@ -96,8 +149,7 @@ details form { margin-top: .75rem; }
 .pager { align-items: center; font-size: .85rem; }
 
 /* Tourneys (#8, #9, #10): one block per assigned lobby. */
-#tourneys-state { margin: 0; }
-.tourneys { list-style: none; margin: .75rem 0 0; padding: 0; }
+.tourneys { list-style: none; margin: .5rem 0 0; padding: 0; }
 .tourneys:empty { display: none; }
 .tourneys > li { padding: .75rem 0; border-top: 1px solid var(--line); font-size: .9rem; }
 .tourneys > li:first-child { border-top: 0; }
@@ -125,7 +177,7 @@ details form { margin-top: .75rem; }
 /* Dry run and the debug panel (Advanced → Debug). */
 #dry-run-banner { border-left-color: var(--gold); background: #1c1a10; }
 label.check.dry-run { margin: 1rem 0 0; }
-#debug-panel h3 { margin: 1rem 0 .25rem; font-size: .75rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+#debug-panel h3 { margin: 1rem 0 .25rem; font-size: .85rem; font-weight: 600; color: var(--soft); }
 #debug-panel .note { margin-top: .25rem; }
 .debug-list { margin: 0; padding-left: 1.25rem; font-size: .85rem; overflow-wrap: anywhere; }
 .debug-list:empty, .events:empty { display: none; }
@@ -145,9 +197,6 @@ pre.raw {
 
 /* Match view (#16): the ranked site's match page (genjiball-ranked public/style.css), its colours
    and structure: facts, the winner, standings, then players down and rounds across. */
-.section-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
-.section-head h2 { margin: 0; }
-.section-head button { padding: .2rem .65rem; font-size: .8rem; }
 .warn { color: var(--gold); }
 .uploads .match-view { margin-top: .5rem; padding: .25rem 0 .5rem .9rem; border-left: 2px solid var(--line); }
 .match-view .match + .match { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }

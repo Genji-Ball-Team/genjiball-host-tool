@@ -5,6 +5,7 @@ import { watchDebug } from "./debug-view";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import { renderTourneys, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
+import { currentView, markView, onViewChange, setupViews } from "./views";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
 interface AppState {
@@ -477,7 +478,7 @@ function describeProblem(problem: Problem): string {
     case "tokenRejected":
       return problem.revoked ? "Paused: this token was revoked. Ask an admin for a new one." : "Paused: the server doesn't know this token.";
     case "noRegion":
-      return "Paused: you have no home region yet. Pick the region you host in above.";
+      return "Paused: you have no home region yet. Pick the region you host in on Home.";
     case "local":
       return problem.message;
   }
@@ -570,6 +571,7 @@ function renderUploads(status: UploadStatus): void {
 
   const retrying = el("upload-retrying");
   retrying.hidden = !status.retrying;
+  markView("uploads", Boolean(status.problem || status.retrying));
   retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
 
   // The status carries the newest page. An older one is asked for again when anything in the
@@ -855,8 +857,8 @@ function renderUpdate(status: UpdateStatus): void {
 let running = 0;
 
 function setButtonsDisabled(disabled: boolean): void {
-  // A button marked `data-off` (a tourney code before its window) stays disabled.
-  document.querySelectorAll("button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
+  // A button marked `data-off` (a tourney code before its window) stays disabled. The sidebar stays usable.
+  document.querySelectorAll<HTMLButtonElement>("main button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
 }
 
 /** Runs a button's action with the buttons disabled, and shows its error (by default next to the token). */
@@ -1180,17 +1182,10 @@ el("lobby-on").addEventListener("change", () => {
   });
 });
 
-/** Whether the host hid the current match: `localStorage` keeps it across restarts. */
-const LIVE_HIDDEN_KEY = "liveMatchHidden";
-/** The current match view, reading the live log while it's shown. */
+/** The current match view, reading the live log while the Match view is shown. */
 let liveWatch: LogWatch | null = null;
 
-function showLiveMatch(shown: boolean): void {
-  localStorage.setItem(LIVE_HIDDEN_KEY, shown ? "" : "1");
-  el("live-match").hidden = !shown;
-  const toggle = el("live-toggle");
-  toggle.textContent = shown ? "Hide" : "Show";
-  toggle.setAttribute("aria-expanded", String(shown));
+function watchLiveMatch(shown: boolean): void {
   if (shown && !liveWatch) liveWatch = watchLog(el("live-match"), { kind: "live" }, matchViewPollSecs);
   if (!shown && liveWatch) {
     liveWatch.stop();
@@ -1205,15 +1200,19 @@ function logFolderChanged(): void {
   if (liveWatch) {
     liveWatch.stop();
     liveWatch = null;
-    showLiveMatch(true);
+    watchLiveMatch(true);
   }
   if (debugWatch) watchDebugPanel(true);
 }
 
-el("live-toggle").addEventListener("click", () => showLiveMatch(!liveWatch));
-
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
+
+// The live log is read once the settings (its poll time) are known.
+onViewChange((view) => {
+  if (ready) watchLiveMatch(view === "match");
+});
+setupViews();
 
 void busy(async () => {
   await listen<UploadStatus>("upload-status", (event) => {
@@ -1244,7 +1243,7 @@ void busy(async () => {
     if (ready) renderUpdate(event.payload);
   });
   await refresh();
-  showLiveMatch(!localStorage.getItem(LIVE_HIDDEN_KEY));
+  watchLiveMatch(currentView() === "match");
   renderUpdate(await invoke<UpdateStatus>("get_update_status"));
   if (state.hasToken) await checkSaved();
   else el("token").focus();

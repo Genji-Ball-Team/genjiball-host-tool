@@ -31,6 +31,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use credentials::Tokens;
 use history::Page;
@@ -1081,6 +1082,11 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// What the window keeps between starts: its size, place and whether it's maximised.
+const WINDOW_STATE: StateFlags = StateFlags::SIZE
+    .union(StateFlags::POSITION)
+    .union(StateFlags::MAXIMIZED);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1096,6 +1102,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Only its Rust API is used (`tourneys.rs`): the window has no notification permission.
         .plugin(tauri_plugin_notification::init())
+        // The window opens where and as big as it was left. Rust only: no window permission.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(WINDOW_STATE)
+                .build(),
+        )
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let store = Store::open(&dir);
@@ -1121,6 +1133,8 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                // Saved now too, not only on quit: an update's restart skips the quit.
+                let _ = window.app_handle().save_window_state(WINDOW_STATE);
                 let _ = window.hide();
             }
         })

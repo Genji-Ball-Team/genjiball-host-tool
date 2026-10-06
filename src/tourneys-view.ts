@@ -23,6 +23,7 @@ import {
   type TourneyProblem,
   type TourneysStatus,
 } from "./tourney-model";
+import { markView } from "./views";
 
 /** What the section needs from the rest of the window. */
 export interface TourneyContext {
@@ -168,9 +169,12 @@ function draw(): void {
     line.textContent = "Checking…";
     line.className = "muted";
     list.replaceChildren();
+    markView("tourneys", false);
     return;
   }
   const { lobbies, problem, checkedAt } = status;
+  // The sidebar marks a lobby waiting for its verify screenshot.
+  markView("tourneys", lobbies.some((l) => l.needsScreenshot));
   let text: string;
   let tone: Line["tone"] = "muted";
   if (problem) {

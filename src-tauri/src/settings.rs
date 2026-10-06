@@ -44,6 +44,11 @@ pub struct Settings {
     /// Where updates come from, one of `config::UPDATE_CHANNELS`. `None`:
     /// `config::DEFAULT_UPDATE_CHANNEL`.
     pub update_channel: Option<String>,
+    /// The data center each region's codes put the lobby on, by region id: one of its
+    /// `config::DATA_CENTERS` or `config::BEST_AVAILABLE`. A region at its default isn't here
+    /// (`normalize_data_center`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub data_centers: BTreeMap<String, String>,
     /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -93,6 +98,20 @@ impl Settings {
         self.update_channel
             .as_deref()
             .unwrap_or(config::DEFAULT_UPDATE_CHANNEL)
+    }
+
+    /// The data center `region`'s codes put the lobby on: the host's pick, else the region's
+    /// default. `None` for `config::BEST_AVAILABLE` (the game picks), or a region without any.
+    pub fn data_center(&self, region: &str) -> Option<&str> {
+        let name = match self.data_centers.get(region) {
+            Some(name) => name.as_str(),
+            None => config::DATA_CENTERS
+                .iter()
+                .find(|d| d.region == region)?
+                .names
+                .first()?,
+        };
+        (name != config::BEST_AVAILABLE).then_some(name)
     }
 
     /// The host's value for `tunable`, or its default.
@@ -200,6 +219,21 @@ pub fn normalize_update_channel(channel: Option<&str>) -> Result<Option<String>,
     }
 }
 
+/// A data center the host picked for `region`, as it's stored: `None` for the region's default.
+pub fn normalize_data_center(region: &str, name: &str) -> Result<Option<String>, String> {
+    let centers = config::DATA_CENTERS
+        .iter()
+        .find(|d| d.region == region)
+        .ok_or_else(|| format!("There's no region {region}"))?;
+    if centers.names.first() == Some(&name) {
+        Ok(None)
+    } else if name == config::BEST_AVAILABLE || centers.names.contains(&name) {
+        Ok(Some(name.to_string()))
+    } else {
+        Err(format!("There's no data center {name} for {region}"))
+    }
+}
+
 /// The GenjiBall-CE release tag the host typed, as it's stored: `None` (empty) for the latest
 /// ranked release. A ranked tag ends in `config::RELEASE_TAG_SUFFIX`; only letters, digits, `.`,
 /// `-` and `_`, so it goes in a GitHub URL as it is.
@@ -255,6 +289,16 @@ pub fn load(path: &Path) -> Result<Settings, String> {
         settings.release_tag =
             normalize_release_tag(tag).map_err(|e| format!("{e} (in {})", path.display()))?;
     }
+    // Edited by hand: the Workshop wouldn't take the code with a data center it doesn't know.
+    let mut data_centers = BTreeMap::new();
+    for (region, name) in &settings.data_centers {
+        if let Some(name) =
+            normalize_data_center(region, name).map_err(|e| format!("{e} in {}", path.display()))?
+        {
+            data_centers.insert(region.clone(), name);
+        }
+    }
+    settings.data_centers = data_centers;
     // Edited by hand: a value out of range (a quiet time of 0, say) would upload every match
     // half-played.
     for tunable in config::TUNABLES {
@@ -368,6 +412,7 @@ mod tests {
             dry_run: Some(true),
             auto_update_check: Some(false),
             update_channel: Some("prerelease".into()),
+            data_centers: BTreeMap::from([("eu".into(), "Germany".into())]),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
@@ -595,6 +640,39 @@ mod tests {
         assert_eq!(load(&path).unwrap().log_level, None);
         fs::write(&path, r#"{ "logLevel": "loud" }"#).unwrap();
         assert!(load(&path).unwrap_err().contains("log level"));
+    }
+
+    #[test]
+    fn data_centers_default_per_region_and_best_available_sets_none() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.data_center("eu"), Some("Netherlands"));
+        assert_eq!(settings.data_center("na"), Some("USA - Central"));
+        assert_eq!(normalize_data_center("eu", "Netherlands"), Ok(None));
+        assert_eq!(
+            normalize_data_center("eu", "Germany"),
+            Ok(Some("Germany".into()))
+        );
+        assert!(normalize_data_center("eu", "USA - East").is_err());
+        assert!(normalize_data_center("asia", "Japan").is_err());
+        settings
+            .data_centers
+            .insert("na".into(), config::BEST_AVAILABLE.into());
+        assert_eq!(settings.data_center("na"), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{ "dataCenters": { "eu": "Netherlands", "na": "USA - West" } }"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(
+            loaded.data_centers,
+            BTreeMap::from([("na".into(), "USA - West".into())])
+        );
+        fs::write(&path, r#"{ "dataCenters": { "eu": "Atlantis" } }"#).unwrap();
+        assert!(load(&path).is_err());
     }
 
     #[test]

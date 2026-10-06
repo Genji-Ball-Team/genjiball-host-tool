@@ -144,6 +144,19 @@ struct AppState {
     update_channel: String,
     update_channels: &'static [&'static str],
     default_update_channel: &'static str,
+    /// Per region, the data centers its codes can put the lobby on (the default first), and the
+    /// one in use (`config::BEST_AVAILABLE` for none).
+    data_centers: Vec<DataCenterChoice>,
+    best_available: &'static str,
+}
+
+/// A region's data center choice, as the window shows it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataCenterChoice {
+    region: &'static str,
+    names: &'static [&'static str],
+    chosen: String,
 }
 
 /// A tunable under Advanced, as the window shows it. All in seconds.
@@ -201,6 +214,18 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         update_channel: settings.update_channel().to_string(),
         update_channels: &config::UPDATE_CHANNELS,
         default_update_channel: config::DEFAULT_UPDATE_CHANNEL,
+        data_centers: config::DATA_CENTERS
+            .iter()
+            .map(|d| DataCenterChoice {
+                region: d.region,
+                names: d.names,
+                chosen: settings
+                    .data_center(d.region)
+                    .unwrap_or(config::BEST_AVAILABLE)
+                    .to_string(),
+            })
+            .collect(),
+        best_available: config::BEST_AVAILABLE,
     })
 }
 
@@ -608,6 +633,28 @@ fn set_updates(
     app_state(&app, &store)
 }
 
+/// The data center `region`'s ranked and tourney codes put the lobby on: one of its
+/// `config::DATA_CENTERS`, or `config::BEST_AVAILABLE` to leave it to the game.
+#[tauri::command]
+fn set_data_center(
+    region: String,
+    name: String,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<AppState, String> {
+    let stored = settings::normalize_data_center(&region, &name)?;
+    store.update(|s| match stored {
+        Some(name) => {
+            s.data_centers.insert(region.clone(), name);
+        }
+        None => {
+            s.data_centers.remove(&region);
+        }
+    })?;
+    log::info!("Data center for {region}: {name}");
+    app_state(&app, &store)
+}
+
 /// Opens the tool's log folder in Explorer, through the opener's Rust API.
 #[tauri::command]
 fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
@@ -731,6 +778,8 @@ struct RankedCode {
     /// How long the window may keep a code it couldn't copy for the next click, before building
     /// a new one: as long as the release found is reused.
     keep_secs: u64,
+    /// The data center the code puts the lobby on, `None`: the game picks.
+    data_center: Option<String>,
 }
 
 /// The latest ranked release's code with the top players of the current server and region tagged
@@ -773,8 +822,16 @@ async fn ranked_code(store: &Store, releases: &ReleaseCache) -> Result<RankedCod
     let now = chrono::Local::now();
     let built = ranked_code::top_tags(&tiers, &leaderboard, &now.format("%Y-%m-%d").to_string());
     let filled = ranked_code::fill(&base, &built.tags)?;
+    // The region whose tags are in it, else the one asked for: the lobby goes on its data center.
+    let data_center = leaderboard
+        .region
+        .as_deref()
+        .or(region.as_deref())
+        .and_then(|r| settings.data_center(r))
+        .map(str::to_string);
+    let code = ranked_code::set_data_center(&filled.code, data_center.as_deref())?;
     Ok(RankedCode {
-        code: filled.code,
+        code,
         server_url,
         chosen_region: settings.region,
         requested_region: region,
@@ -785,6 +842,7 @@ async fn ranked_code(store: &Store, releases: &ReleaseCache) -> Result<RankedCod
         names: filled.names - built.top,
         skipped_names: built.skipped + filled.skipped,
         keep_secs: keep.as_secs(),
+        data_center,
     })
 }
 
@@ -848,6 +906,8 @@ struct TourneyCode {
     top: usize,
     names: usize,
     skipped_names: usize,
+    /// The data center the code puts the lobby on (the lobby's region's), `None`: the game picks.
+    data_center: Option<String>,
 }
 
 /// The ranked code for lobby `lobby_id`'s region, with the lobby's `TOURNEY - generated` rule
@@ -935,6 +995,8 @@ async fn tourney_code(
     let built = ranked_code::top_tags(&tiers, &leaderboard, &date);
     let filled = ranked_code::fill(&base, &built.tags)?;
     let (code, values) = tourney::fill(&filled.code, values)?;
+    let data_center = settings.data_center(&lobby.region).map(str::to_string);
+    let code = ranked_code::set_data_center(&code, data_center.as_deref())?;
     Ok(TourneyCode {
         code,
         server_url,
@@ -945,6 +1007,7 @@ async fn tourney_code(
         top: built.top,
         names: filled.names - built.top,
         skipped_names: built.skipped + filled.skipped,
+        data_center,
     })
 }
 
@@ -1165,6 +1228,7 @@ pub fn run() {
             set_dry_run,
             get_debug,
             set_updates,
+            set_data_center,
             open_log_folder,
             export_diagnostics,
             get_upload_status,

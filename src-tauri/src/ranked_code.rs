@@ -261,10 +261,108 @@ pub fn fill(code: &str, tags: &RankTags) -> Result<Filled, String> {
     })
 }
 
+/// The setting in the code's `lobby` settings that puts the lobby on a data center.
+const DATA_CENTER_SETTING: &str = "Data Center Preference:";
+
+/// `code` with its lobby on the data center `name` (`None`: the game picks, the best ping for the
+/// host). The line goes first in the `lobby` block of the code's `settings`, in its indentation;
+/// one already there is replaced. Everything else, line endings included, stays as it was.
+pub fn set_data_center(code: &str, name: Option<&str>) -> Result<String, String> {
+    let lines: Vec<&str> = code.split_inclusive('\n').collect();
+    let text = |line: &str| line.trim_end_matches(['\r', '\n']).to_string();
+    let eol = lines
+        .first()
+        .map_or("\n", |l| if l.ends_with("\r\n") { "\r\n" } else { "\n" });
+
+    // `settings`, then its `lobby`, then the `{` that opens it: depth counted by lines that are only a brace.
+    let settings = lines
+        .iter()
+        .position(|l| text(l).trim() == "settings")
+        .ok_or("The release's code has no settings")?;
+    let mut depth = 0;
+    let mut lobby = None;
+    for (i, line) in lines.iter().enumerate().skip(settings + 1) {
+        match text(line).trim() {
+            "{" => depth += 1,
+            "}" => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            "lobby" if depth == 1 => {
+                lobby = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let lobby =
+        lobby.ok_or("The release's code has no lobby settings to put the data center in")?;
+    let open = lobby + 1;
+    if lines.get(open).map(|l| text(l)).as_deref().map(str::trim) != Some("{") {
+        return Err("The lobby settings in the release's code don't open with {".into());
+    }
+    let close = (open + 1..lines.len())
+        .find(|&i| text(lines[i]).trim() == "}")
+        .ok_or("The lobby settings in the release's code never end")?;
+
+    let indent: String = text(lines[open])
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect::<String>()
+        + "\t";
+    let mut out = String::with_capacity(code.len() + 64);
+    for (i, line) in lines.iter().enumerate() {
+        let inside = i > open && i < close;
+        if inside && text(line).trim_start().starts_with(DATA_CENTER_SETTING) {
+            continue;
+        }
+        out.push_str(line);
+        if i == open {
+            if let Some(name) = name {
+                out.push_str(&format!("{indent}{DATA_CENTER_SETTING} {name}{eol}"));
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::server::{LeaderboardTier, RankTier, Ranked};
+
+    /// The start of GenjiBall-CE `workshop/genjiball.txt` on `v1.3.3R`: its settings.
+    const SETTINGS: &str = "settings\n{\n\tmain\n\t{\n\t\tMode Name: \"Genji Ball\"\n\t}\n\tlobby\n\t{\n\t\tMax FFA Players: 10\n\t\tReturn To Lobby: Never\n\t}\n}\n\nrule (\"x\") {\n}\n";
+
+    #[test]
+    fn puts_the_data_center_in_the_lobby_settings() {
+        let code = set_data_center(SETTINGS, Some("Netherlands")).unwrap();
+        assert!(
+            code.contains(
+                "\tlobby\n\t{\n\t\tData Center Preference: Netherlands\n\t\tMax FFA Players: 10\n"
+            ),
+            "{code}"
+        );
+        // Another one replaces it; none takes it out.
+        let moved = set_data_center(&code, Some("USA - Central")).unwrap();
+        assert_eq!(moved.matches("Data Center Preference").count(), 1);
+        assert!(moved.contains("Data Center Preference: USA - Central"));
+        assert_eq!(set_data_center(&moved, None).unwrap(), SETTINGS);
+        // Windows line endings stay.
+        let crlf = SETTINGS.replace('\n', "\r\n");
+        let set = set_data_center(&crlf, Some("Germany")).unwrap();
+        assert!(set.contains("\t\tData Center Preference: Germany\r\n"));
+        assert_eq!(set.matches('\n').count(), set.matches("\r\n").count());
+    }
+
+    #[test]
+    fn a_code_without_lobby_settings_is_an_error() {
+        let code = "settings\n{\n\tmain\n\t{\n\t}\n}\nrule (\"lobby\") {\n}\n";
+        assert!(set_data_center(code, Some("Netherlands")).is_err());
+        assert!(set_data_center("rule (\"x\") {\n}\n", None).is_err());
+    }
 
     /// The real rule and its neighbours, from GenjiBall-CE `workshop/genjiball.txt` on `v1.3.3R`.
     const EXAMPLE: &str = include_str!("../tests/fixtures/ranks-rule-example.txt");

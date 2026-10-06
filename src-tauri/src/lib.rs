@@ -1,12 +1,14 @@
 mod afk;
 mod config;
 mod credentials;
+mod diagnostics;
 mod dpapi;
 mod history;
 mod live_lobby;
 mod lobby;
 mod log_folder;
 mod log_scan;
+mod logging;
 mod match_log;
 mod ranked_code;
 mod release;
@@ -116,6 +118,13 @@ struct AppState {
     advanced: Vec<AdvancedSetting>,
     /// `config::MATCH_VIEW_POLL_SECS` as the host set it.
     match_view_poll_secs: u64,
+    /// The log level the host picked, `None` for `default_log_level`.
+    log_level: Option<String>,
+    log_levels: &'static [&'static str],
+    default_log_level: &'static str,
+    /// The GenjiBall-CE release the ranked code is built from, `None` for the latest ranked one.
+    release_tag: Option<String>,
+    release_tag_suffix: &'static str,
 }
 
 /// A tunable under Advanced, as the window shows it. All in seconds.
@@ -160,6 +169,11 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
             })
             .collect(),
         match_view_poll_secs: settings.get(&config::MATCH_VIEW_POLL_SECS),
+        log_level: settings.log_level.clone(),
+        log_levels: &config::LOG_LEVELS,
+        default_log_level: config::DEFAULT_LOG_LEVEL,
+        release_tag: settings.release_tag.clone(),
+        release_tag_suffix: config::RELEASE_TAG_SUFFIX,
     })
 }
 
@@ -185,6 +199,7 @@ async fn check_saved_token(
     uploader.refresh();
     let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
     let check = server::check_token(&server_url, &token, timeout).await;
+    log::info!("Token check for {server_url}: {}", check.summary());
     if matches!(check, TokenCheck::Ok { .. }) {
         // The server knows it now (an admin fixed it, say): stop holding uploads for it.
         uploader.token_ok();
@@ -210,8 +225,12 @@ async fn save_token(
     let server_url = settings.server_url().to_string();
     let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
     let check = server::check_token(&server_url, token, timeout).await;
+    log::info!("New token for {server_url}: {}", check.summary());
     if !check.is_rejected() {
-        store.tokens.set(&server_url, token)?;
+        store.tokens.set(&server_url, token).inspect_err(|e| {
+            log::error!("Couldn't save the token for {server_url}: {e}");
+        })?;
+        log::info!("Token saved for {server_url}");
         // Uploads to this server start with the logs written from now on. A token saved again,
         // even the same one, is tried again.
         uploader.start(&server_url);
@@ -228,7 +247,9 @@ fn forget_token(
     uploader: State<Uploader>,
     lobby: State<LiveLobby>,
 ) -> Result<(), String> {
-    store.tokens.delete(store.get().server_url())?;
+    let server_url = store.get().server_url().to_string();
+    store.tokens.delete(&server_url)?;
+    log::info!("Token for {server_url} forgotten");
     uploader.changed();
     lobby.changed();
     Ok(())
@@ -320,6 +341,7 @@ fn open_match(match_id: i64, store: State<Store>, uploader: State<Uploader>) -> 
         return Err("That match isn't on the site: only accepted and voided matches are".into());
     }
     let url = server::match_page_url(&server_url, match_id)?;
+    log::debug!("Opening {url}");
     tauri_plugin_opener::open_url(url, None::<&str>)
         .map_err(|e| format!("Couldn't open the browser: {e}"))
 }
@@ -335,6 +357,7 @@ fn set_server_url(
 ) -> Result<AppState, String> {
     let url = settings::normalize_server_url(&url)?;
     store.update(|s| s.server_url = url)?;
+    log::info!("Server set to {}", store.get().server_url());
     uploader.changed();
     lobby.changed();
     app_state(&app, &store)
@@ -350,6 +373,10 @@ fn set_log_folder(
     lobby: State<LiveLobby>,
 ) -> Result<AppState, String> {
     store.update(|s| s.log_folder = path)?;
+    log::info!(
+        "Log folder set to {:?}",
+        log_folder::current(store.get().log_folder.as_deref()).map(|f| f.path)
+    );
     uploader.changed();
     lobby.changed();
     app_state(&app, &store)
@@ -368,7 +395,11 @@ fn set_region(
     if let Some(region) = &region {
         settings::check_region(region)?;
     }
-    store.update(|s| s.region = region)?;
+    store.update(|s| s.region = region.clone())?;
+    log::info!(
+        "Region set to {}",
+        region.as_deref().unwrap_or("the home region")
+    );
     uploader.changed();
     lobby.changed();
     app_state(&app, &store)
@@ -385,7 +416,8 @@ fn set_advanced(
     lobby: State<LiveLobby>,
 ) -> Result<AppState, String> {
     let values = settings::normalize_advanced(&values)?;
-    store.update(|s| s.replace_advanced(values))?;
+    store.update(|s| s.replace_advanced(values.clone()))?;
+    log::info!("Advanced values set to {values:?} (others at their default)");
     // The next poll starts now, with the new values.
     uploader.wake();
     lobby.changed();
@@ -415,6 +447,112 @@ fn set_live_lobby(
 #[tauri::command]
 fn get_lobby_status(lobby: State<LiveLobby>) -> LobbyStatus {
     lobby.status()
+}
+
+/// How much the tool logs, from now on. `None` goes back to the default.
+#[tauri::command]
+fn set_log_level(
+    level: Option<String>,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<AppState, String> {
+    let level = settings::normalize_log_level(level.as_deref())?;
+    store.update(|s| s.log_level = level)?;
+    let level = store.get().log_level().to_string();
+    logging::set_level(&level);
+    log::info!("Log level set to {level}");
+    app_state(&app, &store)
+}
+
+/// The GenjiBall-CE release the ranked code is built from (`1.3.3R`). Empty: the latest ranked one.
+#[tauri::command]
+fn set_release_tag(
+    tag: String,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<AppState, String> {
+    let tag = settings::normalize_release_tag(&tag)?;
+    store.update(|s| s.release_tag = tag.clone())?;
+    log::info!(
+        "Ranked code release set to {}",
+        tag.as_deref().unwrap_or("the latest")
+    );
+    app_state(&app, &store)
+}
+
+/// Opens the tool's log folder in Explorer, through the opener's Rust API.
+#[tauri::command]
+fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Couldn't find the log folder: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
+    tauri_plugin_opener::open_path(&dir, None::<&str>)
+        .map_err(|e| format!("Couldn't open {}: {e}", dir.display()))
+}
+
+/// Writes a diagnostics export (`diagnostics.rs`) where the host picks, offered in Downloads.
+/// The path it was saved to, `None` if the host cancelled.
+#[tauri::command]
+async fn export_diagnostics(
+    app: tauri::AppHandle,
+    store: State<'_, Store>,
+    uploader: State<'_, Uploader>,
+    updates: State<'_, Updates>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let settings = store.get();
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let log_dir = app.path().app_log_dir().ok();
+    let workshop = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    // Blanked out wherever they turn up. Tokens never go in these files; this makes sure.
+    let mut secrets = Vec::new();
+    for server_url in [settings.server_url(), config::DEFAULT_SERVER_URL] {
+        if let Ok(Some(token)) = store.tokens.get(server_url) {
+            secrets.push(token);
+        }
+    }
+    let version = app.package_info().version.to_string();
+    let sources = diagnostics::Sources {
+        version: &version,
+        webview: tauri::webview_version().ok(),
+        config_dir: &config_dir,
+        log_dir: log_dir.as_deref(),
+        workshop_folder: workshop.as_ref().map(|f| f.path.as_path()),
+        upload_status: serde_json::to_value(uploader.status()).unwrap_or_default(),
+        update_status: serde_json::to_value(updates.status()).unwrap_or_default(),
+    };
+    let now = chrono::Local::now();
+    let text = diagnostics::collect(&sources, &secrets, now);
+
+    let (sent, chosen) = tokio::sync::oneshot::channel();
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Export diagnostics")
+        .set_file_name(format!(
+            "{}-{}.json",
+            config::DIAGNOSTICS_FILE_PREFIX,
+            now.format("%Y-%m-%d-%H-%M")
+        ))
+        .add_filter("JSON", &["json"]);
+    if let Ok(downloads) = app.path().download_dir() {
+        dialog = dialog.set_directory(downloads);
+    }
+    dialog.save_file(move |path| {
+        let _ = sent.send(path);
+    });
+    let Some(path) = chosen.await.ok().flatten() else {
+        return Ok(None);
+    };
+    let path = path
+        .into_path()
+        .map_err(|e| format!("Can't save there: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+    log::info!("Diagnostics exported to {}", path.display());
+    Ok(Some(path.display().to_string()))
 }
 
 /// The update the last check found, and whether the last check worked.
@@ -473,15 +611,34 @@ async fn build_ranked_code(
     store: State<'_, Store>,
     releases: State<'_, ReleaseCache>,
 ) -> Result<RankedCode, String> {
+    let built = ranked_code(&store, &releases).await;
+    match &built {
+        Ok(code) => log::info!(
+            "Built the ranked code from release {} for {} (region {}): top {}, {} more names, {} left out",
+            code.release,
+            code.server_url,
+            code.region.as_deref().unwrap_or("?"),
+            code.top,
+            code.names,
+            code.skipped_names
+        ),
+        Err(e) => log::warn!("Couldn't build the ranked code: {e}"),
+    }
+    built
+}
+
+async fn ranked_code(store: &Store, releases: &ReleaseCache) -> Result<RankedCode, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
     let keep = settings.secs(&config::RELEASE_CACHE_SECS);
     let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
     let region = match &settings.region {
         Some(region) => Some(region.clone()),
-        None => home_region(&store, &server_url, timeout).await?,
+        None => home_region(store, &server_url, timeout).await?,
     };
-    let (release, base) = releases.latest(keep, timeout).await?;
+    let (release, base) = releases
+        .get(settings.release_tag.as_deref(), keep, timeout)
+        .await?;
     let tiers = server::rank_tags(&server_url, region.as_deref(), timeout).await?;
     let leaderboard = server::leaderboard(&server_url, region.as_deref(), timeout).await?;
     let now = chrono::Local::now();
@@ -573,12 +730,20 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             show_window(app)
         }))
+        // After the single instance check, so a second launch never touches the log file.
+        .plugin(logging::plugin())
         .plugin(tauri_plugin_dialog::init())
         // Only its Rust API is used (`updates.rs`): the window has no updater permission.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
-            app.manage(Store::open(&dir));
+            let store = Store::open(&dir);
+            logging::set_level(store.get().log_level());
+            log::info!("Host tool v{} started", app.package_info().version);
+            if let Some(e) = store.load_error() {
+                log::error!("{e}");
+            }
+            app.manage(store);
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
             app.manage(ReleaseCache::default());
             app.manage(Updates::default());
@@ -605,6 +770,10 @@ pub fn run() {
             set_log_folder,
             set_advanced,
             set_region,
+            set_log_level,
+            set_release_tag,
+            open_log_folder,
+            export_diagnostics,
             get_upload_status,
             build_ranked_code,
             get_upload_history,

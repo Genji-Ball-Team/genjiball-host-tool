@@ -161,9 +161,56 @@ fn from_hex(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Stand-ins for the credential store, for tests here and in other modules.
+#[cfg(all(test, windows))]
+pub mod fake {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use super::{CredentialStore, Tokens};
+
+    /// A credential store that holds tokens in memory, and refuses new ones when `full`.
+    #[derive(Default)]
+    pub struct FakeStore {
+        pub tokens: std::sync::Mutex<BTreeMap<String, String>>,
+        pub full: bool,
+        pub delete_fails: bool,
+    }
+
+    impl CredentialStore for FakeStore {
+        fn get(&self, server_url: &str) -> Result<Option<String>, String> {
+            Ok(self.tokens.lock().unwrap().get(server_url).cloned())
+        }
+
+        fn set(&self, server_url: &str, token: &str) -> Result<(), String> {
+            if self.full {
+                return Err("the credential store refused it (not enough memory)".into());
+            }
+            let mut tokens = self.tokens.lock().unwrap();
+            tokens.insert(server_url.into(), token.into());
+            Ok(())
+        }
+
+        fn delete(&self, server_url: &str) -> Result<(), String> {
+            if self.delete_fails {
+                return Err("the credential store refused deletion".into());
+            }
+            self.tokens.lock().unwrap().remove(server_url);
+            Ok(())
+        }
+    }
+
+    /// Tokens kept in `store`, falling back to the DPAPI file `fallback`.
+    pub fn tokens(store: FakeStore, fallback: PathBuf) -> Tokens<FakeStore> {
+        Tokens { store, fallback }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use fake::FakeStore;
 
     #[test]
     fn hex_round_trips() {
@@ -217,39 +264,6 @@ mod tests {
         assert_eq!(tokens.get(url).unwrap().as_deref(), Some("secret-token"));
         tokens.remove_from_file(url).unwrap();
         assert_eq!(tokens.get(url).unwrap(), None);
-    }
-
-    /// A credential store that holds tokens in memory, and refuses new ones when `full`.
-    #[cfg(windows)]
-    #[derive(Default)]
-    struct FakeStore {
-        tokens: std::sync::Mutex<BTreeMap<String, String>>,
-        full: bool,
-        delete_fails: bool,
-    }
-
-    #[cfg(windows)]
-    impl CredentialStore for FakeStore {
-        fn get(&self, server_url: &str) -> Result<Option<String>, String> {
-            Ok(self.tokens.lock().unwrap().get(server_url).cloned())
-        }
-
-        fn set(&self, server_url: &str, token: &str) -> Result<(), String> {
-            if self.full {
-                return Err("the credential store refused it (not enough memory)".into());
-            }
-            let mut tokens = self.tokens.lock().unwrap();
-            tokens.insert(server_url.into(), token.into());
-            Ok(())
-        }
-
-        fn delete(&self, server_url: &str) -> Result<(), String> {
-            if self.delete_fails {
-                return Err("the credential store refused deletion".into());
-            }
-            self.tokens.lock().unwrap().remove(server_url);
-            Ok(())
-        }
     }
 
     #[cfg(windows)]

@@ -75,3 +75,13 @@ It also says, before you upload, whether the match will count the way the server
 | Waiting for the Workshop log folder | Choose the log folder, or turn on the log file in Overwatch and play a game |
 
 If something else is wrong, ask in the [Discord](https://discord.gg/sv9VVjh5pT).
+
+## Reporting a problem
+
+Under **Advanced → Debug**:
+
+- **Export diagnostics...** saves one file (offered in your Downloads folder) to attach to a bug report or send to an admin. It holds the tool's version, its settings, what it uploaded, its recent log and the names of the files in your Workshop log folder (not the logs themselves). It never holds your host token.
+- If the problem is hard to catch, set **Log level** to **debug** first, make it happen again, then export. Set it back to **info** afterwards.
+- **Open log folder** shows the tool's own log files, if you'd rather look yourself.
+
+Under **Advanced → Ranked code release** you can build the ranked code on an older Genji Ball release by its tag (like `1.3.2R`). Leave it empty unless an admin asks: empty always uses the latest ranked release.

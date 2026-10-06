@@ -1,6 +1,7 @@
-//! The base of the ranked code: the Workshop code in the latest ranked (`R`) GenjiBall-CE
-//! release on GitHub. Kept in memory for `RELEASE_CACHE_SECS`, and the code per asset, so a click
-//! on "Copy ranked code" rarely asks GitHub.
+//! The base of the ranked code: the Workshop code in a ranked (`R`) GenjiBall-CE release on
+//! GitHub, the latest unless the host pinned one (Advanced → Ranked code release). Kept in memory
+//! for `RELEASE_CACHE_SECS`, and the code per asset, so a click on "Copy ranked code" rarely asks
+//! GitHub.
 
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -79,6 +80,39 @@ pub fn pick(status: u16, body: &str) -> Result<Release, String> {
             config::RELEASE_TAG_SUFFIX,
             config::RELEASE_REPO
         ))?;
+    code_asset(release)
+}
+
+/// The release tagged `tag` in a `GET /repos/{repo}/releases/tags/{tag}` answer (Advanced → Ranked
+/// code release), and its Workshop code asset. A pre-release counts: the host asked for it.
+pub fn pick_tagged(status: u16, body: &str, tag: &str) -> Result<Release, String> {
+    match status {
+        200 => {}
+        403 | 429 => {
+            return Err("GitHub is limiting requests from this PC. Try again in a while".into())
+        }
+        404 => {
+            return Err(format!(
+                "{} has no release {tag}. Check the ranked code release under Advanced, or leave it empty for the latest",
+                config::RELEASE_REPO
+            ))
+        }
+        _ => return Err(format!("GitHub answered {status} when asked for release {tag}")),
+    }
+    let release: GithubRelease = serde_json::from_str(body).map_err(|_| {
+        format!("GitHub's answer about release {tag} wasn't what the host tool expected")
+    })?;
+    if release.tag_name != tag {
+        return Err(format!(
+            "GitHub answered with release {} when asked for {tag}",
+            release.tag_name
+        ));
+    }
+    code_asset(release)
+}
+
+/// `release` and its Workshop code asset, which must be there exactly once.
+fn code_asset(release: GithubRelease) -> Result<Release, String> {
     let name = asset_name(&release.tag_name);
     let mut assets = release.assets.into_iter().filter(|a| a.name == name);
     let asset = assets.next().ok_or(format!(
@@ -100,6 +134,8 @@ pub fn pick(status: u16, body: &str) -> Result<Release, String> {
 }
 
 struct Cached {
+    /// The release tag the host pinned when it was found, `None` for the latest.
+    pin: Option<String>,
     /// When GitHub was last asked. None: ask at the next call.
     checked: Option<Instant>,
     release: Release,
@@ -112,20 +148,28 @@ struct Cached {
 pub struct ReleaseCache(Mutex<Option<Cached>>);
 
 impl ReleaseCache {
-    /// The latest ranked release's tag and Workshop code: from memory while it's younger than
-    /// `max_age` (`config::RELEASE_CACHE_SECS`, as the host set it), else from GitHub (the code
-    /// only when the asset changed). `timeout` is each request's.
-    pub async fn latest(
+    /// The tag and Workshop code of the release the ranked code is built from: the one tagged
+    /// `pin` (`Settings::release_tag`), else the latest ranked one. From memory while it's younger
+    /// than `max_age` (`config::RELEASE_CACHE_SECS`, as the host set it) and for the same `pin`,
+    /// else from GitHub (the code only when the asset changed). `timeout` is each request's.
+    pub async fn get(
         &self,
+        pin: Option<&str>,
         max_age: Duration,
         timeout: Duration,
     ) -> Result<(String, String), String> {
-        self.latest_with(max_age, || find(timeout), |r| download(r, timeout))
-            .await
+        self.get_with(
+            pin,
+            max_age,
+            || find(pin, timeout),
+            |r| download(r, timeout),
+        )
+        .await
     }
 
-    async fn latest_with<F, FF, D, DF>(
+    async fn get_with<F, FF, D, DF>(
         &self,
+        pin: Option<&str>,
         max_age: Duration,
         find: F,
         download: D,
@@ -139,17 +183,22 @@ impl ReleaseCache {
         let mut cached = self.0.lock().await;
         if let Some(c) = cached
             .as_ref()
-            .filter(|c| c.checked.is_some_and(|t| t.elapsed() < max_age))
+            .filter(|c| c.pin.as_deref() == pin && c.checked.is_some_and(|t| t.elapsed() < max_age))
         {
+            log::debug!("Reusing release {} found earlier", c.release.tag);
             return Ok((c.release.tag.clone(), c.code.clone()));
         }
         let release = find().await?;
         let code = match cached.as_ref().filter(|c| c.release.same_asset(&release)) {
             Some(c) => c.code.clone(),
-            None => download(release.clone()).await?,
+            None => {
+                log::info!("Downloading the Workshop code of release {}", release.tag);
+                download(release.clone()).await?
+            }
         };
         let tag = release.tag.clone();
         *cached = Some(Cached {
+            pin: pin.map(str::to_string),
             checked: Some(Instant::now()),
             release,
             code: code.clone(),
@@ -157,7 +206,7 @@ impl ReleaseCache {
         Ok((tag, code))
     }
 
-    /// Makes the next `latest` ask GitHub again, keeping the code. Tests only, for now.
+    /// Makes the next `get` ask GitHub again, keeping the code. Tests only, for now.
     #[cfg(test)]
     async fn expire(&self) {
         if let Some(c) = self.0.lock().await.as_mut() {
@@ -170,16 +219,31 @@ fn unreachable(e: reqwest::Error) -> String {
     format!("Couldn't reach GitHub: {}", e.without_url())
 }
 
-async fn find(timeout: Duration) -> Result<Release, String> {
-    let url = url::Url::parse_with_params(
-        &format!(
-            "{}/repos/{}/releases",
-            config::GITHUB_API_URL,
-            config::RELEASE_REPO
-        ),
-        [("per_page", config::RELEASES_SEARCHED.to_string())],
-    )
-    .map_err(|e| e.to_string())?;
+/// The release tagged `pin` on GitHub, else the latest ranked one.
+async fn find(pin: Option<&str>, timeout: Duration) -> Result<Release, String> {
+    let releases = format!(
+        "{}/repos/{}/releases",
+        config::GITHUB_API_URL,
+        config::RELEASE_REPO
+    );
+    let url = match pin {
+        Some(tag) => {
+            let mut url = url::Url::parse(&releases).map_err(|e| e.to_string())?;
+            url.path_segments_mut()
+                .map_err(|()| "GitHub's API URL can't take a path".to_string())?
+                .extend(["tags", tag]);
+            url
+        }
+        None => url::Url::parse_with_params(
+            &releases,
+            [("per_page", config::RELEASES_SEARCHED.to_string())],
+        )
+        .map_err(|e| e.to_string())?,
+    };
+    log::info!(
+        "Asking GitHub for release {}",
+        pin.unwrap_or("(latest ranked)")
+    );
     let response = server::client(timeout)?
         .get(url)
         .header("Accept", "application/vnd.github+json")
@@ -187,8 +251,12 @@ async fn find(timeout: Duration) -> Result<Release, String> {
         .await
         .map_err(unreachable)?;
     let status = response.status().as_u16();
+    log::debug!("GitHub answered {status}");
     let body = response.text().await.map_err(unreachable)?;
-    pick(status, &body)
+    match pin {
+        Some(tag) => pick_tagged(status, &body, tag),
+        None => pick(status, &body),
+    }
 }
 
 async fn download(release: Release, timeout: Duration) -> Result<String, String> {
@@ -339,7 +407,7 @@ mod tests {
         }
     }
 
-    /// `latest_with` with a canned release; the code downloaded is `code` and counted.
+    /// `get_with` (the latest release) with a canned release; the code downloaded is `code` and counted.
     async fn latest(
         cache: &ReleaseCache,
         release: Release,
@@ -347,7 +415,8 @@ mod tests {
         downloads: &AtomicUsize,
     ) -> Result<(String, String), String> {
         cache
-            .latest_with(
+            .get_with(
+                None,
                 MAX_AGE,
                 || async move { Ok(release) },
                 |_| async move {
@@ -405,11 +474,59 @@ mod tests {
     }
 
     #[test]
+    fn picks_the_pinned_release() {
+        let body = release("1.3.2R", false, true, &["genjiball-v1.3.2R.txt"]).to_string();
+        // A pre-release counts when pinned.
+        assert_eq!(pick_tagged(200, &body, "1.3.2R").unwrap().tag, "1.3.2R");
+        assert!(pick_tagged(200, &body, "1.3.3R")
+            .unwrap_err()
+            .contains("when asked for 1.3.3R"));
+        let no_code = release("1.3.2R", false, false, &["notes.md"]).to_string();
+        assert!(pick_tagged(200, &no_code, "1.3.2R")
+            .unwrap_err()
+            .contains("1.3.2R has no Workshop code file (genjiball-v1.3.2R.txt)"));
+        assert_eq!(
+            pick_tagged(404, r#"{"message":"Not Found"}"#, "9.9.9R").unwrap_err(),
+            "Genji-Ball-Team/GenjiBall-CE has no release 9.9.9R. Check the ranked code release under Advanced, or leave it empty for the latest"
+        );
+        assert!(pick_tagged(403, "{}", "1.3.2R")
+            .unwrap_err()
+            .contains("limiting"));
+        assert!(pick_tagged(200, "[]", "1.3.2R").is_err());
+    }
+
+    #[test]
+    fn a_new_pin_asks_github_again() {
+        tauri::async_runtime::block_on(async {
+            let cache = ReleaseCache::default();
+            let get = |pin: Option<&'static str>, tag: &'static str, id: u64| {
+                cache.get_with(
+                    pin,
+                    MAX_AGE,
+                    move || async move { Ok(found(tag, id, "x")) },
+                    move |_| async move { Ok(format!("code {tag}")) },
+                )
+            };
+            assert_eq!(get(None, "1.3.3R", 1).await.unwrap().0, "1.3.3R");
+            // Fresh, but for another pin: GitHub is asked for it.
+            assert_eq!(
+                get(Some("1.3.2R"), "1.3.2R", 2).await.unwrap(),
+                ("1.3.2R".into(), "code 1.3.2R".into())
+            );
+            // The same pin while fresh: from memory.
+            assert_eq!(get(Some("1.3.2R"), "9.9.9R", 9).await.unwrap().0, "1.3.2R");
+            // Back to the latest.
+            assert_eq!(get(None, "1.3.3R", 1).await.unwrap().0, "1.3.3R");
+        });
+    }
+
+    #[test]
     fn a_failed_check_keeps_nothing() {
         tauri::async_runtime::block_on(async {
             let cache = ReleaseCache::default();
             let failed = cache
-                .latest_with(
+                .get_with(
+                    None,
                     MAX_AGE,
                     || async { Err::<Release, _>("offline".to_string()) },
                     |_| async { Ok(String::new()) },
@@ -430,7 +547,8 @@ mod tests {
                     let (cache, finds) = (cache.clone(), finds.clone());
                     tauri::async_runtime::spawn(async move {
                         cache
-                            .latest_with(
+                            .get_with(
+                                None,
                                 MAX_AGE,
                                 || async move {
                                     finds.fetch_add(1, Ordering::SeqCst);

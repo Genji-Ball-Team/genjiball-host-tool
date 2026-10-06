@@ -21,6 +21,13 @@ interface AppState {
   advanced: AdvancedSetting[];
   /** How often the match view reads its log again, in seconds. */
   matchViewPollSecs: number;
+  /** The log level the host picked, `null` for `defaultLogLevel`. */
+  logLevel: string | null;
+  logLevels: string[];
+  defaultLogLevel: string;
+  /** The GenjiBall-CE release the ranked code is built from, `null` for the latest ranked one. */
+  releaseTag: string | null;
+  releaseTagSuffix: string;
 }
 
 /** Mirrors `Region` in src-tauri/src/config.rs. */
@@ -296,6 +303,36 @@ function render(): void {
   renderRegion();
   renderLobbySettings();
   renderAdvanced();
+  renderDebug();
+}
+
+/** The ranked code release and the log level, under Advanced. */
+function renderDebug(): void {
+  const tag = el<HTMLInputElement>("release-tag");
+  if (document.activeElement !== tag) tag.value = state.releaseTag ?? "";
+  el("release-example").textContent = `1.3.3${state.releaseTagSuffix}`;
+  if (state.releaseTag) el<HTMLDetailsElement>("release").open = true;
+
+  const select = el<HTMLSelectElement>("log-level");
+  if (select.options.length !== state.logLevels.length) {
+    select.replaceChildren(
+      ...state.logLevels.map((level) => {
+        const option = document.createElement("option");
+        option.value = level;
+        option.textContent = level === state.defaultLogLevel ? `${level} (default)` : level;
+        return option;
+      }),
+    );
+  }
+  select.value = state.logLevel ?? state.defaultLogLevel;
+  if (state.logLevel) el<HTMLDetailsElement>("debug").open = true;
+}
+
+function setLine(id: string, text: string, tone: "good" | "bad" | "muted"): void {
+  const line = el(id);
+  line.hidden = !text;
+  line.textContent = text;
+  line.className = tone;
 }
 
 /** The live lobby's switch and name, as saved, unless the host is editing the name. */
@@ -854,6 +891,50 @@ el("advanced-form").addEventListener("submit", (e) => {
 });
 el("advanced-reset").addEventListener("click", () => {
   void busy(() => saveAdvanced({}), (m) => setAdvancedState(m, "bad"));
+});
+
+el("release-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  void busy(
+    async () => {
+      setLine("release-state", "", "muted");
+      const next = await invoke<AppState>("set_release_tag", { tag: el<HTMLInputElement>("release-tag").value });
+      el<HTMLInputElement>("release-tag").value = next.releaseTag ?? "";
+      // A code kept from the other release is no use now.
+      uncopied = null;
+      await show(next);
+      setLine("release-state", next.releaseTag ? `Saved. The ranked code is built on ${next.releaseTag}.` : "Saved. The ranked code is built on the latest ranked release.", "good");
+    },
+    (m) => setLine("release-state", m, "bad"),
+  );
+});
+
+el("log-level").addEventListener("change", () => {
+  void busy(
+    async () => {
+      setLine("debug-state", "", "muted");
+      const level = el<HTMLSelectElement>("log-level").value;
+      await show(await invoke<AppState>("set_log_level", { level: level === state.defaultLogLevel ? null : level }));
+      setLine("debug-state", `Logging at ${level} from now on.`, "good");
+    },
+    (m) => {
+      setLine("debug-state", m, "bad");
+      renderDebug();
+    },
+  );
+});
+
+el("log-open").addEventListener("click", () => void busy(() => invoke<void>("open_log_folder"), (m) => setLine("debug-state", m, "bad")));
+
+el("diagnostics-export").addEventListener("click", () => {
+  void busy(
+    async () => {
+      setLine("debug-state", "", "muted");
+      const path = await invoke<string | null>("export_diagnostics");
+      if (path) setLine("debug-state", `Saved to ${path}. Attach it to your bug report.`, "good");
+    },
+    (m) => setLine("debug-state", m, "bad"),
+  );
 });
 
 el("log-folder-choose").addEventListener("click", () => {

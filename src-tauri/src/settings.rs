@@ -28,6 +28,11 @@ pub struct Settings {
     pub live_lobby: Option<bool>,
     /// The name the site lists the lobby under, as `normalize_lobby_name` keeps it. `None`: no name.
     pub lobby_name: Option<String>,
+    /// How much the tool logs, one of `config::LOG_LEVELS`. `None`: `config::DEFAULT_LOG_LEVEL`.
+    pub log_level: Option<String>,
+    /// The GenjiBall-CE release the ranked code is built from (`1.3.3R`). `None`: the latest ranked
+    /// release. Ends in `config::RELEASE_TAG_SUFFIX` (`normalize_release_tag`).
+    pub release_tag: Option<String>,
     /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -62,6 +67,13 @@ impl Settings {
     /// `get`, as a duration: every tunable is in seconds.
     pub fn secs(&self, tunable: &Tunable) -> Duration {
         Duration::from_secs(self.get(tunable))
+    }
+
+    /// The log level the host picked, or the default.
+    pub fn log_level(&self) -> &str {
+        self.log_level
+            .as_deref()
+            .unwrap_or(config::DEFAULT_LOG_LEVEL)
     }
 
     /// Every tunable's value, from `values` (`normalize_advanced`): one left out goes back to its
@@ -127,6 +139,38 @@ pub fn normalize_lobby_name(input: &str) -> Result<Option<String>, String> {
     Ok((!name.is_empty()).then(|| name.to_string()))
 }
 
+/// A log level the host picked, as it's stored: `None` for the default (or nothing picked).
+pub fn normalize_log_level(level: Option<&str>) -> Result<Option<String>, String> {
+    match level {
+        None => Ok(None),
+        Some(level) if level == config::DEFAULT_LOG_LEVEL => Ok(None),
+        Some(level) if config::LOG_LEVELS.contains(&level) => Ok(Some(level.to_string())),
+        Some(level) => Err(format!("There's no log level {level}")),
+    }
+}
+
+/// The GenjiBall-CE release tag the host typed, as it's stored: `None` (empty) for the latest
+/// ranked release. A ranked tag ends in `config::RELEASE_TAG_SUFFIX`; only letters, digits, `.`,
+/// `-` and `_`, so it goes in a GitHub URL as it is.
+pub fn normalize_release_tag(input: &str) -> Result<Option<String>, String> {
+    let tag = input.trim();
+    if tag.is_empty() {
+        return Ok(None);
+    }
+    let suffix = config::RELEASE_TAG_SUFFIX;
+    let ranked = tag.len() > suffix.len() && tag.ends_with(suffix);
+    let plain = tag
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if ranked && plain {
+        Ok(Some(tag.to_string()))
+    } else {
+        Err(format!(
+            "A ranked release's tag ends in {suffix}, like 1.3.3{suffix}. Leave it empty for the latest"
+        ))
+    }
+}
+
 /// The settings in `path`, or the defaults when the file doesn't exist yet. A file that can't be
 /// read as settings is an error rather than silently reset, so a typo doesn't lose the others.
 /// So is a server URL the window wouldn't take (`normalize_server_url`): the token is sent there,
@@ -150,6 +194,13 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     if let Some(name) = &settings.lobby_name {
         settings.lobby_name =
             normalize_lobby_name(name).map_err(|e| format!("{e} (in {})", path.display()))?;
+    }
+    // Edited by hand, like the region: stored as the window would have.
+    settings.log_level = normalize_log_level(settings.log_level.as_deref())
+        .map_err(|e| format!("{e} in {}", path.display()))?;
+    if let Some(tag) = &settings.release_tag {
+        settings.release_tag =
+            normalize_release_tag(tag).map_err(|e| format!("{e} (in {})", path.display()))?;
     }
     // Edited by hand: a value out of range (a quiet time of 0, say) would upload every match
     // half-played.
@@ -258,6 +309,8 @@ mod tests {
             region: Some("na".into()),
             live_lobby: Some(false),
             lobby_name: Some("Kenzo's ranked".into()),
+            log_level: Some("debug".into()),
+            release_tag: Some("1.3.3R".into()),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
@@ -449,6 +502,58 @@ mod tests {
         let long = "x".repeat(config::LOBBY_NAME_MAX_CHARS + 1);
         fs::write(&path, format!(r#"{{ "lobbyName": "{long}" }}"#)).unwrap();
         assert!(load(&path).unwrap_err().contains("lobby name"));
+    }
+
+    #[test]
+    fn log_levels_are_stored_as_null_at_the_default() {
+        assert_eq!(normalize_log_level(None), Ok(None));
+        assert_eq!(
+            normalize_log_level(Some(config::DEFAULT_LOG_LEVEL)),
+            Ok(None)
+        );
+        assert_eq!(normalize_log_level(Some("debug")), Ok(Some("debug".into())));
+        assert!(normalize_log_level(Some("trace")).is_err());
+        assert!(normalize_log_level(Some("DEBUG")).is_err());
+        assert_eq!(Settings::default().log_level(), config::DEFAULT_LOG_LEVEL);
+    }
+
+    #[test]
+    fn checks_the_log_level_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{ "logLevel": "warn" }"#).unwrap();
+        assert_eq!(load(&path).unwrap().log_level(), "warn");
+        fs::write(&path, r#"{ "logLevel": "info" }"#).unwrap();
+        assert_eq!(load(&path).unwrap().log_level, None);
+        fs::write(&path, r#"{ "logLevel": "loud" }"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("log level"));
+    }
+
+    #[test]
+    fn a_pinned_release_is_a_ranked_tag() {
+        assert_eq!(normalize_release_tag(" 1.3.3R "), Ok(Some("1.3.3R".into())));
+        assert_eq!(normalize_release_tag(""), Ok(None));
+        assert_eq!(normalize_release_tag("  "), Ok(None));
+        for bad in ["1.3.3", "1.3.3T", "R", "1.3.3 R", "../1.3.3R", "1.3.3R?x=R"] {
+            assert!(
+                normalize_release_tag(bad)
+                    .unwrap_err()
+                    .contains("ends in R"),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn checks_the_release_tag_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{ "releaseTag": "1.3.3R" }"#).unwrap();
+        assert_eq!(load(&path).unwrap().release_tag.as_deref(), Some("1.3.3R"));
+        fs::write(&path, r#"{ "releaseTag": "" }"#).unwrap();
+        assert_eq!(load(&path).unwrap().release_tag, None);
+        fs::write(&path, r#"{ "releaseTag": "1.3.3" }"#).unwrap();
+        assert!(load(&path).is_err());
     }
 
     #[test]

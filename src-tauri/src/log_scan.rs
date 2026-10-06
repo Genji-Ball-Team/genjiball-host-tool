@@ -46,7 +46,7 @@ fn round_start(event: &str) -> Option<u32> {
 }
 
 /// The event part of a line: the Workshop's `[hh:mm:ss] ` prefix stripped, if it's there.
-fn event(line: &str) -> &str {
+pub fn event(line: &str) -> &str {
     let line = line.trim_end_matches('\r');
     match line
         .strip_prefix('[')

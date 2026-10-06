@@ -96,6 +96,21 @@
         <p class="note">The latest ranked release of Genji Ball, with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
       </section>
 
+      <section id="lobby">
+        <h2>Live lobby</h2>
+        <p id="lobby-state" role="status"></p>
+        <form id="lobby-form">
+          <label class="check"><input id="lobby-on" type="checkbox" /> List my lobby on the site while I host a ranked match</label>
+          <label for="lobby-name">Lobby name (optional)</label>
+          <div class="row">
+            <input id="lobby-name" type="text" autocomplete="off" placeholder="Shown on the site next to your host name" />
+            <button type="submit">Save</button>
+          </div>
+          <p id="lobby-form-state" role="status" hidden></p>
+        </form>
+        <p class="note">While a ranked match is played in your newest Workshop log, the site lists your lobby in the region above with how many players are in it. It's taken off when the match ends, the log stops growing (the game closed) or you quit the tool.</p>
+      </section>
+
       <section>
         <h2>Uploads</h2>
         <p id="upload-region"></p>

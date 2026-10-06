@@ -23,6 +23,11 @@ pub struct Settings {
     /// The region the host hosts in now, an id from `config::REGIONS`. `None`: the host's home
     /// region, which an admin sets on the server.
     pub region: Option<String>,
+    /// Whether the host's lobby is listed on the site while a ranked match is played (#6).
+    /// `None`: `config::LIVE_LOBBY_ON_BY_DEFAULT`.
+    pub live_lobby: Option<bool>,
+    /// The name the site lists the lobby under, as `normalize_lobby_name` keeps it. `None`: no name.
+    pub lobby_name: Option<String>,
     /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -34,6 +39,16 @@ impl Settings {
         self.server_url
             .as_deref()
             .unwrap_or(config::DEFAULT_SERVER_URL)
+    }
+
+    /// Whether the live lobby is on.
+    pub fn live_lobby_on(&self) -> bool {
+        self.live_lobby.unwrap_or(config::LIVE_LOBBY_ON_BY_DEFAULT)
+    }
+
+    /// Switches the live lobby on or off. At the default it's stored as `None`.
+    pub fn set_live_lobby(&mut self, on: bool) {
+        self.live_lobby = (on != config::LIVE_LOBBY_ON_BY_DEFAULT).then_some(on);
     }
 
     /// The host's value for `tunable`, or its default.
@@ -95,6 +110,23 @@ pub fn check_region(region: &str) -> Result<(), String> {
     }
 }
 
+/// A lobby name as the host typed it, as it's stored and sent: spaces around it dropped, `None`
+/// when empty. One the server would refuse (over `config::LOBBY_NAME_MAX_CHARS` characters) or
+/// with a line break is an error.
+pub fn normalize_lobby_name(input: &str) -> Result<Option<String>, String> {
+    let name = input.trim();
+    if name.chars().count() > config::LOBBY_NAME_MAX_CHARS {
+        return Err(format!(
+            "The lobby name can be at most {} characters",
+            config::LOBBY_NAME_MAX_CHARS
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("The lobby name can't have line breaks or tabs".into());
+    }
+    Ok((!name.is_empty()).then(|| name.to_string()))
+}
+
 /// The settings in `path`, or the defaults when the file doesn't exist yet. A file that can't be
 /// read as settings is an error rather than silently reset, so a typo doesn't lose the others.
 /// So is a server URL the window wouldn't take (`normalize_server_url`): the token is sent there,
@@ -113,6 +145,11 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     // Edited by hand: the server would refuse every upload with a region it doesn't know.
     if let Some(region) = &settings.region {
         check_region(region).map_err(|e| format!("{e} in {}", path.display()))?;
+    }
+    // Edited by hand: the server would refuse every heartbeat with it.
+    if let Some(name) = &settings.lobby_name {
+        settings.lobby_name =
+            normalize_lobby_name(name).map_err(|e| format!("{e} (in {})", path.display()))?;
     }
     // Edited by hand: a value out of range (a quiet time of 0, say) would upload every match
     // half-played.
@@ -219,6 +256,8 @@ mod tests {
             server_url: Some("http://localhost:8787".into()),
             log_folder: Some(PathBuf::from(r"D:\Logs")),
             region: Some("na".into()),
+            live_lobby: Some(false),
+            lobby_name: Some("Kenzo's ranked".into()),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
@@ -367,6 +406,49 @@ mod tests {
             fs::write(&path, format!(r#"{{ "region": "{bad}" }}"#)).unwrap();
             assert!(load(&path).unwrap_err().contains("region"), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_live_lobby_is_on_until_switched_off() {
+        let mut settings = Settings::default();
+        assert!(settings.live_lobby_on());
+        settings.set_live_lobby(false);
+        assert_eq!(settings.live_lobby, Some(false));
+        assert!(!settings.live_lobby_on());
+        // Back at the default: stored as `null`, so a new default reaches this host.
+        settings.set_live_lobby(true);
+        assert_eq!(settings.live_lobby, None);
+    }
+
+    #[test]
+    fn normalizes_lobby_names() {
+        assert_eq!(
+            normalize_lobby_name("  Kenzo's ranked "),
+            Ok(Some("Kenzo's ranked".into()))
+        );
+        assert_eq!(normalize_lobby_name("   "), Ok(None));
+        // Characters, not bytes: the server counts them the same way.
+        let longest = "é".repeat(config::LOBBY_NAME_MAX_CHARS);
+        assert_eq!(normalize_lobby_name(&longest), Ok(Some(longest.clone())));
+        assert!(normalize_lobby_name(&format!("{longest}e")).is_err());
+        assert!(normalize_lobby_name("two\nlines").is_err());
+    }
+
+    #[test]
+    fn checks_the_lobby_name_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{ "lobbyName": " EU night ", "liveLobby": false }"#,
+        )
+        .unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(settings.lobby_name.as_deref(), Some("EU night"));
+        assert!(!settings.live_lobby_on());
+        let long = "x".repeat(config::LOBBY_NAME_MAX_CHARS + 1);
+        fs::write(&path, format!(r#"{{ "lobbyName": "{long}" }}"#)).unwrap();
+        assert!(load(&path).unwrap_err().contains("lobby name"));
     }
 
     #[test]

@@ -3,6 +3,8 @@ mod config;
 mod credentials;
 mod dpapi;
 mod history;
+mod live_lobby;
+mod lobby;
 mod log_folder;
 mod log_scan;
 mod ranked_code;
@@ -22,10 +24,11 @@ use afk::AfkStatus;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, State, WindowEvent};
+use tauri::{Manager, RunEvent, State, WindowEvent};
 
 use credentials::Tokens;
 use history::Page;
+use live_lobby::{LiveLobby, LobbyStatus};
 use log_folder::LogFolder;
 use release::ReleaseCache;
 use server::TokenCheck;
@@ -103,6 +106,10 @@ struct AppState {
     /// The region the host picked, `None` for their home region.
     region: Option<String>,
     regions: &'static [config::Region],
+    /// Whether the live lobby is on (#6), and the name it's listed under (`None`: none).
+    live_lobby: bool,
+    lobby_name: Option<String>,
+    lobby_name_max: usize,
     settings_error: Option<String>,
     /// Every `config::TUNABLES`, in order, with the host's value.
     advanced: Vec<AdvancedSetting>,
@@ -133,6 +140,9 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         log_folder: log_folder::current(settings.log_folder.as_deref()),
         region: settings.region.clone(),
         regions: &config::REGIONS,
+        live_lobby: settings.live_lobby_on(),
+        lobby_name: settings.lobby_name.clone(),
+        lobby_name_max: config::LOBBY_NAME_MAX_CHARS,
         settings_error,
         advanced: config::TUNABLES
             .iter()
@@ -159,6 +169,7 @@ fn get_state(app: tauri::AppHandle, store: State<Store>) -> Result<AppState, Str
 async fn check_saved_token(
     store: State<'_, Store>,
     uploader: State<'_, Uploader>,
+    lobby: State<'_, LiveLobby>,
 ) -> Result<TokenCheck, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
@@ -173,6 +184,7 @@ async fn check_saved_token(
     if matches!(check, TokenCheck::Ok { .. }) {
         // The server knows it now (an admin fixed it, say): stop holding uploads for it.
         uploader.token_ok();
+        lobby.changed();
     }
     Ok(check)
 }
@@ -184,6 +196,7 @@ async fn save_token(
     token: String,
     store: State<'_, Store>,
     uploader: State<'_, Uploader>,
+    lobby: State<'_, LiveLobby>,
 ) -> Result<TokenCheck, String> {
     let token = token.trim();
     if token.is_empty() {
@@ -200,14 +213,20 @@ async fn save_token(
         uploader.start(&server_url);
         uploader.token_ok();
         uploader.changed();
+        lobby.changed();
     }
     Ok(check)
 }
 
 #[tauri::command]
-fn forget_token(store: State<Store>, uploader: State<Uploader>) -> Result<(), String> {
+fn forget_token(
+    store: State<Store>,
+    uploader: State<Uploader>,
+    lobby: State<LiveLobby>,
+) -> Result<(), String> {
     store.tokens.delete(store.get().server_url())?;
     uploader.changed();
+    lobby.changed();
     Ok(())
 }
 
@@ -279,10 +298,12 @@ fn set_server_url(
     app: tauri::AppHandle,
     store: State<Store>,
     uploader: State<Uploader>,
+    lobby: State<LiveLobby>,
 ) -> Result<AppState, String> {
     let url = settings::normalize_server_url(&url)?;
     store.update(|s| s.server_url = url)?;
     uploader.changed();
+    lobby.changed();
     app_state(&app, &store)
 }
 
@@ -293,9 +314,11 @@ fn set_log_folder(
     app: tauri::AppHandle,
     store: State<Store>,
     uploader: State<Uploader>,
+    lobby: State<LiveLobby>,
 ) -> Result<AppState, String> {
     store.update(|s| s.log_folder = path)?;
     uploader.changed();
+    lobby.changed();
     app_state(&app, &store)
 }
 
@@ -307,12 +330,14 @@ fn set_region(
     app: tauri::AppHandle,
     store: State<Store>,
     uploader: State<Uploader>,
+    lobby: State<LiveLobby>,
 ) -> Result<AppState, String> {
     if let Some(region) = &region {
         settings::check_region(region)?;
     }
     store.update(|s| s.region = region)?;
     uploader.changed();
+    lobby.changed();
     app_state(&app, &store)
 }
 
@@ -324,12 +349,39 @@ fn set_advanced(
     app: tauri::AppHandle,
     store: State<Store>,
     uploader: State<Uploader>,
+    lobby: State<LiveLobby>,
 ) -> Result<AppState, String> {
     let values = settings::normalize_advanced(&values)?;
     store.update(|s| s.replace_advanced(values))?;
     // The next poll starts now, with the new values.
     uploader.wake();
+    lobby.changed();
     app_state(&app, &store)
+}
+
+/// Switches the live lobby on or off and sets the name it's listed under (empty: none). The next
+/// heartbeat says the new name; switched off, a listed lobby is taken off the list now.
+#[tauri::command]
+fn set_live_lobby(
+    on: bool,
+    name: String,
+    app: tauri::AppHandle,
+    store: State<Store>,
+    lobby: State<LiveLobby>,
+) -> Result<AppState, String> {
+    let name = settings::normalize_lobby_name(&name)?;
+    store.update(|s| {
+        s.set_live_lobby(on);
+        s.lobby_name = name;
+    })?;
+    lobby.changed();
+    app_state(&app, &store)
+}
+
+/// Whether the host's lobby is listed on the site now, and why not.
+#[tauri::command]
+fn get_lobby_status(lobby: State<LiveLobby>) -> LobbyStatus {
+    lobby.status()
 }
 
 /// The update the last check found, and whether the last check worked.
@@ -497,7 +549,9 @@ pub fn run() {
             app.manage(Uploader::new(dir.join(config::UPLOADS_FILE)));
             app.manage(ReleaseCache::default());
             app.manage(Updates::default());
+            app.manage(LiveLobby::default());
             uploader::start(app.handle().clone());
+            live_lobby::start(app.handle().clone());
             updates::start(app.handle().clone());
             tray(app)?;
             Ok(())
@@ -523,13 +577,21 @@ pub fn run() {
             get_upload_history,
             retry_upload,
             set_afk,
+            set_live_lobby,
+            get_lobby_status,
             open_match,
             get_update_status,
             check_for_update,
             install_update
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running the host tool");
+        .build(tauri::generate_context!())
+        .expect("error while running the host tool")
+        .run(|app, event| {
+            // Quit from the tray: take a listed lobby off the site rather than wait for its TTL.
+            if let RunEvent::Exit = event {
+                live_lobby::close_on_quit(app);
+            }
+        });
 }
 
 #[cfg(test)]

@@ -12,6 +12,10 @@ interface AppState {
   /** The region the host picked, `null` for their home region. */
   region: string | null;
   regions: Region[];
+  /** Whether the live lobby is on, and the name it's listed under (`null`: none). */
+  liveLobby: boolean;
+  lobbyName: string | null;
+  lobbyNameMax: number;
   settingsError: string | null;
   advanced: AdvancedSetting[];
 }
@@ -143,6 +147,27 @@ interface RankedCode {
   keepSecs: number;
 }
 
+/** Mirrors `LobbyStatus` in src-tauri/src/live_lobby.rs: what `get_lobby_status` returns. */
+interface LobbyStatus {
+  serverUrl: string;
+  on: boolean;
+  /** What's being played in the live log. */
+  live: { kind: "idle" } | { kind: "unranked" } | { kind: "playing"; players: number };
+  /** The lobby as the site lists it, `null` when it isn't listed. Mirrors `ListedLobby` in src-tauri/src/server.rs. */
+  listed: { region: string; name: string | null; players: number } | null;
+  problem: LobbyProblem | null;
+}
+
+/** Mirrors `LobbyProblem` in src-tauri/src/live_lobby.rs. */
+type LobbyProblem =
+  | { kind: "settings" }
+  | { kind: "noFolder" }
+  | { kind: "folderUnreadable"; message: string }
+  | { kind: "noToken" }
+  | { kind: "tokenRejected"; revoked: boolean }
+  | { kind: "noRegion" }
+  | { kind: "failed"; message: string };
+
 /** Mirrors `UpdateStatus` in src-tauri/src/updates.rs. */
 interface UpdateStatus {
   /** The version waiting to be installed. */
@@ -266,7 +291,16 @@ function render(): void {
   el("log-folder-reset").hidden = folder?.source !== "custom";
 
   renderRegion();
+  renderLobbySettings();
   renderAdvanced();
+}
+
+/** The live lobby's switch and name, as saved, unless the host is editing the name. */
+function renderLobbySettings(): void {
+  el<HTMLInputElement>("lobby-on").checked = state.liveLobby;
+  const name = el<HTMLInputElement>("lobby-name");
+  name.maxLength = state.lobbyNameMax;
+  if (document.activeElement !== name) name.value = state.lobbyName ?? "";
 }
 
 function tunableInput(key: string): HTMLInputElement {
@@ -553,6 +587,88 @@ function showUploadsError(err: unknown): void {
   error.textContent = String(err);
 }
 
+function describeLobbyProblem(problem: LobbyProblem): string {
+  switch (problem.kind) {
+    case "settings":
+      return "Not listed until the settings file is fixed (see above).";
+    case "noFolder":
+      return "Not listed: waiting for the Workshop log folder.";
+    case "folderUnreadable":
+      return `Not listed: can't read the log folder: ${problem.message}`;
+    case "noToken":
+      return "Not listed: there's no host token for this server.";
+    case "tokenRejected":
+      return problem.revoked ? "Not listed: this token was revoked." : "Not listed: the server doesn't know this token.";
+    case "noRegion":
+      return "Not listed: you have no home region yet. Pick the region you host in above.";
+    case "failed":
+      return `Couldn't reach the lobby list, retrying: ${problem.message}`;
+  }
+}
+
+/** The server's name as the host knows it (`genjiball.us`). */
+function serverName(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function players(n: number): string {
+  return n === 1 ? "1 player" : `${n} players`;
+}
+
+function renderLobby(status: LobbyStatus): void {
+  // A poll that began before the host changed the server: not about what's shown.
+  if (status.serverUrl !== state.serverUrl) return;
+  const line = el("lobby-state");
+  const listed = status.listed;
+  let text: string;
+  let tone: Tone = "muted";
+  if (listed) {
+    const name = listed.name ? ` as "${listed.name}"` : "";
+    text = `Listed on ${serverName(status.serverUrl)} in ${regionLabel(listed.region)}${name}, ${players(listed.players)}.`;
+    tone = "good";
+    if (!status.on || status.live.kind !== "playing") text += " Taking it off the list…";
+  } else if (!status.on) {
+    text = "Off: your lobby isn't listed.";
+  } else if (status.problem) {
+    text = describeLobbyProblem(status.problem);
+    tone = "bad";
+  } else if (status.live.kind === "playing") {
+    text = `Ranked match with ${players(status.live.players)}: listing it…`;
+  } else if (status.live.kind === "unranked") {
+    text = "Not listed: this match is unranked, so it won't count.";
+  } else {
+    text = "Not listed: no ranked match is being played.";
+  }
+  // A failure while listed: still listed, but the site may be behind.
+  if (listed && status.problem) {
+    text += ` ${describeLobbyProblem(status.problem)}`;
+    tone = "bad";
+  }
+  line.textContent = text;
+  line.className = tone;
+}
+
+function setLobbyFormState(text: string, tone: "good" | "bad"): void {
+  const line = el("lobby-form-state");
+  line.hidden = !text;
+  line.textContent = text;
+  line.className = tone;
+}
+
+async function saveLobby(): Promise<void> {
+  setLobbyFormState("", "good");
+  const name = el<HTMLInputElement>("lobby-name");
+  const next = await invoke<AppState>("set_live_lobby", { on: el<HTMLInputElement>("lobby-on").checked, name: name.value });
+  // Shown as saved: spaces around it dropped.
+  name.value = next.lobbyName ?? "";
+  await show(next);
+  setLobbyFormState("Saved.", "good");
+}
+
 /** Shows these settings, then the upload status for them (one sent before they were known was dropped). */
 async function show(next: AppState): Promise<void> {
   state = next;
@@ -561,6 +677,7 @@ async function show(next: AppState): Promise<void> {
   const status = await invoke<UploadStatus>("get_upload_status");
   renderAfk(status.afk);
   renderUploads(status);
+  renderLobby(await invoke<LobbyStatus>("get_lobby_status"));
 }
 
 async function refresh(): Promise<void> {
@@ -792,6 +909,17 @@ el("afk-toggle").addEventListener("click", () => {
   );
 });
 
+el("lobby-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  void busy(saveLobby, (m) => setLobbyFormState(m, "bad"));
+});
+el("lobby-on").addEventListener("change", () => {
+  void busy(saveLobby, (m) => {
+    setLobbyFormState(m, "bad");
+    renderLobbySettings();
+  });
+});
+
 el("uploads-newer").addEventListener("click", () => void busy(() => showHistoryPage(historyPage - 1), showUploadsError));
 el("uploads-older").addEventListener("click", () => void busy(() => showHistoryPage(historyPage + 1), showUploadsError));
 
@@ -803,6 +931,9 @@ void busy(async () => {
     // The settings file was fixed by hand (the uploader reads it again): show what's in it now.
     if (state.settingsError && event.payload.problem?.kind !== "settings") void refresh();
     else renderUploads(event.payload);
+  });
+  await listen<LobbyStatus>("lobby-status", (event) => {
+    if (ready) renderLobby(event.payload);
   });
   await listen<UpdateStatus>("update-status", (event) => {
     if (ready) renderUpdate(event.payload);

@@ -426,6 +426,147 @@ pub async fn upload(
     }
 }
 
+/// The host's lobby as the site lists it, from a heartbeat's answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListedLobby {
+    /// The region it's listed in: the heartbeat's `X-Region`, else the host's home region.
+    pub region: String,
+    pub name: Option<String>,
+    pub players: u32,
+}
+
+/// What a heartbeat (`PUT /api/host/lobby`) answered when the server took it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LobbyAnswer {
+    pub lobby: ListedLobby,
+    /// When to send the next heartbeat. `None`: `config::LOBBY_HEARTBEAT_SECS`.
+    #[serde(default)]
+    pub heartbeat_seconds: Option<u64>,
+    /// How long the lobby is listed without one. `None`: `config::LOBBY_TTL_SECS`.
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
+}
+
+/// What came of a heartbeat or a close.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LobbyOutcome {
+    /// The heartbeat was taken: the lobby is listed.
+    Listed(LobbyAnswer),
+    /// The close was taken: the lobby is off the list (or wasn't on it).
+    Closed,
+    /// The host has no home region and the heartbeat didn't say one (`422 no_region`).
+    NoRegion,
+    /// The token doesn't work (`401`) or was revoked (`403`): a revoked host's lobby isn't listed.
+    TokenRejected { revoked: bool },
+    /// Too soon after the last heartbeat or close (`429`): nothing was written. Not an error: send
+    /// it after `after` (its `Retry-After`).
+    RateLimited { after: Option<Duration> },
+    /// Offline, the server down, or an answer that isn't one of the above.
+    Failed { message: String },
+}
+
+/// What a `PUT` (`closing` false) or `DELETE` (`closing` true) of `/api/host/lobby` answered.
+pub fn read_lobby(
+    status: u16,
+    retry_after: Option<&str>,
+    body: &str,
+    closing: bool,
+) -> LobbyOutcome {
+    let unexpected = || LobbyOutcome::Failed {
+        message: "The server's answer wasn't what the host tool expected".into(),
+    };
+    let error = serde_json::from_str::<ApiError>(body).ok();
+    match status {
+        // `{ "closed": false }` when no lobby was open: off the list all the same.
+        200 if closing => match serde_json::from_str::<serde_json::Value>(body) {
+            Ok(answer) if answer.get("closed").is_some_and(|c| c.is_boolean()) => {
+                LobbyOutcome::Closed
+            }
+            _ => unexpected(),
+        },
+        200 => serde_json::from_str(body).map_or_else(|_| unexpected(), LobbyOutcome::Listed),
+        401 => LobbyOutcome::TokenRejected { revoked: false },
+        403 => LobbyOutcome::TokenRejected { revoked: true },
+        422 if error.as_ref().is_some_and(|e| e.error == "no_region") => LobbyOutcome::NoRegion,
+        429 => LobbyOutcome::RateLimited {
+            after: retry_after
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(Duration::from_secs),
+        },
+        // An older server without the route, or the wrong URL.
+        404 => LobbyOutcome::Failed {
+            message: "This server can't list live lobbies yet (it may need updating), or the server URL is wrong".into(),
+        },
+        _ => LobbyOutcome::Failed {
+            message: match error {
+                Some(e) if !e.message.is_empty() => e.message,
+                _ => format!("The server answered {status}"),
+            },
+        },
+    }
+}
+
+/// Says the host's lobby is open: `PUT /api/host/lobby` with its players and name (`None`: no
+/// name, which clears one sent before), as `region` (`None`: the host's home region).
+pub async fn lobby_heartbeat(
+    server_url: &str,
+    token: &str,
+    region: Option<&str>,
+    players: u32,
+    name: Option<&str>,
+    timeout: Duration,
+) -> LobbyOutcome {
+    let client = match client(timeout) {
+        Ok(client) => client,
+        Err(message) => return LobbyOutcome::Failed { message },
+    };
+    let mut request = client
+        .put(format!("{server_url}/api/host/lobby"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "name": name, "players": players }));
+    if let Some(region) = region {
+        request = request.header("X-Region", region);
+    }
+    lobby_request(request, false).await
+}
+
+/// Takes the host's lobby off the list: `DELETE /api/host/lobby`.
+pub async fn close_lobby(server_url: &str, token: &str, timeout: Duration) -> LobbyOutcome {
+    let client = match client(timeout) {
+        Ok(client) => client,
+        Err(message) => return LobbyOutcome::Failed { message },
+    };
+    let request = client
+        .delete(format!("{server_url}/api/host/lobby"))
+        .bearer_auth(token);
+    lobby_request(request, true).await
+}
+
+async fn lobby_request(request: reqwest::RequestBuilder, closing: bool) -> LobbyOutcome {
+    let failed = |e: reqwest::Error| LobbyOutcome::Failed {
+        message: format!("Couldn't reach the server: {}", e.without_url()),
+    };
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(e) => return failed(e),
+    };
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    match response.text().await {
+        Ok(body) => read_lobby(status, retry_after.as_deref(), &body, closing),
+        // The status alone says the token is turned down, or to wait.
+        Err(_) if matches!(status, 401 | 403 | 429) => {
+            read_lobby(status, retry_after.as_deref(), "", closing)
+        }
+        Err(e) => failed(e),
+    }
+}
+
 /// The HTTP client every request goes through (the ranked server and GitHub). A request taking
 /// longer than `timeout` (`config::REQUEST_TIMEOUT_SECS`, as the host set it) fails.
 pub fn client(timeout: Duration) -> Result<reqwest::Client, String> {
@@ -1025,6 +1166,154 @@ mod tests {
             )),
             UploadOutcome::Retry { .. }
         ));
+    }
+
+    #[test]
+    fn reads_a_listed_lobby() {
+        let body = r#"{"lobby":{"region":"eu","name":"Kenzo's ranked","players":6,"openedAt":"2026-10-05T20:00:00Z","seenAt":"2026-10-05T20:14:00Z"},"heartbeatSeconds":60,"ttlSeconds":180}"#;
+        assert_eq!(
+            read_lobby(200, None, body, false),
+            LobbyOutcome::Listed(LobbyAnswer {
+                lobby: ListedLobby {
+                    region: "eu".into(),
+                    name: Some("Kenzo's ranked".into()),
+                    players: 6,
+                },
+                heartbeat_seconds: Some(60),
+                ttl_seconds: Some(180),
+            })
+        );
+        let unnamed = r#"{"lobby":{"region":"na","name":null,"players":0}}"#;
+        assert!(matches!(
+            read_lobby(200, None, unnamed, false),
+            LobbyOutcome::Listed(LobbyAnswer { lobby, heartbeat_seconds: None, ttl_seconds: None })
+                if lobby.name.is_none() && lobby.region == "na"
+        ));
+        assert!(matches!(
+            read_lobby(200, None, "<html>", false),
+            LobbyOutcome::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn reads_a_close() {
+        for body in [r#"{"closed":true}"#, r#"{"closed":false}"#] {
+            assert_eq!(read_lobby(200, None, body, true), LobbyOutcome::Closed);
+        }
+        assert!(matches!(
+            read_lobby(200, None, "{}", true),
+            LobbyOutcome::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn a_lobby_too_soon_waits_and_a_bad_token_stops() {
+        let limited =
+            r#"{"error":"rate_limited","message":"At most one heartbeat every 30 seconds"}"#;
+        assert_eq!(
+            read_lobby(429, Some("30"), limited, false),
+            LobbyOutcome::RateLimited {
+                after: Some(Duration::from_secs(30))
+            }
+        );
+        assert_eq!(
+            read_lobby(429, None, "", false),
+            LobbyOutcome::RateLimited { after: None }
+        );
+        assert_eq!(
+            read_lobby(401, None, r#"{"error":"unauthorized"}"#, true),
+            LobbyOutcome::TokenRejected { revoked: false }
+        );
+        assert_eq!(
+            read_lobby(403, None, r#"{"error":"revoked"}"#, false),
+            LobbyOutcome::TokenRejected { revoked: true }
+        );
+        assert_eq!(
+            read_lobby(422, None, r#"{"error":"no_region","message":"x"}"#, false),
+            LobbyOutcome::NoRegion
+        );
+        assert_eq!(
+            read_lobby(
+                400,
+                None,
+                r#"{"error":"bad_request","message":"name is longer than 64 characters"}"#,
+                false
+            ),
+            LobbyOutcome::Failed {
+                message: "name is longer than 64 characters".into()
+            }
+        );
+        for status in [404, 500, 503] {
+            assert!(
+                matches!(
+                    read_lobby(status, None, "", false),
+                    LobbyOutcome::Failed { .. }
+                ),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn sends_a_heartbeat_and_a_close() {
+        use tauri::async_runtime::block_on as run;
+        let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
+        let (seen, request) = std::sync::mpsc::channel();
+        let answer = r#"{"lobby":{"region":"na","name":"Late night","players":7},"heartbeatSeconds":60,"ttlSeconds":180}"#;
+        let sent = r#"{"name":"Late night","players":7}"#;
+        let url = test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}",
+                answer.len()
+            ),
+            sent,
+            seen.clone(),
+        );
+        let outcome = run(lobby_heartbeat(
+            &url,
+            "t",
+            Some("na"),
+            7,
+            Some("Late night"),
+            timeout,
+        ));
+        assert!(matches!(outcome, LobbyOutcome::Listed(a) if a.lobby.players == 7));
+        let head = request.recv().unwrap();
+        assert!(head.starts_with("PUT /api/host/lobby "), "{head}");
+        let lower = head.to_ascii_lowercase();
+        assert!(lower.contains("\r\nx-region: na\r\n"), "{head}");
+        assert!(lower.contains("\r\nauthorization: bearer t\r\n"), "{head}");
+        assert!(head.ends_with(sent), "{head}");
+
+        // The home region: no `X-Region`; no name: `null`, which clears one sent before.
+        let unnamed = r#"{"name":null,"players":0}"#;
+        let url = test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}",
+                answer.len()
+            ),
+            unnamed,
+            seen.clone(),
+        );
+        run(lobby_heartbeat(&url, "t", None, 0, None, timeout));
+        let head = request.recv().unwrap();
+        assert!(!head.to_ascii_lowercase().contains("x-region"), "{head}");
+        assert!(head.ends_with(unnamed), "{head}");
+
+        let closed = r#"{"closed":true}"#;
+        let url = test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{closed}",
+                closed.len()
+            ),
+            "",
+            seen,
+        );
+        assert_eq!(run(close_lobby(&url, "t", timeout)), LobbyOutcome::Closed);
+        assert!(request
+            .recv()
+            .unwrap()
+            .starts_with("DELETE /api/host/lobby "));
     }
 
     #[test]

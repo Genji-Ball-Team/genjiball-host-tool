@@ -170,13 +170,17 @@ async function finish(): Promise<void> {
 }
 
 async function save(layout: Layout, sizes: Sizes): Promise<void> {
-  pending = { layout, sizes };
+  const saved = { layout, sizes };
+  pending = saved;
   render();
   try {
     await source.saveLayout?.(layout, sizes);
   } finally {
-    pending = null;
-    await poll();
+    // A newer change while this one was saved stays pending until its own save.
+    if (pending === saved) {
+      pending = null;
+      await poll();
+    }
   }
 }
 

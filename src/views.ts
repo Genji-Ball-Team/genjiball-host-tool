@@ -68,10 +68,21 @@ export function onViewChange(listener: (view: View) => void): void {
   listeners.push(listener);
 }
 
+/** Moves the sidebar's marker to `target`'s button: it slides there (CSS), except the first time. */
+function moveMarker(target: HTMLElement): void {
+  const marker = document.getElementById("nav-marker");
+  if (!marker) return;
+  marker.style.transform = `translateY(${target.offsetTop}px)`;
+  marker.style.height = `${target.offsetHeight}px`;
+  // Placed without sliding first, then slides from there.
+  requestAnimationFrame(() => marker.classList.add("ready"));
+}
+
 export function showView(view: View): void {
   if (view === current) return;
   current = view;
   mark(VIEWS, view, (v) => `view-${v}`, (v) => `nav-${v}`);
+  moveMarker(el(`nav-${view}`));
   store(VIEW_KEY, view);
   for (const listener of listeners) listener(view);
 }
@@ -91,6 +102,10 @@ export function showPane(pane: Pane): void {
 
 /** Binds the sidebar and the Settings panes, and shows those kept from last time. Call once, after `onViewChange`s. */
 export function setupViews(): void {
+  // The narrow sidebar moves the buttons: the marker follows.
+  window.addEventListener("resize", () => {
+    if (current) moveMarker(el(`nav-${current}`));
+  });
   for (const v of VIEWS) el(`nav-${v}`).addEventListener("click", () => showView(v));
   for (const p of PANES) el(`pane-${p}-tab`).addEventListener("click", () => choosePane(p));
   choosePane(savedPane(stored(PANE_KEY)));

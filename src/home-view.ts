@@ -4,9 +4,9 @@
  * lobby and the last upload. A first start (no token yet) shows a short setup instead.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { ago, headline, problems, type Fix, type HomeInput } from "./home-model";
+import { ago, headline, matchInProgress, problems, type Fix, type HomeInput } from "./home-model";
 import { setTitlebarState } from "./titlebar";
-import { currentView, markView, onViewChange } from "./views";
+import { markView, onViewChange } from "./views";
 
 /** Mirrors `LiveFile` in src-tauri/src/match_log.rs: what `get_live_file` returns. */
 interface LiveFile {
@@ -26,6 +26,10 @@ export interface HomeState extends HomeInput {
   region: string;
   lastUpload: { file: string; when: string; text: string; tone: Tone } | null;
   pollSecs: number;
+  /** What the live lobby saw in the live log, `null` while it's off. */
+  lobbyLive: "idle" | "unranked" | "playing" | null;
+  /** How long a log must stop growing before its match counts as over, in seconds. */
+  quietSecs: number;
 }
 
 /** Set by `setupHome`: Home draws nothing before. */
@@ -33,6 +37,8 @@ let get: (() => HomeState) | null = null;
 let fix: (fix: Fix) => void;
 let liveFile: LiveFile | null = null;
 let liveFileError: string | null = null;
+/** The last upload shown, so a new one is marked once (`undefined` before the first). */
+let shownUpload: string | undefined;
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -71,10 +77,13 @@ export function renderHome(): void {
   }
 
   const head = headline(state, state.serverName);
-  setTitlebarState(head.tone === "bad" ? "Paused" : state.dryRun ? "Dry run" : head.tone === "warn" ? "Retrying" : state.serverName, head.tone);
+  // A match being played: the status dots pulse.
+  const playing = matchInProgress(state.lobbyLive, liveFile?.writtenAt ?? null, state.quietSecs, Date.now());
+  setTitlebarState(head.tone === "bad" ? "Paused" : state.dryRun ? "Dry run" : head.tone === "warn" ? "Retrying" : state.serverName, head.tone, playing);
   el("home-status").dataset.tone = head.tone;
+  el("home-status").classList.toggle("playing", playing);
   el("home-headline").textContent = head.text;
-  el("home-detail").textContent = head.detail;
+  el("home-detail").textContent = playing && head.tone === "good" ? "A ranked match is being played." : head.detail;
   el("home-host").textContent = state.host?.name ?? "Not known yet";
   el("home-host-trust").hidden = !state.host?.untrusted;
   const token = el("home-token");
@@ -105,14 +114,25 @@ export function renderHome(): void {
     const { file, when, text, tone } = state.lastUpload;
     last.replaceChildren(node("span", file, "path"), node("span", when, "muted"), node("span", text, tone));
   }
+  const upload = state.lastUpload ? `${state.lastUpload.file}|${state.lastUpload.when}` : "";
+  if (shownUpload !== undefined && upload && upload !== shownUpload) flash(last);
+  shownUpload = upload;
 }
 
-/** Reads the live log's name every `pollSecs` while Home shows. */
+/** Lights `target` up once: something new just came in (`elapsed` ms ago, for one drawn again). */
+export function flash(target: HTMLElement, elapsed = 0): void {
+  target.classList.remove("fresh");
+  void target.offsetWidth; // Restarts the animation.
+  target.style.animationDelay = `-${elapsed}ms`;
+  target.classList.add("fresh");
+}
+
+/** Reads the live log's name every `pollSecs`: Home shows it, and the title bar pulses while it grows. */
 let timer: ReturnType<typeof setTimeout> | undefined;
 
 async function pollLiveFile(): Promise<void> {
   clearTimeout(timer);
-  if (!get || currentView() !== "home") return;
+  if (!get) return;
   const state = get();
   if (state.hasToken && state.logFolder?.exists && document.visibilityState === "visible") {
     try {
@@ -137,6 +157,7 @@ export function homeFolderChanged(): void {
 export function setupHome(state: () => HomeState, onFix: (fix: Fix) => void): void {
   get = state;
   fix = onFix;
+  // Fresh as soon as Home shows.
   onViewChange((view) => {
     if (view === "home") void pollLiveFile();
   });

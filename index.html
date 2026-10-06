@@ -8,231 +8,279 @@
     <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
-    <main>
-      <header>
-        <h1>Genji Ball Host Tool</h1>
-        <span class="muted" id="version"></span>
-        <span class="tag afk" id="afk-tag" hidden>AFK</span>
-      </header>
-
-      <p class="banner bad" id="settings-error" hidden></p>
-      <p class="banner" id="dry-run-banner" hidden>Dry run is on: nothing is uploaded. Turn it off under Advanced → Debug.</p>
-
-      <div class="banner update" id="update-banner" hidden>
-        <span id="update-banner-text"></span>
-        <button type="button" id="update-install">Install and restart</button>
-      </div>
-
-      <section id="welcome" hidden>
-        <p class="lede">Paste the host token an admin gave you. The tool checks it with the ranked server, then keeps it on this PC, encrypted for your Windows account.</p>
-      </section>
-
-      <section id="afk">
-        <h2>AFK</h2>
-        <div class="row">
-          <button type="button" class="quiet" id="afk-toggle" aria-pressed="false" aria-describedby="afk-note">Go AFK</button>
-          <span class="status" id="afk-state" role="status"></span>
+    <div class="app">
+      <nav class="sidebar" aria-label="Views">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="#67d49a" /><path d="M6 23 26 9" stroke="#090b10" stroke-width="3.5" stroke-linecap="round" /></svg>
+          <span class="brand-name">Host Tool</span>
         </div>
-        <p class="note" id="afk-note">Your rating doesn't change in rounds that start while AFK is on. Other players still count. AFK stays on across matches until you turn it off.</p>
-        <p class="note bad" id="afk-error" hidden></p>
-      </section>
-
-      <section id="live">
-        <div class="section-head">
-          <h2>Current match</h2>
-          <button type="button" class="quiet" id="live-toggle" aria-controls="live-match" aria-expanded="true">Hide</button>
+        <div class="nav">
+          <button type="button" id="nav-home" data-view="home" aria-controls="view-home" aria-label="Home" title="Home">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 9.5 10 4l7 5.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-5V17H4a1 1 0 0 1-1-1Z" /></svg>
+            <span>Home</span>
+          </button>
+          <button type="button" id="nav-match" data-view="match" aria-controls="view-match" aria-label="Match" title="Match">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" /><path d="M10 6.5V10l2.5 1.5" /></svg>
+            <span>Match</span>
+          </button>
+          <button type="button" id="nav-uploads" data-view="uploads" aria-controls="view-uploads" aria-label="Uploads" title="Uploads">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V3.5M6 7.5l4-4 4 4M4 13v3h12v-3" /></svg>
+            <span>Uploads</span><i class="dot" id="nav-uploads-dot" hidden></i>
+          </button>
+          <button type="button" id="nav-tourneys" data-view="tourneys" aria-controls="view-tourneys" aria-label="Tourneys" title="Tourneys">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5h8v4a4 4 0 0 1-8 0ZM6 5H3.5v1.5A2.5 2.5 0 0 0 6 9M14 5h2.5v1.5A2.5 2.5 0 0 1 14 9M10 11.5V14M7 16.5h6" /></svg>
+            <span>Tourneys</span><i class="dot" id="nav-tourneys-dot" hidden></i>
+          </button>
+          <button type="button" id="nav-settings" data-view="settings" aria-controls="view-settings" aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M4 14h12" /><circle cx="7.5" cy="6" r="2" /><circle cx="12.5" cy="14" r="2" /></svg>
+            <span>Settings</span>
+          </button>
         </div>
-        <div id="live-match"></div>
-        <p class="note">The newest Workshop log, read the way the ranked server reads it, while this window is open. Ratings are worked out only on the server, from every host's matches.</p>
-      </section>
+        <div class="sidebar-foot">
+          <span class="tag afk" id="afk-tag" hidden>AFK</span>
+          <span class="muted" id="version"></span>
+        </div>
+      </nav>
 
-      <section>
-        <h2>Ranked server</h2>
-        <dl>
-          <dt>Server</dt>
-          <dd id="server"></dd>
-          <dt>Host</dt>
-          <dd><span id="host"></span> <span class="tag" id="host-trust" hidden>Untrusted</span> <span class="status" id="token-status" role="status"></span></dd>
-          <dt><label for="region">Region</label></dt>
-          <dd><select id="region"></select> <span class="status" id="region-status" role="status"></span></dd>
-        </dl>
-        <p class="note" id="region-note">The region you host in now. Ranked keeps EU and NA apart: switch it before you host in the other one.</p>
-        <p class="note" id="host-trust-note" hidden>An admin checks each of your matches before it counts for the ratings. Ask an admin to make you a trusted host.</p>
-
-        <form id="token-form" hidden>
-          <label for="token">Host token</label>
-          <div class="row">
-            <input id="token" type="password" autocomplete="off" spellcheck="false" />
-            <button type="submit">Check and save</button>
-            <button type="button" class="quiet" id="token-cancel" hidden>Cancel</button>
+      <main>
+        <div class="banners">
+          <p class="banner bad" id="settings-error" hidden></p>
+          <p class="banner" id="dry-run-banner" hidden>Dry run is on: nothing is uploaded. Turn it off under Settings → Advanced → Debug.</p>
+          <div class="banner update" id="update-banner" hidden>
+            <span id="update-banner-text"></span>
+            <button type="button" id="update-install">Install and restart</button>
           </div>
-        </form>
-
-        <div class="row" id="token-actions" hidden>
-          <button type="button" id="token-check">Check again</button>
-          <button type="button" class="quiet" id="token-change">Change token</button>
-          <button type="button" class="quiet" id="token-forget">Forget token</button>
         </div>
 
-        <details id="advanced">
-          <summary>Advanced</summary>
-          <form id="server-form">
-            <label for="server-url">Server URL</label>
-            <div class="row">
-              <input id="server-url" type="text" inputmode="url" spellcheck="false" placeholder="https://…" />
-              <button type="submit">Save</button>
+        <section class="view" id="view-home">
+          <header class="view-head"><h1>Home</h1></header>
+          <div class="view-body">
+            <div class="group" id="welcome" hidden>
+              <p class="lede">Paste the host token an admin gave you. The tool checks it with the ranked server, then keeps it on this PC, encrypted for your Windows account.</p>
             </div>
-            <p class="note">Leave empty for <span id="default-server"></span>. Each server keeps its own token.</p>
-          </form>
-        </details>
-      </section>
 
-      <section>
-        <h2>Workshop log folder</h2>
-        <p class="path" id="log-folder"></p>
-        <p class="note" id="log-folder-note"></p>
-        <div class="row">
-          <button type="button" id="log-folder-choose">Choose folder…</button>
-          <button type="button" class="quiet" id="log-folder-reset" hidden>Use the detected folder</button>
-        </div>
-      </section>
-
-      <section>
-        <h2>Ranked code</h2>
-        <div class="row">
-          <button type="button" id="ranked-code-copy">Copy ranked code</button>
-        </div>
-        <p id="ranked-code-state" role="status" hidden></p>
-        <p class="note">The latest ranked release of Genji Ball (or the one picked under Advanced), with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
-      </section>
-
-      <section id="tourneys">
-        <div class="section-head">
-          <h2>Tourneys</h2>
-          <button type="button" class="quiet" id="tourneys-check">Check again</button>
-        </div>
-        <p id="tourneys-state" role="status"></p>
-        <ul class="tourneys" id="tourney-list"></ul>
-        <p class="note bad" id="tourneys-error" hidden></p>
-        <p class="note">The tourney lobbies an admin assigned you, with their start in your time. "Copy tourney code" works from about an hour before the start: it's the ranked code with the lobby's tourney rule turned on (its name, label and round limit), and the rank tags of the tourney's region. Play it with the Tournament preset. When the match ends, screenshot the final standings and upload it here: an admin checks it against the match.</p>
-        <details id="screenshot-settings">
-          <summary>Screenshots folder</summary>
-          <p class="path" id="screenshot-folder"></p>
-          <p class="note" id="screenshot-folder-note"></p>
-          <div class="row">
-            <button type="button" id="screenshot-folder-choose">Choose folder…</button>
-            <button type="button" class="quiet" id="screenshot-folder-reset" hidden>Use the detected folder</button>
-          </div>
-          <p class="note">Where the tool looks for your newest screenshot of the final standings. Overwatch saves screenshots to Documents\Overwatch\ScreenShots\Overwatch.</p>
-        </details>
-      </section>
-
-      <section id="lobby">
-        <h2>Live lobby</h2>
-        <p id="lobby-state" role="status"></p>
-        <form id="lobby-form">
-          <label class="check"><input id="lobby-on" type="checkbox" /> List my lobby on the site while I host a ranked match</label>
-          <label for="lobby-name">Lobby name (optional)</label>
-          <div class="row">
-            <input id="lobby-name" type="text" autocomplete="off" placeholder="Shown on the site next to your host name" />
-            <button type="submit">Save</button>
-          </div>
-          <p id="lobby-form-state" role="status" hidden></p>
-        </form>
-        <p class="note">While a ranked match is played in your newest Workshop log, the site lists your lobby in the region above with how many players are in it. It's taken off when the match ends, the log stops growing (the game closed) or you quit the tool.</p>
-      </section>
-
-      <section>
-        <h2>Uploads</h2>
-        <p id="upload-region"></p>
-        <p id="upload-state" role="status"></p>
-        <p class="note bad" id="upload-retrying" hidden></p>
-        <ul class="uploads" id="uploads"></ul>
-        <div class="row pager" id="uploads-pager" hidden>
-          <button type="button" class="quiet" id="uploads-newer">Newer</button>
-          <span class="muted" id="uploads-range"></span>
-          <button type="button" class="quiet" id="uploads-older">Older</button>
-        </div>
-        <p class="note bad" id="uploads-error" hidden></p>
-        <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. A failed upload is retried automatically. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
-      </section>
-
-      <section>
-        <h2>Updates</h2>
-        <div class="row">
-          <button type="button" id="update-check">Check for updates</button>
-          <span class="status muted" id="update-state" role="status"></span>
-        </div>
-        <p class="note"><span id="update-auto-note"></span> It installs one only when you click "Install and restart". The window closes while it installs; uploads carry on once the new version has started.</p>
-      </section>
-
-      <section>
-        <h2>Advanced</h2>
-        <details id="timing">
-          <summary>Timing</summary>
-          <form id="advanced-form" novalidate>
-            <div id="tunables"></div>
-            <div class="row">
-              <button type="submit">Save</button>
-              <button type="button" class="quiet" id="advanced-reset">Use the defaults</button>
+            <div class="group" id="afk">
+              <h2>AFK</h2>
+              <div class="row">
+                <button type="button" class="quiet" id="afk-toggle" aria-pressed="false" aria-describedby="afk-note">Go AFK</button>
+                <span class="status" id="afk-state" role="status"></span>
+              </div>
+              <p class="note" id="afk-note">Your rating doesn't change in rounds that start while AFK is on. Other players still count. AFK stays on across matches until you turn it off.</p>
+              <p class="note bad" id="afk-error" hidden></p>
             </div>
-            <p id="advanced-state" role="status" hidden></p>
-          </form>
-          <p class="note">Leave a value empty for its default. The defaults suit most hosts.</p>
-        </details>
-        <details id="release">
-          <summary>Ranked code release</summary>
-          <form id="release-form">
-            <label for="release-tag">Genji Ball release</label>
-            <div class="row">
-              <input id="release-tag" type="text" spellcheck="false" placeholder="Latest ranked release" />
-              <button type="submit">Save</button>
+
+            <div class="group">
+              <h2>Ranked server</h2>
+              <dl>
+                <dt>Server</dt>
+                <dd id="server"></dd>
+                <dt>Host</dt>
+                <dd><span id="host"></span> <span class="tag" id="host-trust" hidden>Untrusted</span> <span class="status" id="token-status" role="status"></span></dd>
+                <dt><label for="region">Region</label></dt>
+                <dd><select id="region"></select> <span class="status" id="region-status" role="status"></span></dd>
+              </dl>
+              <p class="note" id="region-note">The region you host in now. Ranked keeps EU and NA apart: switch it before you host in the other one.</p>
+              <p class="note" id="host-trust-note" hidden>An admin checks each of your matches before it counts for the ratings. Ask an admin to make you a trusted host.</p>
+
+              <form id="token-form" hidden>
+                <label for="token">Host token</label>
+                <div class="row">
+                  <input id="token" type="password" autocomplete="off" spellcheck="false" />
+                  <button type="submit">Check and save</button>
+                  <button type="button" class="quiet" id="token-cancel" hidden>Cancel</button>
+                </div>
+              </form>
+
+              <div class="row" id="token-actions" hidden>
+                <button type="button" id="token-check">Check again</button>
+                <button type="button" class="quiet" id="token-change">Change token</button>
+                <button type="button" class="quiet" id="token-forget">Forget token</button>
+              </div>
             </div>
-            <p id="release-state" role="status" hidden></p>
-          </form>
-          <p class="note">The release "Copy ranked code" builds on, by its tag (like <span id="release-example"></span>). Leave it empty for the latest ranked release, which suits every host unless an admin asks for another.</p>
-        </details>
-        <details id="updates">
-          <summary>Updates</summary>
-          <label class="check"><input id="update-auto" type="checkbox" /> Look for new versions by itself</label>
-          <label for="update-channel">Channel</label>
-          <div class="row">
-            <select id="update-channel"></select>
+
+            <div class="group">
+              <h2>Ranked code</h2>
+              <div class="row">
+                <button type="button" id="ranked-code-copy">Copy ranked code</button>
+              </div>
+              <p id="ranked-code-state" role="status" hidden></p>
+              <p class="note">The latest ranked release of Genji Ball (or the one picked under Advanced), with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
+            </div>
+
+            <div class="group" id="lobby">
+              <h2>Live lobby</h2>
+              <p id="lobby-state" role="status"></p>
+              <form id="lobby-form">
+                <label class="check"><input id="lobby-on" type="checkbox" /> List my lobby on the site while I host a ranked match</label>
+                <label for="lobby-name">Lobby name (optional)</label>
+                <div class="row">
+                  <input id="lobby-name" type="text" autocomplete="off" placeholder="Shown on the site next to your host name" />
+                  <button type="submit">Save</button>
+                </div>
+                <p id="lobby-form-state" role="status" hidden></p>
+              </form>
+              <p class="note">While a ranked match is played in your newest Workshop log, the site lists your lobby in the region above with how many players are in it. It's taken off when the match ends, the log stops growing (the game closed) or you quit the tool.</p>
+            </div>
           </div>
-          <p id="updates-state" role="status" hidden></p>
-          <p class="note">"Stable" gets each version once it's released to everyone. "Pre-release" gets test versions too, before they are: pick it only if an admin asks you to try one. With the automatic checks off, use "Check for updates" yourself now and then.</p>
-        </details>
-        <details id="debug">
-          <summary>Debug</summary>
-          <label for="log-level">Log level</label>
-          <div class="row">
-            <select id="log-level"></select>
-            <button type="button" class="quiet" id="log-open">Open log folder</button>
+        </section>
+
+        <section class="view" id="view-match" hidden>
+          <header class="view-head">
+            <h1>Current match</h1>
+            <p class="muted">The newest Workshop log, read the way the ranked server reads it. Ratings are worked out only on the server, from every host's matches.</p>
+          </header>
+          <div class="view-body">
+            <div id="live-match"></div>
           </div>
-          <p class="note">How much the tool writes to its log. "debug" adds every token check and each answer's status; turn it on while you look into a problem.</p>
-          <div class="row">
-            <button type="button" id="diagnostics-export">Export diagnostics…</button>
+        </section>
+
+        <section class="view" id="view-uploads" hidden>
+          <header class="view-head">
+            <h1>Uploads</h1>
+            <p id="upload-region"></p>
+            <p id="upload-state" role="status"></p>
+            <p class="note bad" id="upload-retrying" hidden></p>
+          </header>
+          <div class="view-body">
+            <ul class="uploads" id="uploads"></ul>
+            <p class="note bad" id="uploads-error" hidden></p>
+            <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. A failed upload is retried automatically. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
           </div>
-          <p id="debug-state" role="status" hidden></p>
-          <p class="note">Saves one file to send with a bug report: the tool's version, its settings, what was uploaded, the recent log and the names of the files in your log folder. Never your host token.</p>
-          <label class="check dry-run"><input id="dry-run" type="checkbox" /> Dry run: send nothing, only show what would be uploaded</label>
-          <p class="note">Logs are picked as usual, but none goes to the server: the debug panel lists each with what its upload would send, and "Show match" shows it as the server will read it. They're uploaded once you turn the dry run off.</p>
-        </details>
-        <details id="debug-panel">
-          <summary>Debug panel</summary>
-          <h3>Waiting to upload</h3>
-          <ul class="debug-list" id="debug-queue"></ul>
-          <p class="note" id="debug-queue-empty">Nothing waiting.</p>
-          <h3>Latest uploads</h3>
-          <ul class="uploads" id="debug-uploads"></ul>
-          <p class="note" id="debug-uploads-empty">None since the tool started.</p>
-          <h3>Newest log's last events</h3>
-          <p class="path muted" id="debug-events-file"></p>
-          <ol class="events" id="debug-events"></ol>
-          <p class="note bad" id="debug-error" hidden></p>
-          <p class="note">Read again while this panel is open. What was sent never includes your host token.</p>
-        </details>
-      </section>
-    </main>
+          <div class="row pager view-foot" id="uploads-pager" hidden>
+            <button type="button" class="quiet" id="uploads-newer">Newer</button>
+            <span class="muted" id="uploads-range"></span>
+            <button type="button" class="quiet" id="uploads-older">Older</button>
+          </div>
+        </section>
+
+        <section class="view" id="view-tourneys" hidden>
+          <header class="view-head">
+            <div class="head-row">
+              <h1>Tourneys</h1>
+              <button type="button" class="quiet" id="tourneys-check">Check again</button>
+            </div>
+            <p id="tourneys-state" role="status"></p>
+          </header>
+          <div class="view-body" id="tourneys">
+            <ul class="tourneys" id="tourney-list"></ul>
+            <p class="note bad" id="tourneys-error" hidden></p>
+            <p class="note">The tourney lobbies an admin assigned you, with their start in your time. "Copy tourney code" works from about an hour before the start: it's the ranked code with the lobby's tourney rule turned on (its name, label and round limit), and the rank tags of the tourney's region. Play it with the Tournament preset. When the match ends, screenshot the final standings and upload it here: an admin checks it against the match.</p>
+            <details id="screenshot-settings">
+              <summary>Screenshots folder</summary>
+              <p class="path" id="screenshot-folder"></p>
+              <p class="note" id="screenshot-folder-note"></p>
+              <div class="row">
+                <button type="button" id="screenshot-folder-choose">Choose folder…</button>
+                <button type="button" class="quiet" id="screenshot-folder-reset" hidden>Use the detected folder</button>
+              </div>
+              <p class="note">Where the tool looks for your newest screenshot of the final standings. Overwatch saves screenshots to Documents\Overwatch\ScreenShots\Overwatch.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings" hidden>
+          <header class="view-head"><h1>Settings</h1></header>
+          <div class="view-body">
+            <div class="group">
+              <h2>Workshop log folder</h2>
+              <p class="path" id="log-folder"></p>
+              <p class="note" id="log-folder-note"></p>
+              <div class="row">
+                <button type="button" id="log-folder-choose">Choose folder…</button>
+                <button type="button" class="quiet" id="log-folder-reset" hidden>Use the detected folder</button>
+              </div>
+            </div>
+
+            <div class="group">
+              <h2>Updates</h2>
+              <div class="row">
+                <button type="button" id="update-check">Check for updates</button>
+                <span class="status muted" id="update-state" role="status"></span>
+              </div>
+              <p class="note"><span id="update-auto-note"></span> It installs one only when you click "Install and restart". The window closes while it installs; uploads carry on once the new version has started.</p>
+            </div>
+
+            <div class="group">
+              <h2>Advanced</h2>
+              <details id="advanced">
+                <summary>Server URL</summary>
+                <form id="server-form">
+                  <label for="server-url">Server URL</label>
+                  <div class="row">
+                    <input id="server-url" type="text" inputmode="url" spellcheck="false" placeholder="https://…" />
+                    <button type="submit">Save</button>
+                  </div>
+                  <p class="note">Leave empty for <span id="default-server"></span>. Each server keeps its own token.</p>
+                </form>
+              </details>
+              <details id="timing">
+                <summary>Timing</summary>
+                <form id="advanced-form" novalidate>
+                  <div id="tunables"></div>
+                  <div class="row">
+                    <button type="submit">Save</button>
+                    <button type="button" class="quiet" id="advanced-reset">Use the defaults</button>
+                  </div>
+                  <p id="advanced-state" role="status" hidden></p>
+                </form>
+                <p class="note">Leave a value empty for its default. The defaults suit most hosts.</p>
+              </details>
+              <details id="release">
+                <summary>Ranked code release</summary>
+                <form id="release-form">
+                  <label for="release-tag">Genji Ball release</label>
+                  <div class="row">
+                    <input id="release-tag" type="text" spellcheck="false" placeholder="Latest ranked release" />
+                    <button type="submit">Save</button>
+                  </div>
+                  <p id="release-state" role="status" hidden></p>
+                </form>
+                <p class="note">The release "Copy ranked code" builds on, by its tag (like <span id="release-example"></span>). Leave it empty for the latest ranked release, which suits every host unless an admin asks for another.</p>
+              </details>
+              <details id="updates">
+                <summary>Updates</summary>
+                <label class="check"><input id="update-auto" type="checkbox" /> Look for new versions by itself</label>
+                <label for="update-channel">Channel</label>
+                <div class="row">
+                  <select id="update-channel"></select>
+                </div>
+                <p id="updates-state" role="status" hidden></p>
+                <p class="note">"Stable" gets each version once it's released to everyone. "Pre-release" gets test versions too, before they are: pick it only if an admin asks you to try one. With the automatic checks off, use "Check for updates" yourself now and then.</p>
+              </details>
+              <details id="debug">
+                <summary>Debug</summary>
+                <label for="log-level">Log level</label>
+                <div class="row">
+                  <select id="log-level"></select>
+                  <button type="button" class="quiet" id="log-open">Open log folder</button>
+                </div>
+                <p class="note">How much the tool writes to its log. "debug" adds every token check and each answer's status; turn it on while you look into a problem.</p>
+                <div class="row">
+                  <button type="button" id="diagnostics-export">Export diagnostics…</button>
+                </div>
+                <p id="debug-state" role="status" hidden></p>
+                <p class="note">Saves one file to send with a bug report: the tool's version, its settings, what was uploaded, the recent log and the names of the files in your log folder. Never your host token.</p>
+                <label class="check dry-run"><input id="dry-run" type="checkbox" /> Dry run: send nothing, only show what would be uploaded</label>
+                <p class="note">Logs are picked as usual, but none goes to the server: the debug panel lists each with what its upload would send, and "Show match" shows it as the server will read it. They're uploaded once you turn the dry run off.</p>
+              </details>
+              <details id="debug-panel">
+                <summary>Debug panel</summary>
+                <h3>Waiting to upload</h3>
+                <ul class="debug-list" id="debug-queue"></ul>
+                <p class="note" id="debug-queue-empty">Nothing waiting.</p>
+                <h3>Latest uploads</h3>
+                <ul class="uploads" id="debug-uploads"></ul>
+                <p class="note" id="debug-uploads-empty">None since the tool started.</p>
+                <h3>Newest log's last events</h3>
+                <p class="path muted" id="debug-events-file"></p>
+                <ol class="events" id="debug-events"></ol>
+                <p class="note bad" id="debug-error" hidden></p>
+                <p class="note">Read again while this panel is open. What was sent never includes your host token.</p>
+              </details>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   </body>
 </html>

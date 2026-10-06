@@ -21,6 +21,7 @@ You need Node.js 22+ and Rust stable (MSVC toolchain on Windows). CI runs `npm r
 - **The frontend** only shows state and sends what the host typed. It calls Rust through `#[tauri::command]`s; mirror each command's return type as a TypeScript interface next to the call. No framework: plain TypeScript and DOM until there's a reason.
 - Give the window only the permissions it uses (`src-tauri/capabilities/`), and keep the CSP in `tauri.conf.json` tight. Add a Tauri plugin only when a feature needs it.
 - The app's look takes only its colours from genjiball.us (the same palette as the ranked site's `public/style.css`), not its layout.
+- **The window** (#33, `src/views.ts`): a sidebar and one view at a time (Home, Match, Uploads, Tourneys, Settings), each filling the window: only a view's body scrolls, never the page. It works down to the minimum size (480×360), where the sidebar keeps only its icons. The last view is kept in `localStorage`; the window's size and place by `tauri-plugin-window-state` (Rust only, saved when the window is closed to the tray and on quit). The live match view reads the log only while the Match view shows. A red dot on a sidebar button marks a view that needs the host.
 
 ## Config: no magic numbers
 

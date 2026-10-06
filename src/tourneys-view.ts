@@ -164,13 +164,17 @@ export function tourneyContextChanged(): void {
 function draw(): void {
   const line = el("tourneys-state");
   const list = el("tourney-list");
+  const dot = el("nav-tourneys-dot");
   if (!status) {
     line.textContent = "Checking…";
     line.className = "muted";
     list.replaceChildren();
+    dot.hidden = true;
     return;
   }
   const { lobbies, problem, checkedAt } = status;
+  // The sidebar marks a lobby waiting for its verify screenshot.
+  dot.hidden = !lobbies.some((l) => l.needsScreenshot);
   let text: string;
   let tone: Line["tone"] = "muted";
   if (problem) {

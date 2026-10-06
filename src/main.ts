@@ -5,7 +5,7 @@ import { watchDebug } from "./debug-view";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import { renderTourneys, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
-import { currentView, markView, onViewChange, setupViews } from "./views";
+import { currentView, markView, onViewChange, setupViews, showPane } from "./views";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
 interface AppState {
@@ -299,7 +299,6 @@ function render(): void {
   if (document.activeElement !== serverUrl) {
     serverUrl.value = state.serverUrl === state.defaultServerUrl ? "" : state.serverUrl;
   }
-  if (state.serverUrl !== state.defaultServerUrl) el<HTMLDetailsElement>("advanced").open = true;
 
   const askToken = !state.hasToken || editingToken;
   el("token-form").hidden = !askToken;
@@ -343,7 +342,7 @@ function render(): void {
 
 const updateChannelLabels: Record<string, string> = { stable: "Stable", prerelease: "Pre-release" };
 
-/** The update checks' switch and channel, under Advanced. */
+/** The update checks' switch and channel (Settings → Updates). */
 function renderUpdateSettings(): void {
   el<HTMLInputElement>("update-auto").checked = state.autoUpdateCheck;
   const select = el<HTMLSelectElement>("update-channel");
@@ -360,16 +359,14 @@ function renderUpdateSettings(): void {
   select.value = state.updateChannel;
   el("update-auto-note").textContent = state.autoUpdateCheck
     ? "The tool looks for a new version when it starts and every few hours."
-    : "The tool doesn't look for new versions by itself (Advanced → Updates).";
-  if (!state.autoUpdateCheck || state.updateChannel !== state.defaultUpdateChannel) el<HTMLDetailsElement>("updates").open = true;
+    : "The tool doesn't look for new versions by itself.";
 }
 
-/** The ranked code release and the log level, under Advanced. */
+/** The ranked code release, the log level and the dry run (Settings → Advanced). */
 function renderDebug(): void {
   const tag = el<HTMLInputElement>("release-tag");
   if (document.activeElement !== tag) tag.value = state.releaseTag ?? "";
   el("release-example").textContent = `1.3.3${state.releaseTagSuffix}`;
-  if (state.releaseTag) el<HTMLDetailsElement>("release").open = true;
 
   const select = el<HTMLSelectElement>("log-level");
   if (select.options.length !== state.logLevels.length) {
@@ -384,7 +381,6 @@ function renderDebug(): void {
   }
   select.value = state.logLevel ?? state.defaultLogLevel;
   el<HTMLInputElement>("dry-run").checked = state.dryRun;
-  if (state.logLevel || state.dryRun) el<HTMLDetailsElement>("debug").open = true;
 }
 
 function setLine(id: string, text: string, tone: "good" | "bad" | "muted"): void {
@@ -442,7 +438,6 @@ function renderAdvanced(): void {
     const input = tunableInput(t.key);
     if (document.activeElement !== input) input.value = t.value === null ? "" : String(t.value);
   }
-  if (state.advanced.some((t) => t.value !== null)) el<HTMLDetailsElement>("timing").open = true;
 }
 
 function setAdvancedState(text: string, tone: "good" | "bad"): void {
@@ -478,7 +473,7 @@ function describeProblem(problem: Problem): string {
     case "tokenRejected":
       return problem.revoked ? "Paused: this token was revoked. Ask an admin for a new one." : "Paused: the server doesn't know this token.";
     case "noRegion":
-      return "Paused: you have no home region yet. Pick the region you host in on Home.";
+      return "Paused: you have no home region yet. Pick the region you host in under Settings → Game.";
     case "local":
       return problem.message;
   }
@@ -562,7 +557,7 @@ function renderUploads(status: UploadStatus): void {
   line.textContent = status.problem
     ? describeProblem(status.problem)
     : status.dryRun
-      ? "Dry run: ranked logs are picked as usual but not uploaded. The debug panel under Advanced lists them."
+      ? "Dry run: ranked logs are picked as usual but not uploaded. The debug panel (Settings → Advanced) lists them."
       : status.waiting === 1
       ? "Watching. 1 ranked log to upload."
       : status.waiting
@@ -758,7 +753,7 @@ function describeLobbyProblem(problem: LobbyProblem): string {
     case "tokenRejected":
       return problem.revoked ? "Not listed: this token was revoked." : "Not listed: the server doesn't know this token.";
     case "noRegion":
-      return "Not listed: you have no home region yet. Pick the region you host in above.";
+      return "Not listed: you have no home region yet. Pick the region you host in under Settings → Game.";
     case "failed":
       return `Couldn't reach the lobby list, retrying: ${problem.message}`;
   }
@@ -1246,5 +1241,9 @@ void busy(async () => {
   watchLiveMatch(currentView() === "match");
   renderUpdate(await invoke<UpdateStatus>("get_update_status"));
   if (state.hasToken) await checkSaved();
-  else el("token").focus();
+  else {
+    // First start: the token is all that's missing.
+    showPane("account");
+    el("token").focus();
+  }
 });

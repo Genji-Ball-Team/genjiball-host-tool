@@ -218,6 +218,46 @@ pub const LOBBY_PLAYERS_MAX: u32 = 12;
 /// the tool quits anyway, and the lobby drops off after `LOBBY_TTL_SECS`.
 pub const LOBBY_CLOSE_ON_QUIT_SECS: u64 = 3;
 
+/// How often the tourney lobbies the host is assigned to (`GET /api/host/tourneys`) are asked of
+/// the server while nothing is due (#8). The tool also asks when a code window opens, shortly
+/// before a start, after a tourney match is uploaded and on "Check again". The server answers
+/// host routes uncached, so each ask is a database read: keep this long.
+pub const TOURNEY_POLL_SECS: Tunable = Tunable {
+    key: "tourneyPollSecs",
+    label: "Tourney check",
+    help: "How often the server is asked about the tourneys you host. It's also asked when a code becomes available, before a start and after a tourney match is uploaded.",
+    default: 5 * 60,
+    min: 60,
+    max: 3600,
+};
+
+/// How long before a tourney starts the host gets a notification that it's about to.
+pub const TOURNEY_START_NOTICE_SECS: u64 = 15 * 60;
+
+/// An upload with a tourney match whose lobby the tool doesn't know yet asks the server for the
+/// host's lobbies first, to upload it as the lobby's region; at most this often per server, so
+/// copies of the same match don't each ask.
+pub const TOURNEY_LOOKUP_MIN_SECS: u64 = 30;
+
+/// The longest tourney name and lobby label the game shows on its HUD line, in characters
+/// (GenjiBall-CE `docs/tourney-rule.md`: "under 40 characters each"). Longer ones are cut.
+pub const TOURNEY_TEXT_MAX_CHARS: usize = 39;
+
+/// Where Overwatch saves screenshots, under the user's Documents folder: the default screenshots
+/// folder the verify screenshot is offered from (#10).
+pub const SCREENSHOT_SUBFOLDER: [&str; 3] = ["Overwatch", "ScreenShots", "Overwatch"];
+
+/// The image files offered from the screenshots folder, by extension (lower case). The server
+/// takes PNG, JPEG and WebP, by their content.
+pub const SCREENSHOT_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+
+/// The biggest verify screenshot the server takes (genjiball-ranked `screenshotMaxBytes`).
+pub const SCREENSHOT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How often the window looks for a new screenshot in the screenshots folder while it asks for a
+/// lobby's verify screenshot. Only reads the folder's file list.
+pub const SCREENSHOT_POLL_SECS: u64 = 3;
+
 /// How often the tool looks for a new version of itself, after the check at startup. The endpoint
 /// and the signing key are in `tauri.conf.json`, under `plugins.updater`.
 pub const UPDATE_CHECK_SECS: Tunable = Tunable {
@@ -296,7 +336,7 @@ pub const DEBUG_ANSWER_BYTES: usize = 16 * 1024;
 pub const DEBUG_EVENTS_SHOWN: usize = 40;
 
 /// Every `Tunable`, in the order the window lists them.
-pub const TUNABLES: [&Tunable; 9] = [
+pub const TUNABLES: [&Tunable; 10] = [
     &POLL_INTERVAL_SECS,
     &QUIET_SECS,
     &MATCH_VIEW_POLL_SECS,
@@ -304,6 +344,7 @@ pub const TUNABLES: [&Tunable; 9] = [
     &RETRY_FIRST_SECS,
     &RETRY_MAX_SECS,
     &STATUS_REFRESH_SECS,
+    &TOURNEY_POLL_SECS,
     &RELEASE_CACHE_SECS,
     &UPDATE_CHECK_SECS,
 ];

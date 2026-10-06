@@ -106,6 +106,27 @@
         <p class="note">The latest ranked release of Genji Ball (or the one picked under Advanced), with the top 10 of this server and region tagged with their place and rating, and everyone else in a rank tier with its name. Paste it into the Workshop's import. The tags are as new as the code: get a new one when the leaderboard changes.</p>
       </section>
 
+      <section id="tourneys">
+        <div class="section-head">
+          <h2>Tourneys</h2>
+          <button type="button" class="quiet" id="tourneys-check">Check again</button>
+        </div>
+        <p id="tourneys-state" role="status"></p>
+        <ul class="tourneys" id="tourney-list"></ul>
+        <p class="note bad" id="tourneys-error" hidden></p>
+        <p class="note">The tourney lobbies an admin assigned you, with their start in your time. "Copy tourney code" works from about an hour before the start: it's the ranked code with the lobby's tourney rule turned on (its name, label and round limit), and the rank tags of the tourney's region. Play it with the Tournament preset. When the match ends, screenshot the final standings and upload it here: an admin checks it against the match.</p>
+        <details id="screenshot-settings">
+          <summary>Screenshots folder</summary>
+          <p class="path" id="screenshot-folder"></p>
+          <p class="note" id="screenshot-folder-note"></p>
+          <div class="row">
+            <button type="button" id="screenshot-folder-choose">Choose folder…</button>
+            <button type="button" class="quiet" id="screenshot-folder-reset" hidden>Use the detected folder</button>
+          </div>
+          <p class="note">Where the tool looks for your newest screenshot of the final standings. Overwatch saves screenshots to Documents\Overwatch\ScreenShots\Overwatch.</p>
+        </details>
+      </section>
+
       <section id="lobby">
         <h2>Live lobby</h2>
         <p id="lobby-state" role="status"></p>

@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { watchDebug } from "./debug-view";
 import { watchLog, type LogWatch } from "./match-view";
+import type { TourneysStatus } from "./tourney-model";
+import { renderTourneys, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
 interface AppState {
@@ -11,6 +13,12 @@ interface AppState {
   defaultServerUrl: string;
   hasToken: boolean;
   logFolder: LogFolder | null;
+  /** Where the verify screenshot of a tourney lobby is offered from. */
+  screenshotFolder: LogFolder | null;
+  /** The biggest verify screenshot the server takes, in bytes. */
+  screenshotMaxBytes: number;
+  /** How often the window looks for a new screenshot while it asks for one, in seconds. */
+  screenshotPollSecs: number;
   /** The region the host picked, `null` for their home region. */
   region: string | null;
   regions: Region[];
@@ -129,6 +137,8 @@ interface HistoryEntry {
   players: string[];
   answer: Answer | null;
   queued: QueueState | null;
+  /** Its tourney matches (none: only ranked ones). Mirrors `SentTourney` in src-tauri/src/uploads.rs. */
+  tourneys: { lobbyKey: string; ended: boolean }[];
 }
 
 /** Mirrors `Answer` in src-tauri/src/uploads.rs. */
@@ -310,6 +320,19 @@ function render(): void {
         : "Chosen by you.";
   el("log-folder-reset").hidden = folder?.source !== "custom";
 
+  const shots = state.screenshotFolder;
+  el("screenshot-folder").textContent = shots?.path ?? "No Documents folder found";
+  el("screenshot-folder-note").textContent = !shots
+    ? "Choose the folder Overwatch saves screenshots to."
+    : !shots.exists
+      ? "This folder isn't there yet. Overwatch creates it with your first screenshot; if yours go elsewhere, choose that folder."
+      : shots.source === "detected"
+        ? "Found automatically."
+        : "Chosen by you.";
+  el("screenshot-folder-reset").hidden = shots?.source !== "custom";
+  if (shots?.source === "custom" || (shots && !shots.exists)) el<HTMLDetailsElement>("screenshot-settings").open = true;
+  tourneyContextChanged();
+
   renderRegion();
   renderLobbySettings();
   renderAdvanced();
@@ -464,6 +487,13 @@ function describeProblem(problem: Problem): string {
 const reviewReasons: Record<string, string | null> = {
   duplicate_name: "two players with the same name",
   untrusted_host: null,
+  // A tourney match the server couldn't link to its lobby (genjiball-ranked docs/api.md, "Tourney matches").
+  tourney_unknown_lobby: "the tourney lobby isn't known",
+  tourney_cancelled: "the tourney was cancelled",
+  tourney_wrong_host: "you aren't the lobby's host",
+  tourney_wrong_region: "uploaded as another region than the tourney's",
+  tourney_lobby_taken: "the lobby already has a match",
+  tourney_round_limit: "the round limit isn't the lobby's",
 };
 
 function describeMatch(match: UploadedMatch): string {
@@ -522,6 +552,10 @@ function renderUploads(status: UploadStatus): void {
   if (status.host) showHost(status.host);
   else if (status.problem?.kind === "tokenRejected") showHost(null);
   renderUploadRegion(status);
+  if (status.region !== uploadRegion) {
+    uploadRegion = status.region;
+    tourneyContextChanged();
+  }
   const line = el("upload-state");
   line.className = status.problem ? "bad" : "";
   line.textContent = status.problem
@@ -549,6 +583,9 @@ function renderUploads(status: UploadStatus): void {
     showHistoryPage(historyPage).catch(showUploadsError);
   }
 }
+
+/** The region uploads go as, as the upload status last said (`null`: not known). */
+let uploadRegion: string | null = null;
 
 /** Which region matches upload as, so a night in the other one isn't stored as this one. */
 function renderUploadRegion(status: UploadStatus): void {
@@ -612,6 +649,10 @@ function historyItem(entry: HistoryEntry): HTMLLIElement {
   const at = entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet";
   item.append(span(entry.file, "path"), span(regions ? `${regions} · ${at}` : at, "muted"));
   if (entry.players.length) item.append(span(entry.players.join(", "), "soft"));
+  for (const t of entry.tourneys) {
+    const name = tourneyLabel(t.lobbyKey) ?? `lobby key ${t.lobbyKey}`;
+    item.append(span(`Tourney match: ${name}${t.ended ? "" : ", not ended yet"}`, "soft"));
+  }
 
   const answer = entry.answer && describeAnswer(entry.answer);
   const now = entry.queued ? describeQueued(entry.queued) : answer;
@@ -793,6 +834,7 @@ async function show(next: AppState): Promise<void> {
   renderAfk(status.afk);
   renderUploads(status);
   renderLobby(await invoke<LobbyStatus>("get_lobby_status"));
+  renderTourneys(await invoke<TourneysStatus>("get_tourneys"));
 }
 
 async function refresh(): Promise<void> {
@@ -813,7 +855,8 @@ function renderUpdate(status: UpdateStatus): void {
 let running = 0;
 
 function setButtonsDisabled(disabled: boolean): void {
-  document.querySelectorAll("button").forEach((b) => (b.disabled = disabled));
+  // A button marked `data-off` (a tourney code before its window) stays disabled.
+  document.querySelectorAll("button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
 }
 
 /** Runs a button's action with the buttons disabled, and shows its error (by default next to the token). */
@@ -1034,6 +1077,17 @@ el("log-folder-reset").addEventListener("click", () => {
   });
 });
 
+el("screenshot-folder-choose").addEventListener("click", () => {
+  void busy(async () => {
+    const path = await open({ directory: true, defaultPath: state.screenshotFolder?.path, title: "Screenshots folder" });
+    if (typeof path !== "string") return;
+    await show(await invoke<AppState>("set_screenshot_folder", { path }));
+  });
+});
+el("screenshot-folder-reset").addEventListener("click", () => {
+  void busy(async () => show(await invoke<AppState>("set_screenshot_folder", { path: null })));
+});
+
 function setRankedCodeState(text: string, tone: "good" | "bad" | "muted"): void {
   const line = el("ranked-code-state");
   line.hidden = !text;
@@ -1173,6 +1227,19 @@ void busy(async () => {
   await listen<LobbyStatus>("lobby-status", (event) => {
     if (ready) renderLobby(event.payload);
   });
+  await listen<TourneysStatus>("tourneys-status", (event) => {
+    if (ready) renderTourneys(event.payload);
+  });
+  await setupTourneys(() => ({
+    serverUrl: state.serverUrl,
+    uploadRegion,
+    screenshotFolder: state.screenshotFolder?.exists ? state.screenshotFolder.path : null,
+    screenshotMaxBytes: state.screenshotMaxBytes,
+    screenshotPollSecs: state.screenshotPollSecs,
+    regionLabel,
+    busy,
+    isBusy: () => running > 0,
+  }));
   await listen<UpdateStatus>("update-status", (event) => {
     if (ready) renderUpdate(event.payload);
   });

@@ -8,7 +8,7 @@ How ranked works end to end:
 2. This tool watches the log folder and uploads the matches.
 3. The [ranked server](https://github.com/Genji-Ball-Team/genjiball-ranked) parses the log, rates each round and shows the results on the website.
 
-**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, shows the current match and each uploaded one the way the site will (and why one won't count), lets the host go AFK without their rating changing, and builds the ranked code (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
+**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, shows the current match and each uploaded one the way the site will (and why one won't count), lets the host go AFK without their rating changing, builds the ranked code, and for tourneys lists the lobbies the host is assigned to, builds each lobby's tourney code and uploads the verify screenshot of its final standings (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
 
 - **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
 
@@ -68,6 +68,7 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/afk.rs` | Host AFK: the rounds that start while it's on, per match (`afk.json`), sent as `X-Host-Afk` |
 | `src-tauri/src/lobby.rs`, `live_lobby.rs` | The live lobby: lists the host's lobby on the site while a ranked match is played |
 | `src-tauri/src/release.rs`, `ranked_code.rs` | The ranked code: the GenjiBall-CE release it's built on, and the rank tags filled in |
+| `src-tauri/src/tourney.rs`, `tourneys.rs`, `src/tourneys-view.ts` | Tourneys: the host's assigned lobbies and their notifications, the tourney code's rule, the region a tourney log is uploaded as, and the verify screenshot |
 | `src-tauri/src/logging.rs`, `diagnostics.rs` | The tool's own log, and the diagnostics export for bug reports |
 | `src-tauri/src/debug.rs`, `src/debug-view.ts` | The debug panel: the latest uploads and dry runs, and the newest log's last events |
 | `src-tauri/capabilities/` | What the window is allowed to call |

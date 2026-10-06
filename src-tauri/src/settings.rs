@@ -20,6 +20,9 @@ pub struct Settings {
     pub server_url: Option<String>,
     /// Overrides the detected Workshop log folder.
     pub log_folder: Option<PathBuf>,
+    /// Overrides the detected Overwatch screenshots folder, where the verify screenshot of a
+    /// tourney lobby is offered from (#10).
+    pub screenshot_folder: Option<PathBuf>,
     /// The region the host hosts in now, an id from `config::REGIONS`. `None`: the host's home
     /// region, which an admin sets on the server.
     pub region: Option<String>,
@@ -356,6 +359,7 @@ mod tests {
         let settings = Settings {
             server_url: Some("http://localhost:8787".into()),
             log_folder: Some(PathBuf::from(r"D:\Logs")),
+            screenshot_folder: Some(PathBuf::from(r"D:\Shots")),
             region: Some("na".into()),
             live_lobby: Some(false),
             lobby_name: Some("Kenzo's ranked".into()),

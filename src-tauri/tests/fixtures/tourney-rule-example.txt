@@ -1,0 +1,34 @@
+rule ("RANKS - generated") {
+    event {
+        Ongoing - Global;
+    }
+    actions {
+        Set Global Variable(rankTags, Array(Custom String("Top 10 comes with the host tool's code")));
+    }
+}
+
+rule ("TOURNEY - generated") {
+    event {
+        Ongoing - Global;
+    }
+    actions {
+        Set Global Variable At Index(rankedState, 16, Array(False, Custom String(""), 30, Custom String(""), Custom String("")));
+    }
+}
+
+rule ("Tourney - settings") {
+    event {
+        Ongoing - Global;
+    }
+    conditions {
+        First Of(Value In Array(Global.rankedState, 16)) == True;
+    }
+    actions {
+        "No match timer and no timed tiebreaker, whatever the preset. Anything but Tournament is unranked anyway."
+        Set Global Variable(tournamentMode, True);
+        "The rule's round limit replaces \"tournament rounds\" and the preset's value"
+        Set Global Variable(totalRounds, If-Then-Else(Compare(Value In Array(Value In Array(Global.rankedState, 16), 2), >=, 1), Round To Integer(Value In Array(Value In Array(Global.rankedState, 16), 2), Down), 30));
+        "The ranked log counts the rounds and ends the match, and the server needs the log"
+        Set Global Variable At Index(rankedState, 0, True);
+    }
+}

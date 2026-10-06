@@ -26,9 +26,9 @@ pub struct LogFolder {
     pub exists: bool,
 }
 
-/// `Documents\Overwatch\Workshop` under the given Documents folder.
-pub fn workshop_folder(documents: &Path) -> PathBuf {
-    config::WORKSHOP_LOG_SUBFOLDER
+/// `parts` under the given Documents folder.
+fn under(documents: &Path, parts: &[&str]) -> PathBuf {
+    parts
         .iter()
         .fold(documents.to_path_buf(), |path, part| path.join(part))
 }
@@ -36,9 +36,28 @@ pub fn workshop_folder(documents: &Path) -> PathBuf {
 /// The folder to watch: `custom` if set, else the one under `documents`. `None` when there's no
 /// custom folder and no Documents folder to look in.
 pub fn resolve(custom: Option<&Path>, documents: Option<&Path>) -> Option<LogFolder> {
+    resolve_in(custom, documents, &config::WORKSHOP_LOG_SUBFOLDER)
+}
+
+/// The Overwatch screenshots folder (#10): `custom` if set, else
+/// `Documents\Overwatch\ScreenShots\Overwatch` with this user's Documents folder. The same shape
+/// as the log folder.
+pub fn screenshots(custom: Option<&Path>) -> Option<LogFolder> {
+    resolve_in(
+        custom,
+        dirs::document_dir().as_deref(),
+        &config::SCREENSHOT_SUBFOLDER,
+    )
+}
+
+fn resolve_in(
+    custom: Option<&Path>,
+    documents: Option<&Path>,
+    parts: &[&str],
+) -> Option<LogFolder> {
     let (path, source) = match custom {
         Some(path) => (path.to_path_buf(), Source::Custom),
-        None => (workshop_folder(documents?), Source::Detected),
+        None => (under(documents?, parts), Source::Detected),
     };
     let exists = path.is_dir();
     Some(LogFolder {
@@ -96,6 +115,25 @@ mod tests {
         assert_eq!(
             resolve(Some(custom.path()), None).unwrap().source,
             Source::Custom
+        );
+    }
+
+    #[test]
+    fn finds_the_screenshots_folder_under_documents() {
+        let docs = tempfile::tempdir().unwrap();
+        let found = resolve_in(None, Some(docs.path()), &config::SCREENSHOT_SUBFOLDER).unwrap();
+        assert_eq!(
+            found.path,
+            docs.path()
+                .join("Overwatch")
+                .join("ScreenShots")
+                .join("Overwatch")
+        );
+        assert_eq!(found.source, Source::Detected);
+        let custom = tempfile::tempdir().unwrap();
+        assert_eq!(
+            screenshots(Some(custom.path())).unwrap().path,
+            custom.path()
         );
     }
 

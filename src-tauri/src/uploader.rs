@@ -18,10 +18,11 @@ use crate::afk::{AfkStatus, AfkStore};
 use crate::debug::{Attempt, Outcome, Recent};
 use crate::history::{self, Page, QueueSnapshot};
 use crate::log_scan::{RoundStart, Scan};
-use crate::server::{self, Host, TokenCheck, UploadInfo, UploadOutcome};
-use crate::uploads::{self, Answer, Record, Sent};
+use crate::server::{self, Host, TokenCheck, TourneyLobby, UploadInfo, UploadOutcome};
+use crate::tourneys::Tourneys;
+use crate::uploads::{self, Answer, Record, Sent, SentTourney};
 use crate::watcher::{self, Due, Queued, Timing, Tracker};
-use crate::{config, log_folder, log_scan, Store};
+use crate::{config, log_folder, log_scan, tourney, Store};
 
 /// The event the window listens to for `UploadStatus`.
 pub const STATUS_EVENT: &str = "upload-status";
@@ -105,6 +106,21 @@ pub struct Uploader {
     /// Goes up each time the server, the log folder, the region or the token changes (`changed`):
     /// a poll that began before stops sending.
     generation: AtomicU64,
+    /// The tourney lobbies the host was assigned to, as the server last listed them (memory only).
+    lobbies: Mutex<LobbyKeys>,
+    /// A tourney match's end was uploaded: the tourney loop asks the server again (its lobby has
+    /// a match now, and wants its verify screenshot).
+    tourney_ended: AtomicBool,
+}
+
+/// What the tool knows of the host's tourney lobbies, per server, by lobby key: the key is only
+/// in the server's answer while the lobby's code window is open, so it's kept once seen.
+#[derive(Debug, Default)]
+struct LobbyKeys {
+    /// Server URL → lobby key → (lobby id, region).
+    servers: HashMap<String, HashMap<String, (i64, String)>>,
+    /// When a server was last asked for them, by an upload that needed a lobby's region.
+    looked_up: HashMap<String, Instant>,
 }
 
 impl Uploader {
@@ -129,7 +145,79 @@ impl Uploader {
             refresh: AtomicBool::new(false),
             token_ok: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            lobbies: Mutex::new(LobbyKeys::default()),
+            tourney_ended: AtomicBool::new(false),
         }
+    }
+
+    /// Notes the lobby keys and regions of the host's tourney lobbies on `server_url`, as the
+    /// server listed them (`GET /api/host/tourneys`).
+    pub fn learn_lobbies(&self, server_url: &str, lobbies: &[TourneyLobby]) {
+        let mut known = self.lobbies.lock().unwrap();
+        let keys = known.servers.entry(server_url.to_string()).or_default();
+        for lobby in lobbies {
+            if let Some(code) = &lobby.code {
+                keys.insert(code.lobby_key.clone(), (lobby.id, lobby.region.clone()));
+            }
+        }
+    }
+
+    /// The region of the lobby with `lobby_key` on `server_url`, if the tool knows it.
+    pub fn lobby_region(&self, server_url: &str, lobby_key: &str) -> Option<String> {
+        let known = self.lobbies.lock().unwrap();
+        Some(known.servers.get(server_url)?.get(lobby_key)?.1.clone())
+    }
+
+    /// The key noted for lobby `lobby` on `server_url`, if the tool saw its code values.
+    pub fn lobby_key(&self, server_url: &str, lobby: i64) -> Option<String> {
+        let known = self.lobbies.lock().unwrap();
+        known
+            .servers
+            .get(server_url)?
+            .iter()
+            .find(|(_, (id, _))| *id == lobby)
+            .map(|(key, _)| key.clone())
+    }
+
+    /// Whether this tool uploaded the end (`MATCH_END ROUNDS`) of lobby `lobby`'s match to
+    /// `server_url`: by its key now (`lobby_key`, while the code window is open), else by the key
+    /// noted earlier.
+    pub fn tourney_ended(&self, server_url: &str, lobby: i64, lobby_key: Option<&str>) -> bool {
+        let noted: Vec<String> = {
+            let known = self.lobbies.lock().unwrap();
+            known
+                .servers
+                .get(server_url)
+                .into_iter()
+                .flatten()
+                .filter(|(_, (id, _))| *id == lobby)
+                .map(|(key, _)| key.clone())
+                .collect()
+        };
+        let record = self.record.lock().unwrap();
+        lobby_key
+            .into_iter()
+            .chain(noted.iter().map(String::as_str))
+            .any(|key| record.tourney_ended(server_url, key))
+    }
+
+    /// Whether an upload may ask `server_url` for the host's lobbies now (at most every
+    /// `TOURNEY_LOOKUP_MIN_SECS`), noting that it does.
+    fn may_look_up(&self, server_url: &str, now: Instant) -> bool {
+        let mut known = self.lobbies.lock().unwrap();
+        let every = Duration::from_secs(config::TOURNEY_LOOKUP_MIN_SECS);
+        match known.looked_up.get(server_url) {
+            Some(at) if now.saturating_duration_since(*at) < every => false,
+            _ => {
+                known.looked_up.insert(server_url.to_string(), now);
+                true
+            }
+        }
+    }
+
+    /// Whether a tourney match's end was uploaded since this was last asked.
+    pub fn take_tourney_ended(&self) -> bool {
+        self.tourney_ended.swap(false, Ordering::Relaxed)
     }
 
     /// The server, the log folder, the region or the token changed: what a poll under way still has
@@ -565,6 +653,10 @@ impl Run {
         status.waiting = status.waiting.saturating_sub(done);
         status.problem = problem;
         status.retrying = self.retrying.clone();
+        // Its lobby has a match now: the tourney list says so, and asks for the screenshot.
+        if uploader.take_tourney_ended() {
+            app.state::<Tourneys>().refresh();
+        }
         if status.problem.is_none() && uploader.is_current(generation) {
             if let Err(problem) = self
                 .refresh(
@@ -695,7 +787,13 @@ impl Run {
             } else {
                 Outcome::DryRun
             };
-            let info = prepared.info(&due.name, region);
+            // A tourney log as its lobby's region, if it's known (a dry run asks the server nothing).
+            let region = tourney::upload_region(
+                &prepared.scan,
+                |k| uploader.lobby_region(server_url, k),
+                region,
+            );
+            let info = prepared.info(&due.name, region.as_deref());
             let attempt = Attempt::new(server_url, &info, size, &prepared.scan.match_keys, outcome);
             uploader.recent.lock().unwrap().push(attempt);
             self.tracker.sent(&due.name);
@@ -737,6 +835,57 @@ impl Run {
         (done, None)
     }
 
+    /// The region the file `name` (read as `scan`) is uploaded as (`tourney::upload_region`): a log
+    /// of tourney matches goes as their lobby's region, asking the server for the host's lobbies
+    /// first if one isn't known yet; anything else as `target`'s.
+    async fn file_region(
+        &self,
+        uploader: &Uploader,
+        target: Target<'_>,
+        name: &str,
+        scan: &Scan,
+        timeout: Duration,
+    ) -> Option<String> {
+        let server_url = target.server_url;
+        let keys = scan.lobby_keys();
+        if keys.is_empty() {
+            return target.region.map(str::to_string);
+        }
+        let unknown = keys
+            .iter()
+            .any(|k| uploader.lobby_region(server_url, k).is_none());
+        if unknown && uploader.may_look_up(server_url, Instant::now()) {
+            match server::host_tourneys(server_url, target.token, timeout).await {
+                Ok(list) => uploader.learn_lobbies(server_url, &list.lobbies),
+                Err(e) => log::warn!("Couldn't ask {server_url} for your tourney lobbies: {e:?}"),
+            }
+        }
+        let region = tourney::upload_region(
+            scan,
+            |k| uploader.lobby_region(server_url, k),
+            target.region,
+        );
+        for key in &keys {
+            match uploader.lobby_region(server_url, key) {
+                Some(lobby) if Some(lobby.as_str()) == region.as_deref() => {
+                    if region.as_deref() != target.region {
+                        log::info!(
+                            "{name} is a tourney match of lobby {key}: uploading it as its region, {lobby}"
+                        );
+                    }
+                }
+                Some(lobby) => log::warn!(
+                    "{name} has a match of tourney lobby {key} ({lobby}), but goes as {}: the server will send it to review",
+                    region.as_deref().unwrap_or("the home region")
+                ),
+                None => log::warn!(
+                    "{name} has a match of tourney lobby {key}, which isn't one of your assigned lobbies on {server_url}"
+                ),
+            }
+        }
+        region
+    }
+
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it
     /// waits to be retried. A problem that stops every upload is an error.
     async fn send(
@@ -747,9 +896,7 @@ impl Run {
         timeout: Duration,
     ) -> Result<bool, Problem> {
         let Target {
-            server_url,
-            token,
-            region,
+            server_url, token, ..
         } = target;
         let (bytes, prepared) = match self.prepare(uploader, due) {
             Ok(prepared) => prepared,
@@ -763,6 +910,10 @@ impl Run {
         };
         let size = bytes.len() as u64;
         let scan = &prepared.scan;
+        let region = self
+            .file_region(uploader, target, &due.name, scan, timeout)
+            .await;
+        let region = region.as_deref();
         let info = prepared.info(&due.name, region);
         let note = |outcome| {
             let attempt = Attempt::new(server_url, &info, size, &scan.match_keys, outcome);
@@ -843,6 +994,10 @@ impl Run {
         log::info!("{}: {}", due.name, describe(&answer));
         self.tracker.sent(&due.name);
         self.retrying = None;
+        let tourneys = SentTourney::of(scan);
+        if matches!(answer, Answer::Answered(_)) && tourneys.iter().any(|t| t.ended) {
+            uploader.tourney_ended.store(true, Ordering::Relaxed);
+        }
         uploader.record.lock().unwrap().put(
             server_url,
             &due.name,
@@ -852,6 +1007,7 @@ impl Run {
                 at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
                 players: scan.players.clone(),
                 answer,
+                tourneys,
             },
         );
         uploader
@@ -1167,6 +1323,103 @@ mod tests {
         let afk = uploader.afk();
         assert!(afk.on);
         assert_eq!(afk.latest.unwrap().rounds, [3]);
+    }
+
+    const TOURNEY_LOG: &str = include_str!("../tests/fixtures/ranked-log-tourney-example.txt");
+
+    /// The host's lobby with `lobby_key`, in `region`, while its code window is open.
+    fn tourney_lobby(lobby_key: &str, region: &str) -> TourneyLobby {
+        TourneyLobby {
+            id: 7,
+            label: "Lobby 1/2".into(),
+            region: region.into(),
+            round_limit: 3,
+            tourney: server::LobbyTourney {
+                id: 3,
+                name: "October Cup".into(),
+                region: region.into(),
+                starts_at: "2026-10-10T17:00:00Z".into(),
+                status: "live".into(),
+            },
+            match_id: None,
+            screenshot: None,
+            screenshot_expired: false,
+            verified: false,
+            code_from: None,
+            code: Some(server::TourneyCodeValues {
+                lobby_key: lobby_key.into(),
+                round_limit: 3,
+                name: "October Cup".into(),
+                label: "Lobby 1/2".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn uploads_a_tourney_match_as_its_lobbys_region_and_notes_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let file = due(dir.path(), TOURNEY_LOG);
+        let (seen, request) = std::sync::mpsc::channel();
+        let stored = r#"{"result":"stored","matches":[]}"#;
+        let server = server::test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{stored}",
+                stored.len()
+            ),
+            TOURNEY_LOG,
+            seen,
+        );
+        uploader.learn_lobbies(&server, &[tourney_lobby("073518264903", "na")]);
+        assert_eq!(
+            uploader.lobby_key(&server, 7).as_deref(),
+            Some("073518264903")
+        );
+        assert_eq!(uploader.lobby_key(&server, 8), None);
+        // The host picked EU for the night; the lobby is NA's.
+        let target = Target {
+            region: Some("eu"),
+            ..target(&server)
+        };
+        assert!(!uploader.tourney_ended(&server, 7, None));
+        assert_eq!(
+            block_on(run.send(&uploader, target, &file, TIMEOUT)),
+            Ok(true)
+        );
+        let request = request.recv().unwrap().to_ascii_lowercase();
+        assert!(request.contains("\r\nx-region: na\r\n"), "{request}");
+        // Marked in the record, and the lobby wants its screenshot now, by its key or its id.
+        let sent = uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(&server, &file.name)
+            .cloned();
+        assert_eq!(
+            sent.unwrap().tourneys,
+            [SentTourney {
+                lobby_key: "073518264903".into(),
+                ended: true
+            }]
+        );
+        assert!(uploader.take_tourney_ended());
+        assert!(!uploader.take_tourney_ended());
+        assert!(uploader.tourney_ended(&server, 7, None));
+        assert!(uploader.tourney_ended(&server, 8, Some("073518264903")));
+        assert!(!uploader.tourney_ended(&server, 8, None));
+    }
+
+    #[test]
+    fn looks_up_the_lobbies_at_most_so_often() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let now = Instant::now();
+        assert!(uploader.may_look_up(SERVER, now));
+        assert!(!uploader.may_look_up(SERVER, now + Duration::from_secs(1)));
+        assert!(uploader.may_look_up("https://test.genjiball.us", now));
+        let later = now + Duration::from_secs(config::TOURNEY_LOOKUP_MIN_SECS);
+        assert!(uploader.may_look_up(SERVER, later));
     }
 
     #[test]

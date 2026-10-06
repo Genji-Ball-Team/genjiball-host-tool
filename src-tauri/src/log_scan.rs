@@ -21,6 +21,57 @@ pub struct Scan {
     pub match_keys: Vec<String>,
     /// Each `ROUND_START` after a `GBR`, with that match's key.
     pub round_starts: Vec<RoundStart>,
+    /// The tourney matches (a `TOURNEY` line after their `GBR`, log format 2), in the order they
+    /// start. A match without one is a ranked match.
+    pub tourneys: Vec<TourneyMatch>,
+}
+
+/// A tourney match: `TOURNEY|time|lobbyKey|roundLimit` after the `GBR` of `match_key`
+/// (GenjiBall-CE `docs/ranked-log.md`, "Tourney matches").
+#[derive(Debug, Clone, PartialEq)]
+pub struct TourneyMatch {
+    pub match_key: String,
+    /// The server's id for the tourney lobby: digits, text (it may start with `0`).
+    pub lobby_key: String,
+    /// It ended with `MATCH_END|time|ROUNDS`: round `roundLimit` is over, and the game shows the
+    /// final standings the host screenshots.
+    pub ended: bool,
+}
+
+impl Scan {
+    /// Whether every match in the file is a tourney match (and there's at least one).
+    pub fn only_tourneys(&self) -> bool {
+        !self.match_keys.is_empty()
+            && self
+                .match_keys
+                .iter()
+                .all(|key| self.tourneys.iter().any(|t| t.match_key == *key))
+    }
+
+    /// The lobby keys of the tourney matches in the file, each once.
+    pub fn lobby_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+        for t in &self.tourneys {
+            if !keys.contains(&t.lobby_key) {
+                keys.push(t.lobby_key.clone());
+            }
+        }
+        keys
+    }
+}
+
+/// The `lobbyKey` of a `TOURNEY|time|lobbyKey|roundLimit` event: digits only, else `None`.
+fn lobby_key(event: &str) -> Option<&str> {
+    let key = event.strip_prefix("TOURNEY|")?.split('|').nth(1)?;
+    (!key.is_empty() && key.bytes().all(|b| b.is_ascii_digit())).then_some(key)
+}
+
+/// Whether a `MATCH_END|time|result` event ended a tourney match (`ROUNDS`).
+fn ended_by_rounds(event: &str) -> bool {
+    event
+        .strip_prefix("MATCH_END|")
+        .and_then(|rest| rest.split('|').nth(1))
+        == Some("ROUNDS")
 }
 
 /// A round that started: `ROUND_START|time|round|ids` in the match whose `GBR` came before it.
@@ -92,6 +143,27 @@ fn read(text: &str) -> (Scan, Option<&str>) {
             }
         } else if line.starts_with("MATCH_END|") {
             found.match_ends += 1;
+            if ended_by_rounds(line) {
+                if let Some(t) = found
+                    .tourneys
+                    .iter_mut()
+                    .rev()
+                    .find(|t| Some(t.match_key.as_str()) == current)
+                {
+                    t.ended = true;
+                }
+            }
+        } else if let Some(lobby) = lobby_key(line) {
+            // The first `TOURNEY` of the match counts: the game logs one, right after `GBR`.
+            if let Some(key) = current {
+                if !found.tourneys.iter().any(|t| t.match_key == key) {
+                    found.tourneys.push(TourneyMatch {
+                        match_key: key.to_string(),
+                        lobby_key: lobby.to_string(),
+                        ended: false,
+                    });
+                }
+            }
         } else if let Some(fields) = line.strip_prefix("JOIN|") {
             // `JOIN|time|id|name`, and maybe fields a newer game appends.
             let name = fields.split('|').nth(2).unwrap_or_default();
@@ -162,8 +234,52 @@ mod tests {
                     .to_vec(),
                 match_keys: vec!["482913507226".into()],
                 round_starts: [1, 2, 3].map(|round| start("482913507226", round)).to_vec(),
+                tourneys: vec![],
             }
         );
+        assert!(!scan(EXAMPLE).only_tourneys());
+    }
+
+    const TOURNEY: &str = include_str!("../tests/fixtures/ranked-log-tourney-example.txt");
+
+    #[test]
+    fn reads_a_tourney_match() {
+        let found = scan(TOURNEY);
+        assert!(found.ranked);
+        assert_eq!(found.match_keys, ["219604738815"]);
+        assert_eq!(
+            found.tourneys,
+            [TourneyMatch {
+                match_key: "219604738815".into(),
+                // Text: the leading 0 stays.
+                lobby_key: "073518264903".into(),
+                ended: true,
+            }]
+        );
+        assert!(found.only_tourneys());
+        assert_eq!(found.lobby_keys(), ["073518264903"]);
+        // Not ended until `MATCH_END|…|ROUNDS` is written in full.
+        let playing = &TOURNEY[..TOURNEY.find("[00:01:20] MATCH_END").unwrap()];
+        assert!(!scan(playing).tourneys[0].ended);
+    }
+
+    #[test]
+    fn tells_tourney_and_ranked_matches_apart_in_one_file() {
+        let text = format!("{EXAMPLE}{TOURNEY}");
+        let found = scan(&text);
+        assert_eq!(found.match_keys, ["482913507226", "219604738815"]);
+        assert_eq!(found.tourneys.len(), 1);
+        assert!(!found.only_tourneys());
+        // A `TIME` end isn't a tourney's, and a `TOURNEY` line before any `GBR` belongs to none.
+        let odd = "TOURNEY|1|111|30\nGBR|1|2|1.3.3R|5\nTOURNEY|1|0042|30\nMATCH_END|9|TIME\n";
+        let found = scan(odd);
+        assert_eq!(found.tourneys.len(), 1);
+        assert_eq!(found.tourneys[0].lobby_key, "0042");
+        assert!(!found.tourneys[0].ended);
+        // A lobby key that isn't digits isn't one.
+        assert!(scan("GBR|1|2|1.3.3R|5\nTOURNEY|1|abc|30\n")
+            .tourneys
+            .is_empty());
     }
 
     fn start(match_key: &str, round: u32) -> RoundStart {

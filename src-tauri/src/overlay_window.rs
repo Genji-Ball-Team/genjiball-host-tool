@@ -23,8 +23,8 @@ use crate::{config, Store};
 pub const LABEL: &str = "overlay";
 pub const PAGE: &str = "overlay.html";
 
-/// Sent to the overlay window when its settings or the edit mode change: it reads its feed again
-/// at once rather than at its next poll.
+/// Sent when the overlay's settings or the edit mode change: the overlay reads its feed again at
+/// once rather than at its next poll, and Settings shows the change (a hotkey ended edit mode).
 pub const CHANGED_EVENT: &str = "overlay-changed";
 
 #[derive(Default)]
@@ -80,7 +80,7 @@ pub fn apply(app: &AppHandle) {
         }
         _ => {}
     }
-    let _ = app.emit_to(LABEL, CHANGED_EVENT, ());
+    let _ = app.emit(CHANGED_EVENT, ());
 }
 
 fn create(app: &AppHandle) -> tauri::Result<()> {
@@ -119,7 +119,7 @@ pub fn set_editing(app: &AppHandle, on: bool) {
         #[cfg(windows)]
         win::set_passive(&window, !on);
     }
-    let _ = app.emit_to(LABEL, CHANGED_EVENT, ());
+    let _ = app.emit(CHANGED_EVENT, ());
 }
 
 /// What a hotkey does.

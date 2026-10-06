@@ -7,7 +7,7 @@
 export const VIEWS = ["home", "match", "uploads", "tourneys", "settings"] as const;
 export type View = (typeof VIEWS)[number];
 
-export const PANES = ["account", "game", "lobby", "updates", "advanced"] as const;
+export const PANES = ["account", "game", "lobby", "overlay", "updates", "advanced"] as const;
 export type Pane = (typeof PANES)[number];
 
 const VIEW_KEY = "view";

@@ -199,6 +199,7 @@
               <button type="button" id="pane-account-tab" aria-controls="pane-account">Account</button>
               <button type="button" id="pane-game-tab" aria-controls="pane-game">Game</button>
               <button type="button" id="pane-lobby-tab" aria-controls="pane-lobby">Lobby</button>
+              <button type="button" id="pane-overlay-tab" aria-controls="pane-overlay">Overlay</button>
               <button type="button" id="pane-updates-tab" aria-controls="pane-updates">Updates</button>
               <button type="button" id="pane-advanced-tab" aria-controls="pane-advanced">Advanced</button>
             </div>
@@ -299,6 +300,83 @@
                   <summary>Optional. The live lobby is switched on and off on Home. <span class="more">More</span></summary>
                   <p>While a ranked match is played in your newest Workshop log, the site lists your lobby in your region with how many players are in it. It's taken off when the match ends, the log stops growing (the game closed) or you quit the tool.</p>
                 </details>
+              </div>
+            </div>
+
+            <div class="pane" id="pane-overlay" hidden>
+              <div class="group">
+                <div class="switch-card">
+                  <div class="switch-head">
+                    <h2><label for="overlay-on">Overlay over Overwatch</label> <span class="tag">Experimental</span></h2>
+                    <input type="checkbox" class="switch" id="overlay-on" role="switch" />
+                  </div>
+                  <p class="muted">Your upload status, the lobby's ranks and the match, drawn over the game.</p>
+                </div>
+                <details class="hint">
+                  <summary>Its own window: it never touches the game. <span class="more">More</span></summary>
+                  <p>The overlay is a separate see-through window that Windows draws over Overwatch. It lets every click through, never takes the focus, and only reads your Workshop logs and the ranked site, like the rest of the tool. It doesn't inject into the game, read its memory or send it keys. Play in borderless windowed: exclusive fullscreen hides other windows. Use the stream page below for OBS instead.</p>
+                </details>
+                <div class="row" id="overlay-layout-actions">
+                  <button type="button" id="overlay-edit">Edit layout</button>
+                  <button type="button" class="quiet" id="overlay-reset">Put the widgets back</button>
+                </div>
+                <p id="overlay-state" role="status" hidden></p>
+              </div>
+
+              <div class="group" id="overlay-options">
+                <h2>Widgets</h2>
+                <div class="widget-groups" id="overlay-widgets"></div>
+              </div>
+
+              <div class="group">
+                <h2>Look</h2>
+                <div class="ranges">
+                  <label for="overlay-opacity">Opacity</label>
+                  <input type="range" id="overlay-opacity" />
+                  <output id="overlay-opacity-value" for="overlay-opacity"></output>
+                  <label for="overlay-scale">Size</label>
+                  <input type="range" id="overlay-scale" />
+                  <output id="overlay-scale-value" for="overlay-scale"></output>
+                </div>
+                <label class="check"><input id="overlay-with-game" type="checkbox" /> Only while Overwatch is in front</label>
+              </div>
+
+              <div class="group">
+                <h2>Hotkeys</h2>
+                <div class="hotkeys" id="overlay-hotkeys"></div>
+                <p class="note bad" id="overlay-hotkey-error" hidden></p>
+                <details class="hint">
+                  <summary>Click a box, then press the keys. Backspace clears it. <span class="more">More</span></summary>
+                  <p>They work while you play, and only while the overlay is on. Windows hands them to the tool before the game sees them, so each needs Ctrl, Alt or the Windows key: pick keys you don't use in Overwatch.</p>
+                </details>
+              </div>
+
+              <div class="group">
+                <div class="switch-card">
+                  <div class="switch-head">
+                    <h2><label for="stream-on">Stream page for OBS</label></h2>
+                    <input type="checkbox" class="switch" id="stream-on" role="switch" />
+                  </div>
+                  <p class="muted">The same widgets as a page on this PC: add it to OBS as a browser source.</p>
+                </div>
+                <div id="stream-settings">
+                  <div class="row">
+                    <span class="path selectable" id="stream-url"></span>
+                    <button type="button" class="quiet" id="stream-copy">Copy</button>
+                  </div>
+                  <p class="note bad" id="stream-error" hidden></p>
+                  <form id="stream-port-form" class="row">
+                    <label for="stream-port">Port</label>
+                    <input id="stream-port" type="number" inputmode="numeric" />
+                    <button type="submit">Save</button>
+                  </form>
+                  <details class="hint">
+                    <summary>Only this PC can open it. <span class="more">More</span></summary>
+                    <p>It's served on 127.0.0.1 only, never to your network, and never holds your host token. In OBS: Sources → Browser, the URL above, and the width and height of your canvas. It doesn't need the overlay switched on, and works with exclusive fullscreen.</p>
+                  </details>
+                  <h3>Widgets on the stream</h3>
+                  <div class="widget-groups" id="stream-widgets"></div>
+                </div>
               </div>
             </div>
 

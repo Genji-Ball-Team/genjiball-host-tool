@@ -1,0 +1,161 @@
+/*
+ * The overlay (#49): a heads-up display over Overwatch, read at a glance. Dark translucent slabs
+ * whose left edge is their state, genjiball.us's colours only. Overwatch's own HUD vernacular, the
+ * skewed parallelogram, is kept for one thing: the kill feed's deflect chain and the number tags.
+ * Sized from the screen's height (14px at 1080p), times the host's size setting.
+ */
+:root {
+  --bg: 9 11 16; --fg: #eef1f7; --soft: #b4bbc7; --muted: #858d9a; --faint: #5d6573;
+  --good: #67d49a; --bad: #ef6b6b; --gold: #f3cf6b;
+  --scale: 1; --opacity: .92;
+  --skew: -12deg;
+  color-scheme: dark;
+  font-size: calc(1.3vh * var(--scale));
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+body {
+  color: var(--fg); cursor: default; user-select: none;
+  font: 400 1rem/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  /* Over a bright map, text needs its own shade. */
+  text-shadow: 0 1px 2px rgb(0 0 0 / .6);
+}
+p, h2, ol, table { margin: 0; padding: 0; }
+ol { list-style: none; }
+
+#overlay { position: fixed; inset: 0; }
+.dock { position: absolute; display: flex; flex-direction: column; gap: .5rem; }
+.dock.left { left: 1.2%; top: 22%; width: 19rem; }
+.dock.right { right: 1.2%; top: 22%; width: 21rem; align-items: stretch; }
+.dock.top { left: 50%; top: 9%; width: 30rem; transform: translateX(-50%); align-items: center; }
+.dock.top .widget { width: 100%; }
+.free > .widget { position: absolute; width: 21rem; }
+
+/* A slab: the left edge says how things are. */
+.widget {
+  --tone: var(--faint);
+  position: relative; padding: .55rem .8rem .6rem .9rem;
+  background: rgb(var(--bg) / .8);
+  border-radius: 3px 8px 8px 3px;
+  box-shadow: inset 3px 0 0 var(--tone), 0 .4rem 1.4rem rgb(0 0 0 / .35);
+  opacity: var(--opacity);
+}
+.widget[data-tone="good"] { --tone: var(--good); }
+.widget[data-tone="warn"] { --tone: var(--gold); }
+.widget[data-tone="bad"] { --tone: var(--bad); }
+.widget > .label { display: none; }
+
+header { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; margin-bottom: .35rem; }
+h2 { font: 600 1.05rem/1.2 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.005em; }
+.soft { color: var(--soft); }
+.faint { color: var(--faint); }
+.num { font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif; font-weight: 600; }
+.note { margin-top: .4rem; color: var(--muted); font-size: .85rem; }
+.note.warn { color: var(--gold); }
+
+/* Host status (#50): one line each, title then what to do. */
+.status { display: grid; grid-template-columns: .55rem 1fr; gap: .6rem; align-items: start; }
+.status .dot { width: .55rem; height: .55rem; margin-top: .42rem; border-radius: 50%; background: var(--tone); box-shadow: 0 0 .5rem var(--tone); }
+.widget[data-tone="idle"] .status .dot { box-shadow: none; }
+.title { font-weight: 600; }
+.detail { color: var(--soft); font-size: .88rem; }
+
+/* AFK: the one widget that should be hard to miss. */
+.widget[data-key="afk"] { background: rgb(60 14 18 / .85); box-shadow: inset 3px 0 0 var(--bad), 0 0 0 1px rgb(239 107 107 / .5), 0 .4rem 1.4rem rgb(0 0 0 / .35); animation: afk 2.4s ease-in-out infinite; }
+.afk .title { color: #ffd9d9; }
+@keyframes afk { 50% { box-shadow: inset 3px 0 0 var(--bad), 0 0 0 1px rgb(239 107 107 / .9), 0 0 1.2rem rgb(239 107 107 / .45); } }
+
+/* Roster (#51). */
+.roster ol { display: grid; gap: .15rem; }
+.roster li { display: grid; grid-template-columns: 2.3rem 1fr auto 3.2rem; align-items: center; gap: .5rem; padding: .12rem 0; }
+.roster li.doubled .name { color: var(--gold); }
+.rank { color: var(--muted); font-size: .85rem; }
+.name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.host { margin-left: .4rem; color: var(--muted); font-size: .78rem; }
+.roster li > :last-child { text-align: right; }
+.tier { padding: 0 .45rem; border-radius: 2px; font-size: .78rem; font-weight: 600; color: var(--tier); background: color-mix(in srgb, var(--tier) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier) 45%, transparent); text-shadow: none; }
+.new { color: var(--good); font-size: .85rem; font-weight: 600; }
+
+/* Eliminations and standings (#52). */
+.elims li, .placings li { display: grid; align-items: center; gap: .55rem; padding: .1rem 0; }
+.elims li { grid-template-columns: 1.2rem 1fr auto; }
+.by { color: var(--muted); font-size: .85rem; }
+.placings li, .placings .cols { grid-template-columns: 1.4rem 1fr 2.6rem 2.6rem; }
+.placings .cols { display: grid; gap: .55rem; font-size: .8rem; }
+.placings .cols::before { content: ""; grid-column: 1 / 3; }
+.placings li > .num, .placings .cols > span { text-align: right; }
+.placings li:first-child .place { color: var(--gold); }
+.place { color: var(--muted); }
+li.left { opacity: .5; }
+
+/* The kill feed (#52): who touched the ball, in Overwatch's skewed tags, then who went out. */
+.widget[data-key="killFeed"] { padding: .45rem .6rem; }
+.feed { display: grid; gap: .3rem; }
+.feed li { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .3rem; font-size: .95rem; }
+.feed li.fresh { animation: kill .32s cubic-bezier(.2, .8, .2, 1); }
+@keyframes kill { from { transform: translateX(1.5rem); opacity: 0; } }
+.via, .killer, .victim, .speed { padding: .1rem .5rem; transform: skewX(var(--skew)); }
+.via { color: var(--soft); background: rgb(255 255 255 / .06); font-size: .85rem; }
+.killer { font-weight: 600; background: rgb(255 255 255 / .1); }
+.killer.none { color: var(--muted); font-weight: 400; background: transparent; }
+.victim { color: #ffd2d2; background: rgb(239 107 107 / .22); }
+.victim::before { content: ""; display: inline-block; width: 0; height: 0; margin: 0 .45rem .1rem 0; border-block: .28rem solid transparent; border-left: .42rem solid var(--bad); vertical-align: middle; }
+.speed { color: #141008; background: var(--gold); font-size: .8rem; text-shadow: none; }
+
+/* After the round (#53). */
+.winner { font: 600 1.35rem/1.1 "Segoe UI Variable Display", "Segoe UI", sans-serif; color: var(--good); }
+.winner .soft { font-size: 1rem; font-weight: 400; }
+.result header { align-items: center; }
+.order { display: flex; flex-wrap: wrap; gap: .25rem .9rem; color: var(--soft); }
+.order li { display: flex; gap: .35rem; }
+
+.widget[data-key="matchSummary"] { padding: .8rem 1rem .9rem 1.1rem; }
+.summary h2 { font-size: 1.35rem; }
+.summary table { width: 100%; border-collapse: collapse; margin-top: .2rem; }
+.summary th { color: var(--muted); font-size: .78rem; font-weight: 400; text-align: right; padding-bottom: .2rem; }
+.summary td { padding: .16rem 0; }
+.summary td + td { padding-left: .7rem; }
+.summary td.num { text-align: right; }
+.summary tr:first-child td.place { color: var(--gold); }
+.change { display: inline-block; min-width: 3.2rem; padding: .02rem .4rem; text-align: center; font-weight: 600; transform: skewX(var(--skew)); text-shadow: none; }
+.change.up { color: #0b1a12; background: var(--good); }
+.change.down { color: #200b0b; background: var(--bad); }
+.change.none { background: transparent; }
+
+.session .stats { display: flex; gap: 1.3rem; }
+.stat { display: flex; flex-direction: column; font-size: .8rem; }
+.big { font-size: 1.55rem; line-height: 1.1; }
+.stat .change { min-width: 0; font-size: 1.3rem; }
+
+/* Tourney (#54). */
+.progress { display: flex; justify-content: space-between; font-weight: 600; }
+.bar { height: .3rem; margin: .35rem 0 .55rem; background: rgb(255 255 255 / .08); }
+.bar::after { content: ""; display: block; height: 100%; width: calc(var(--done, 0) * 100%); background: var(--gold); }
+.shot { margin: .1rem 0 .55rem; padding: .35rem .6rem; color: #141008; background: var(--gold); font-weight: 600; text-shadow: none; }
+.tourney .placings header { margin-top: .2rem; }
+.tourney .placings h2 { font-size: .9rem; color: var(--soft); }
+
+/* Editing the layout: every widget on shows, with its name, and can be dragged. */
+body.editing { background: rgb(var(--bg) / .35); }
+body.editing .widget { cursor: grab; outline: 1px dashed rgb(255 255 255 / .35); outline-offset: 3px; animation: none; }
+body.editing .widget.dragging { cursor: grabbing; outline-color: var(--good); }
+body.editing .widget > .label { display: block; position: absolute; top: -1.45rem; left: 0; font-size: .78rem; color: var(--good); }
+.edit-bar {
+  position: fixed; left: 50%; bottom: 7%; transform: translateX(-50%); display: flex; align-items: center; gap: .8rem;
+  padding: .55rem .6rem .55rem 1rem; background: rgb(var(--bg) / .95); border-radius: 8px; box-shadow: 0 .6rem 2rem rgb(0 0 0 / .5); font-size: 1rem;
+}
+.edit-bar button { font: inherit; font-weight: 600; padding: .35rem .9rem; border: 0; border-radius: 4px; color: #0b1a12; background: var(--good); cursor: pointer; }
+.edit-bar button.quiet { color: var(--soft); background: transparent; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .2); }
+.edit-bar button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+/* The tool isn't answering: fade rather than show stale numbers as live. */
+#overlay.offline .widget { opacity: calc(var(--opacity) * .35); }
+
+/* OBS: the same page, the stream page's own widgets. */
+body.stream .dock.left { top: 30%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .widget[data-key="afk"], .feed li.fresh { animation: none; }
+}

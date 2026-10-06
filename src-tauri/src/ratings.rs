@@ -42,7 +42,8 @@ pub enum RatingState {
 pub enum Job {
     /// The first `RANKS_LEADERBOARD_PAGES` pages of the leaderboard.
     Leaderboard,
-    /// `/api/players?search=` for a name not on the leaderboard.
+    /// `/api/players?search=` for a name not on the leaderboard, by its name key: the server
+    /// searches ignoring case, so `Ghost` and `ghost` are one search.
     Search(String),
     /// `/api/matches/:id`.
     Match(i64),
@@ -133,7 +134,7 @@ impl Ratings {
                 });
                 let searchable = name.trim().chars().count() >= config::PLAYER_SEARCH_MIN_CHARS;
                 if !board.contains_key(&k) && !searched && searchable {
-                    jobs.push(Job::Search(name.clone()));
+                    jobs.push(Job::Search(k));
                 }
             }
         }
@@ -148,7 +149,9 @@ impl Ratings {
                 jobs.push(Job::Match(id));
             }
         }
-        jobs.dedup();
+        // Two players with one name, anywhere in the lobby: one search.
+        let mut seen = HashSet::new();
+        jobs.retain(|job| seen.insert(job.clone()));
         jobs.retain(|job| {
             let backing_off = inner
                 .failed
@@ -274,6 +277,27 @@ mod tests {
         let later = now + Duration::from_secs(config::RANKS_CACHE_SECS + 1);
         let jobs = ratings.jobs(&scope(), &lobby, &[], later);
         assert!(jobs.contains(&Job::Leaderboard) && jobs.contains(&Job::Search("nova".into())));
+    }
+
+    #[test]
+    fn searches_a_name_once_whatever_its_case_or_place() {
+        let ratings = Ratings::default();
+        let now = Instant::now();
+        let lobby = names(&["Ghost", "Nova", "ghost"]);
+        ratings.jobs(&scope(), &lobby, &[], now);
+        ratings.board_read(&scope(), vec![standing("Nova", 1500.0)], now);
+        assert_eq!(
+            ratings.jobs(&scope(), &lobby, &[], now),
+            [Job::Search("ghost".into())]
+        );
+        let found = FoundPlayer {
+            standing: standing("Ghost", 1600.0),
+            matched_alias: None,
+        };
+        ratings.searched(&scope(), "ghost", vec![found], now);
+        let players = ratings.players(&scope(), &lobby);
+        assert_eq!(players[0].state, RatingState::Found);
+        assert_eq!(players[2].state, RatingState::Found);
     }
 
     #[test]

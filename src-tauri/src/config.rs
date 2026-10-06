@@ -567,6 +567,14 @@ pub const OVERLAY_HOTKEYS: [OverlayHotkey; 3] = [
 /// and where it is. Only asks Windows about the window in front (`overlay_window.rs`).
 pub const OVERLAY_TRACK_MS: u64 = 400;
 
+/// How many of those checks pass between placing the overlay again while it shows, even if
+/// nothing moved, so it stays over windows that went on top since.
+pub const OVERLAY_REPLACE_TRACKS: u32 = 8;
+
+/// How long after the last Ctrl+wheel notch a widget's new size is saved, in milliseconds: the
+/// size shows at once, and one save follows a turn of the wheel.
+pub const OVERLAY_SIZE_SAVE_MS: u64 = 400;
+
 /// How the overlay knows the Overwatch window: its window class, else its title. Read from the
 /// window only, never from the game's process.
 pub const GAME_WINDOW_CLASS: &str = "TankWindowClass";
@@ -619,6 +627,10 @@ pub const STREAM_PORT: OverlayRange = OverlayRange {
     min: 1024,
     max: 65_535,
 };
+
+/// How often the stream page's server looks for a new connection, and whether it was turned
+/// off, in milliseconds.
+pub const STREAM_ACCEPT_POLL_MS: u64 = 100;
 
 /// The biggest request head the stream page reads. It only answers `GET`s without a body.
 pub const STREAM_REQUEST_MAX_BYTES: usize = 8 * 1024;

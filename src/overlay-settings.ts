@@ -246,11 +246,15 @@ export function setupOverlaySettings(ctx: Context): void {
     void context.busy(async () => context.show(await invoke<{ overlay: OverlayView }>("set_overlay_editing", { on: !view?.editing })), (m) => setState(m, "bad"));
   });
   el("overlay-reset").addEventListener("click", () => {
-    void context.busy(async () => {
-      await invoke("set_overlay_layout", { layout: {} });
-      await context.show(await invoke<{ overlay: OverlayView }>("set_overlay_editing", { on: view?.editing ?? false }));
-      toast("Widgets back in their places");
-    });
+    void context.busy(
+      async () => {
+        setState("", "good");
+        await invoke("set_overlay_layout", { layout: {}, sizes: {} });
+        await context.show(await invoke<{ overlay: OverlayView }>("set_overlay_editing", { on: view?.editing ?? false }));
+        toast("Widgets back in their places and sizes");
+      },
+      (m) => setState(m, "bad"),
+    );
   });
   for (const [id, key] of [
     ["overlay-opacity", "opacity"],

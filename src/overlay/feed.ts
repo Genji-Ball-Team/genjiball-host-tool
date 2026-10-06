@@ -18,6 +18,8 @@ export interface Feed {
   editing: boolean;
   hotkeys: { action: string; label: string; keys: string | null }[];
   pollMs: number;
+  /** How long after a Ctrl+wheel notch a widget's size is saved. */
+  sizeSaveMs: number;
   /** `text` is `null` when the log didn't change since `known`. */
   log: { file: string; size: number; text: string | null } | null;
   logWrittenAt: string | null;

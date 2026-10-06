@@ -235,7 +235,7 @@ fn track(app: AppHandle) {
             let rect = game.map(|g| g.0).unwrap_or_else(primary_screen);
             ticks = ticks.wrapping_add(1);
             // Placed again now and then while it shows, to stay over windows that went on top.
-            let refresh = visible && ticks.is_multiple_of(8);
+            let refresh = visible && ticks.is_multiple_of(config::OVERLAY_REPLACE_TRACKS);
             if last != Some((rect, visible)) || refresh {
                 place(&window, rect, visible);
                 last = Some((rect, visible));

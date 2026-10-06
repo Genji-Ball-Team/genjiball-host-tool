@@ -195,7 +195,7 @@ function resize(key: string, value: number | null, later = false): void {
     pending = { layout: layoutNow(), sizes };
     render();
     window.clearTimeout(sizeSave);
-    sizeSave = window.setTimeout(() => void save(layoutNow(), sizesNow()), 400);
+    sizeSave = window.setTimeout(() => void save(layoutNow(), sizesNow()), feed?.sizeSaveMs ?? 0);
   } else {
     void save(layoutNow(), sizes);
   }

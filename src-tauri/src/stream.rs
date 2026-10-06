@@ -20,9 +20,6 @@ use crate::overlay::{self, FeedRequest};
 use crate::overlay_window::PAGE;
 use crate::{config, Store};
 
-/// How often the server looks for a new connection, and whether it should stop.
-const ACCEPT_POLL: Duration = Duration::from_millis(100);
-
 #[derive(Default)]
 pub struct StreamServer {
     running: Mutex<Option<Running>>,
@@ -91,10 +88,12 @@ pub fn apply(app: &AppHandle) {
                         }
                     });
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(ACCEPT_POLL),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(config::STREAM_ACCEPT_POLL_MS))
+                }
                 Err(e) => {
                     log::debug!("Stream page: {e}");
-                    std::thread::sleep(ACCEPT_POLL);
+                    std::thread::sleep(Duration::from_millis(config::STREAM_ACCEPT_POLL_MS));
                 }
             }
         }

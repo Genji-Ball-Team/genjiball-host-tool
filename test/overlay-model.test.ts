@@ -21,6 +21,7 @@ function feed(change: Partial<Feed> = {}): Feed {
     editing: false,
     hotkeys: [{ action: "afk", label: "AFK on or off", keys: "Ctrl+Alt+A" }],
     pollMs: 1000,
+    sizeSaveMs: 400,
     log: { file: "Log-2026-10-06-19-58-00.txt", size: 100, text: null },
     logWrittenAt: secondsAgo(2),
     logError: null,

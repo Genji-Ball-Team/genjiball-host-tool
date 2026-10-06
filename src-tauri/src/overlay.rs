@@ -87,6 +87,8 @@ pub struct Feed {
     pub editing: bool,
     pub hotkeys: Vec<HotkeyView>,
     pub poll_ms: u64,
+    /// How long after a Ctrl+wheel notch a widget's size is saved.
+    pub size_save_ms: u64,
     /// The live log, `None` while there's none. Its `text` is `None` when unchanged.
     pub log: Option<LogText>,
     /// When it last grew, RFC 3339.
@@ -269,6 +271,7 @@ pub fn feed(app: &AppHandle, request: &FeedRequest, stream: bool) -> Feed {
             })
             .collect(),
         poll_ms: config::OVERLAY_POLL_MS,
+        size_save_ms: config::OVERLAY_SIZE_SAVE_MS,
         log,
         log_written_at,
         log_error,

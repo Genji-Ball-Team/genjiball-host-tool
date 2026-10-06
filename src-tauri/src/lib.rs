@@ -1214,9 +1214,10 @@ fn set_screenshot_folder(
     app_state(&app, &store)
 }
 
-/// What the overlay window shows now (#49).
+/// What the overlay window shows now (#49). Async, so its file reads every poll stay off the main
+/// thread.
 #[tauri::command]
-fn get_overlay_feed(request: FeedRequest, app: tauri::AppHandle) -> Feed {
+async fn get_overlay_feed(request: FeedRequest, app: tauri::AppHandle) -> Feed {
     overlay::feed(&app, &request, false)
 }
 

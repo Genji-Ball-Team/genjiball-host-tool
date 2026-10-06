@@ -1229,8 +1229,12 @@ async fn set_overlay(
     app: tauri::AppHandle,
     store: State<'_, Store>,
 ) -> Result<AppState, String> {
-    let layout = store.get().overlay.layout;
-    let normalized = settings::normalize_overlay(&OverlaySettings { layout, ..settings })?;
+    let current = store.get().overlay;
+    let normalized = settings::normalize_overlay(&OverlaySettings {
+        layout: current.layout,
+        sizes: current.sizes,
+        ..settings
+    })?;
     store.update(|s| s.overlay = normalized)?;
     log::info!("Overlay settings changed");
     overlay_window::apply(&app);
@@ -1238,17 +1242,43 @@ async fn set_overlay(
     app_state(&app, &store)
 }
 
-/// Where the host dragged the widgets, by key (a share of the screen, 0 to 1). `{}` puts them all
-/// back in their default places.
+/// Where the host dragged the widgets, by key (a share of the screen, 0 to 1), and how big they
+/// made them (a share of their normal size). Both `{}` put them all back in their default places
+/// and sizes.
 #[tauri::command]
 fn set_overlay_layout(
     layout: BTreeMap<String, [f64; 2]>,
+    sizes: BTreeMap<String, f64>,
     app: tauri::AppHandle,
     store: State<Store>,
 ) -> Result<(), String> {
     let current = store.get().overlay;
-    let normalized = settings::normalize_overlay(&OverlaySettings { layout, ..current })?;
+    let normalized = settings::normalize_overlay(&OverlaySettings {
+        layout,
+        sizes,
+        ..current
+    })?;
     store.update(|s| s.overlay = normalized)?;
+    let _ = app.emit(overlay_window::CHANGED_EVENT, ());
+    Ok(())
+}
+
+/// Switches one widget of the overlay on or off: "Hide this widget" in edit mode.
+#[tauri::command]
+fn set_overlay_widget(
+    key: String,
+    on: bool,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<(), String> {
+    if !config::OVERLAY_WIDGETS.iter().any(|w| w.key == key) {
+        return Err(format!("There's no widget {key}"));
+    }
+    let mut overlay = store.get().overlay;
+    overlay.widgets.insert(key.clone(), on);
+    let normalized = settings::normalize_overlay(&overlay)?;
+    store.update(|s| s.overlay = normalized)?;
+    log::info!("Overlay widget {key} {}", if on { "on" } else { "off" });
     let _ = app.emit(overlay_window::CHANGED_EVENT, ());
     Ok(())
 }
@@ -1415,6 +1445,7 @@ pub fn run() {
             get_overlay_feed,
             set_overlay,
             set_overlay_layout,
+            set_overlay_widget,
             set_overlay_editing
         ])
         .build(tauri::generate_context!())

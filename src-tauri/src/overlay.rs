@@ -79,6 +79,10 @@ pub struct Feed {
     pub opacity: u16,
     pub scale: u16,
     pub layout: BTreeMap<String, [f64; 2]>,
+    /// How big the host made each widget, a share of its normal size.
+    pub sizes: BTreeMap<String, f64>,
+    /// The smallest and biggest a widget can be made, and a step.
+    pub size_range: [f64; 3],
     /// The host is placing the widgets: they show sample data where there's none.
     pub editing: bool,
     pub hotkeys: Vec<HotkeyView>,
@@ -249,6 +253,12 @@ pub fn feed(app: &AppHandle, request: &FeedRequest, stream: bool) -> Feed {
         opacity: settings.overlay.opacity(),
         scale: settings.overlay.scale(),
         layout: settings.overlay.layout.clone(),
+        sizes: settings.overlay.sizes.clone(),
+        size_range: [
+            config::OVERLAY_WIDGET_SIZE_MIN,
+            config::OVERLAY_WIDGET_SIZE_MAX,
+            config::OVERLAY_WIDGET_SIZE_STEP,
+        ],
         editing: !stream && app.state::<OverlayWindow>().editing(),
         hotkeys: config::OVERLAY_HOTKEYS
             .iter()

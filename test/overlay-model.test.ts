@@ -16,6 +16,8 @@ function feed(change: Partial<Feed> = {}): Feed {
     opacity: 92,
     scale: 100,
     layout: {},
+    sizes: {},
+    sizeRange: [0.5, 2.5, 0.1],
     editing: false,
     hotkeys: [{ action: "afk", label: "AFK on or off", keys: "Ctrl+Alt+A" }],
     pollMs: 1000,

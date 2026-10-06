@@ -11,6 +11,10 @@ export interface Feed {
   opacity: number;
   scale: number;
   layout: Record<string, [number, number]>;
+  /** How big the host made each widget, a share of its normal size. */
+  sizes: Record<string, number>;
+  /** The smallest and biggest a widget can be made, and a step. */
+  sizeRange: [number, number, number];
   editing: boolean;
   hotkeys: { action: string; label: string; keys: string | null }[];
   pollMs: number;
@@ -94,7 +98,9 @@ export interface FeedRequest {
 export interface Source {
   read(request: FeedRequest): Promise<Feed>;
   /** The overlay window only: the stream page can't change anything. */
-  saveLayout?(layout: Record<string, [number, number]>): Promise<void>;
+  saveLayout?(layout: Record<string, [number, number]>, sizes: Record<string, number>): Promise<void>;
+  /** Switches one widget off: "Hide this widget". */
+  hideWidget?(key: string): Promise<void>;
   setEditing?(on: boolean): Promise<void>;
   /** Calls `listener` when the settings or edit mode change, to read the feed again at once. */
   onChange?(listener: () => void): Promise<void>;
@@ -110,7 +116,8 @@ export async function tauriSource(): Promise<Source> {
   const { listen } = await import("@tauri-apps/api/event");
   return {
     read: (request) => invoke<Feed>("get_overlay_feed", { request }),
-    saveLayout: (layout) => invoke<void>("set_overlay_layout", { layout }),
+    saveLayout: (layout, sizes) => invoke<void>("set_overlay_layout", { layout, sizes }),
+    hideWidget: (key) => invoke<void>("set_overlay_widget", { key, on: false }),
     setEditing: async (on) => {
       await invoke("set_overlay_editing", { on });
     },

@@ -27,11 +27,14 @@ ol { list-style: none; }
 
 #overlay { position: fixed; inset: 0; }
 .dock { position: absolute; display: flex; flex-direction: column; gap: .5rem; }
-.dock.left { left: 1.2%; top: 22%; width: 19rem; }
-.dock.right { right: 1.2%; top: 22%; width: 21rem; align-items: stretch; }
-.dock.top { left: 50%; top: 9%; width: 30rem; transform: translateX(-50%); align-items: center; }
-.dock.top .widget { width: 100%; }
-.free > .widget { position: absolute; width: 21rem; }
+.dock.left { left: 1.2%; top: 22%; align-items: flex-start; }
+.dock.right { right: 1.2%; top: 22%; align-items: flex-end; }
+.dock.top { left: 50%; top: 9%; transform: translateX(-50%); align-items: center; }
+.free > .slot { position: absolute; }
+/* A widget keeps its column's width wherever it's dragged; its own size (zoom) scales all of it. */
+.widget[data-dock="left"] { width: 19rem; }
+.widget[data-dock="right"] { width: 21rem; }
+.widget[data-dock="top"] { width: 30rem; }
 
 /* A slab: the left edge says how things are. */
 .widget {
@@ -139,9 +142,34 @@ li.left { opacity: .5; }
 
 /* Editing the layout: every widget on shows, with its name, and can be dragged. */
 body.editing { background: rgb(var(--bg) / .35); }
-body.editing .widget { cursor: grab; outline: 1px dashed rgb(255 255 255 / .35); outline-offset: 3px; animation: none; }
-body.editing .widget.dragging { cursor: grabbing; outline-color: var(--good); }
-body.editing .widget > .label { display: block; position: absolute; top: -1.45rem; left: 0; font-size: .78rem; color: var(--good); }
+body.editing .slot { cursor: grab; }
+body.editing .widget { outline: 1px dashed rgb(255 255 255 / .35); outline-offset: 3px; animation: none; }
+body.editing .slot.dragging { cursor: grabbing; }
+body.editing .slot.dragging .widget { outline-color: var(--good); }
+body.editing .widget > .label { display: block; position: absolute; top: -1.45rem; left: 0; font-size: .78rem; color: var(--good); white-space: nowrap; }
+
+/* The corner to resize by, only while editing. */
+.grip { display: none; }
+body.editing .grip {
+  display: block; position: absolute; right: -.45rem; bottom: -.45rem; width: 1.1rem; height: 1.1rem; cursor: nwse-resize;
+  border-right: 3px solid var(--good); border-bottom: 3px solid var(--good); border-radius: 0 0 4px 0;
+}
+body.editing .grip:hover { border-color: var(--fg); }
+
+/* The right-click menu while editing. */
+.menu {
+  position: fixed; z-index: 10; min-width: 12rem; padding: .3rem; font-size: .95rem;
+  background: rgb(var(--bg) / .97); border-radius: 6px; box-shadow: 0 0 0 1px rgb(255 255 255 / .1), 0 .6rem 2rem rgb(0 0 0 / .55); text-shadow: none;
+}
+.menu-title { padding: .3rem .6rem .35rem; font-weight: 600; }
+.menu button {
+  display: block; width: 100%; padding: .32rem .6rem; border: 0; border-radius: 4px; text-align: left;
+  font: inherit; color: var(--fg); background: transparent; cursor: pointer;
+}
+.menu button:hover:not(:disabled), .menu button:focus-visible { background: rgb(255 255 255 / .08); outline: none; }
+.menu button:disabled { color: var(--faint); cursor: default; }
+.menu button:last-child { color: #ffb3b3; }
+.menu hr { margin: .25rem .3rem; border: 0; border-top: 1px solid rgb(255 255 255 / .1); }
 .edit-bar {
   position: fixed; left: 50%; bottom: 7%; transform: translateX(-50%); display: flex; align-items: center; gap: .8rem;
   padding: .55rem .6rem .55rem 1rem; background: rgb(var(--bg) / .95); border-radius: 8px; box-shadow: 0 .6rem 2rem rgb(0 0 0 / .5); font-size: 1rem;

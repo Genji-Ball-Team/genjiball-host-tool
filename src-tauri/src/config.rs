@@ -525,6 +525,12 @@ pub const OVERLAY_SCALE: OverlayRange = OverlayRange {
     max: 160,
 };
 
+/// How big one widget can be made in edit mode, as a share of its normal size (times the
+/// overlay's size), and the step a right-click "Bigger" or a Ctrl+wheel notch takes.
+pub const OVERLAY_WIDGET_SIZE_MIN: f64 = 0.5;
+pub const OVERLAY_WIDGET_SIZE_MAX: f64 = 2.5;
+pub const OVERLAY_WIDGET_SIZE_STEP: f64 = 0.1;
+
 /// Whether the overlay shows only while Overwatch is the window in front, for a host who hasn't
 /// switched it. Off, it also shows over the desktop and other windows.
 pub const OVERLAY_ONLY_WITH_GAME_BY_DEFAULT: bool = true;

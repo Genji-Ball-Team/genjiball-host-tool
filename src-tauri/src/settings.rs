@@ -80,6 +80,10 @@ pub struct OverlaySettings {
     /// width and height, 0 to 1. A widget that's not here sits in its default place.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub layout: BTreeMap<String, [f64; 2]>,
+    /// How big the host made each widget, by key, as a share of its normal size
+    /// (`config::OVERLAY_WIDGET_SIZE_MIN` to `_MAX`). A widget that's not here is its normal size.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sizes: BTreeMap<String, f64>,
     /// The hotkeys the host changed, by action (`config::OVERLAY_HOTKEYS`): the keys as typed,
     /// empty for none.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -186,6 +190,20 @@ pub fn normalize_overlay(input: &OverlaySettings) -> Result<OverlaySettings, Str
         .filter(|(_, place)| place.iter().all(|v| v.is_finite()))
         .map(|(key, [x, y])| (key.clone(), [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]))
         .collect();
+    let sizes = input
+        .sizes
+        .iter()
+        .filter(|(key, _)| config::OVERLAY_WIDGETS.iter().any(|w| w.key == *key))
+        .filter(|(_, size)| size.is_finite())
+        .map(|(key, size)| {
+            let size = size.clamp(
+                config::OVERLAY_WIDGET_SIZE_MIN,
+                config::OVERLAY_WIDGET_SIZE_MAX,
+            );
+            (key.clone(), (size * 100.0).round() / 100.0)
+        })
+        .filter(|(_, size)| *size != 1.0)
+        .collect();
     let mut hotkeys = BTreeMap::new();
     let mut taken: Vec<(u32, &str)> = Vec::new();
     for hotkey in &config::OVERLAY_HOTKEYS {
@@ -211,6 +229,7 @@ pub fn normalize_overlay(input: &OverlaySettings) -> Result<OverlaySettings, Str
             .only_with_game
             .filter(|&on| on != config::OVERLAY_ONLY_WITH_GAME_BY_DEFAULT),
         layout,
+        sizes,
         hotkeys,
         stream: input
             .stream
@@ -615,6 +634,7 @@ mod tests {
                 scale: Some(120),
                 only_with_game: Some(false),
                 layout: BTreeMap::from([("roster".into(), [0.25, 0.5])]),
+                sizes: BTreeMap::from([("roster".into(), 1.5)]),
                 hotkeys: BTreeMap::from([("afk".into(), "Ctrl+Shift+F9".into())]),
                 stream: Some(true),
                 stream_port: Some(8000),
@@ -960,6 +980,12 @@ mod tests {
                 ("standings".into(), [f64::NAN, 0.5]),
                 ("nope".into(), [0.5, 0.5]),
             ]),
+            sizes: BTreeMap::from([
+                ("roster".into(), 9.0),
+                ("standings".into(), 1.0),
+                ("killFeed".into(), 1.234),
+                ("nope".into(), 2.0),
+            ]),
             hotkeys: BTreeMap::from([
                 ("toggle".into(), " Ctrl+Alt+O ".into()),
                 ("edit".into(), "".into()),
@@ -973,6 +999,11 @@ mod tests {
             OverlaySettings {
                 widgets: BTreeMap::from([("killFeed".into(), true)]),
                 layout: BTreeMap::from([("roster".into(), [1.0, 0.0])]),
+                // Kept in range, rounded, and left out at the normal size.
+                sizes: BTreeMap::from([
+                    ("killFeed".into(), 1.23),
+                    ("roster".into(), config::OVERLAY_WIDGET_SIZE_MAX),
+                ]),
                 hotkeys: BTreeMap::from([("edit".into(), "".into())]),
                 stream_widgets: BTreeMap::from([("killFeed".into(), false)]),
                 ..OverlaySettings::default()

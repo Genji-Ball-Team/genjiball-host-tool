@@ -375,6 +375,251 @@ pub const DEBUG_ANSWER_BYTES: usize = 16 * 1024;
 /// How many of the live log's last lines (its newest events) the debug panel shows.
 pub const DEBUG_EVENTS_SHOWN: usize = 40;
 
+/// The overlay (#49): an experimental window over Overwatch, for a host who hasn't switched it.
+/// Off until the host turns it on under Settings → Overlay.
+pub const OVERLAY_ON_BY_DEFAULT: bool = false;
+
+/// A widget the overlay and the stream page (#55) can show. `key` is its name in `settings.json`
+/// and between Rust and the windows; `group` the heading it's listed under in Settings.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayWidget {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub group: &'static str,
+    /// What it shows, for Settings.
+    pub help: &'static str,
+    /// On in the overlay, and on the stream page, for a host who hasn't switched it.
+    pub overlay: bool,
+    pub stream: bool,
+}
+
+/// Every widget, in the order Settings lists them. Host status (#50), lobby (#51), match (#52),
+/// after the round (#53) and tourney (#54).
+pub const OVERLAY_WIDGETS: [OverlayWidget; 13] = [
+    OverlayWidget {
+        key: "logging",
+        label: "Logging",
+        group: "Host status",
+        help: "Whether a ranked match is being recorded, and why it won't count.",
+        overlay: true,
+        stream: false,
+    },
+    OverlayWidget {
+        key: "uploads",
+        label: "Uploads",
+        group: "Host status",
+        help: "The last upload's result, and anything holding uploads up.",
+        overlay: true,
+        stream: false,
+    },
+    OverlayWidget {
+        key: "afk",
+        label: "AFK",
+        group: "Host status",
+        help: "A badge while AFK is on, so you never forget it.",
+        overlay: true,
+        stream: false,
+    },
+    OverlayWidget {
+        key: "logCopies",
+        label: "Log copies",
+        group: "Host status",
+        help: "How many files the match is split over: each move to or from spectator starts one.",
+        overlay: false,
+        stream: false,
+    },
+    OverlayWidget {
+        key: "rankedCode",
+        label: "Ranked code",
+        group: "Host status",
+        help: "How long ago you copied the ranked code, and when its rank tags may be stale.",
+        overlay: false,
+        stream: false,
+    },
+    OverlayWidget {
+        key: "roster",
+        label: "Lobby roster",
+        group: "Lobby",
+        help: "The players in the lobby with their tier, rating and place, new players and doubled names.",
+        overlay: true,
+        stream: true,
+    },
+    OverlayWidget {
+        key: "eliminations",
+        label: "Eliminations",
+        group: "Match",
+        help: "Who went out this round, in order, and who sent the ball.",
+        overlay: false,
+        stream: true,
+    },
+    OverlayWidget {
+        key: "standings",
+        label: "Standings",
+        group: "Match",
+        help: "Round wins and kills in this match, ranked as the site ranks them.",
+        overlay: true,
+        stream: true,
+    },
+    OverlayWidget {
+        key: "killFeed",
+        label: "Kill feed",
+        group: "Match",
+        help: "The latest kills, with the deflects that led to them.",
+        overlay: false,
+        stream: true,
+    },
+    OverlayWidget {
+        key: "roundResult",
+        label: "Round result",
+        group: "After the round",
+        help: "The finishing order of the round that just ended, until the next one starts.",
+        overlay: true,
+        stream: true,
+    },
+    OverlayWidget {
+        key: "matchSummary",
+        label: "Match summary",
+        group: "After the round",
+        help: "Places, wins and kills when the match ends, and rating changes once the server has rated it.",
+        overlay: true,
+        stream: true,
+    },
+    OverlayWidget {
+        key: "session",
+        label: "Session",
+        group: "After the round",
+        help: "Matches, rounds and players since the tool started, and your own rating change.",
+        overlay: false,
+        stream: false,
+    },
+    OverlayWidget {
+        key: "tourney",
+        label: "Tourney",
+        group: "Tourney",
+        help: "In a tourney match: the round of the limit, live standings and the verify screenshot reminder.",
+        overlay: true,
+        stream: true,
+    },
+];
+
+/// A setting of the overlay the host picks a whole number for: its default and range.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct OverlayRange {
+    pub default: u16,
+    pub min: u16,
+    pub max: u16,
+}
+
+/// How opaque the widgets are, in percent.
+pub const OVERLAY_OPACITY: OverlayRange = OverlayRange {
+    default: 92,
+    min: 30,
+    max: 100,
+};
+
+/// How big the widgets are, in percent of their normal size.
+pub const OVERLAY_SCALE: OverlayRange = OverlayRange {
+    default: 100,
+    min: 70,
+    max: 160,
+};
+
+/// Whether the overlay shows only while Overwatch is the window in front, for a host who hasn't
+/// switched it. Off, it also shows over the desktop and other windows.
+pub const OVERLAY_ONLY_WITH_GAME_BY_DEFAULT: bool = true;
+
+/// What the overlay's global hotkeys do, and their default keys (Tauri accelerator syntax). A
+/// hotkey is taken by Windows before the game sees it, so the defaults are combinations Overwatch
+/// doesn't use. The host can change each, or clear it.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct OverlayHotkey {
+    pub action: &'static str,
+    pub label: &'static str,
+    pub default: &'static str,
+}
+
+pub const OVERLAY_HOTKEYS: [OverlayHotkey; 3] = [
+    OverlayHotkey {
+        action: "toggle",
+        label: "Show or hide the overlay",
+        default: "Ctrl+Alt+O",
+    },
+    OverlayHotkey {
+        action: "edit",
+        label: "Edit the layout",
+        default: "Ctrl+Alt+L",
+    },
+    OverlayHotkey {
+        action: "afk",
+        label: "AFK on or off",
+        default: "Ctrl+Alt+A",
+    },
+];
+
+/// How often the overlay looks for the Overwatch window, in milliseconds: whether it's in front
+/// and where it is. Only asks Windows about the window in front (`overlay_window.rs`).
+pub const OVERLAY_TRACK_MS: u64 = 400;
+
+/// How the overlay knows the Overwatch window: its window class, else its title. Read from the
+/// window only, never from the game's process.
+pub const GAME_WINDOW_CLASS: &str = "TankWindowClass";
+pub const GAME_WINDOW_TITLE: &str = "Overwatch";
+
+/// How often the overlay and the stream page read the live log and the tool's state again, in
+/// milliseconds. The log is only sent again when it grew.
+pub const OVERLAY_POLL_MS: u64 = 1000;
+
+/// How many of the newest kills the kill feed shows.
+pub const KILL_FEED_SHOWN: usize = 5;
+
+/// How long the ranked code may have been copied before the overlay says its rank tags may be
+/// stale: ratings move with every match.
+pub const RANKED_CODE_STALE_SECS: u64 = 6 * 3600;
+
+/// How long the roster keeps a player's rating before asking the server again.
+pub const RANKS_CACHE_SECS: u64 = 10 * 60;
+
+/// How many pages of the region's leaderboard (`leaderboardPageSize`, 50 a page) the roster reads
+/// for ratings, at most. A name not on them is searched (`/api/players?search=`) on its own.
+pub const RANKS_LEADERBOARD_PAGES: u32 = 4;
+
+/// How long a name the server doesn't know is kept as unknown before it's searched again. Long:
+/// each search reads every alias (genjiball-ranked `docs/database.md`, "Free tier").
+pub const RANKS_UNKNOWN_SECS: u64 = 30 * 60;
+
+/// The fewest characters the server searches a name for (genjiball-ranked
+/// `playerSearchMinLength`). Shorter names are only found on the leaderboard.
+pub const PLAYER_SEARCH_MIN_CHARS: usize = 2;
+
+/// How often a finished match's ratings are asked of the server again until it has rated them
+/// (`/api/matches/:id`). A complete match is rated at upload, so it's usually the first answer.
+pub const MATCH_RATINGS_RETRY_SECS: u64 = 30;
+
+/// How many of a session's matches the overlay asks the server about, newest first.
+pub const SESSION_MATCHES_MAX: usize = 30;
+
+/// How many of the newest logs are read for copies of the live match (the same `matchKey`). Each
+/// is read again only once it grew.
+pub const LOG_COPIES_SCANNED: usize = 30;
+
+/// The stream page (#55): the overlay's widgets as a page on this PC, for an OBS browser source.
+/// Off until the host turns it on.
+pub const STREAM_ON_BY_DEFAULT: bool = false;
+
+/// The port the stream page is served on, on `127.0.0.1` only, unless the host picks another.
+pub const STREAM_PORT: OverlayRange = OverlayRange {
+    default: 47_623,
+    min: 1024,
+    max: 65_535,
+};
+
+/// The biggest request head the stream page reads. It only answers `GET`s without a body.
+pub const STREAM_REQUEST_MAX_BYTES: usize = 8 * 1024;
+
+/// How long the stream page waits for a request before it hangs up.
+pub const STREAM_READ_TIMEOUT_SECS: u64 = 5;
+
 /// Every `Tunable`, in the order the window lists them.
 pub const TUNABLES: [&Tunable; 10] = [
     &POLL_INTERVAL_SECS,
@@ -416,5 +661,23 @@ mod tests {
             assert!(centers.is_some_and(|d| !d.names.is_empty()), "{}", r.id);
         }
         assert_eq!(DATA_CENTERS.len(), REGIONS.len());
+    }
+
+    #[test]
+    fn overlay_settings_are_sane() {
+        for (i, w) in OVERLAY_WIDGETS.iter().enumerate() {
+            assert!(
+                OVERLAY_WIDGETS[..i].iter().all(|o| o.key != w.key),
+                "{} twice",
+                w.key
+            );
+        }
+        for (i, h) in OVERLAY_HOTKEYS.iter().enumerate() {
+            assert!(OVERLAY_HOTKEYS[..i].iter().all(|o| o.action != h.action));
+            assert!(OVERLAY_HOTKEYS[..i].iter().all(|o| o.default != h.default));
+        }
+        for r in [&OVERLAY_OPACITY, &OVERLAY_SCALE, &STREAM_PORT] {
+            assert!(r.min <= r.default && r.default <= r.max);
+        }
     }
 }

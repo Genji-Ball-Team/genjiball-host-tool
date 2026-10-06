@@ -94,6 +94,17 @@ pub enum Answer {
     Refused { error: String, message: String },
 }
 
+/// A match as the record knows it (`Record::known_matches`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnownMatch {
+    pub match_key: String,
+    pub match_id: Option<i64>,
+    /// As the server last said.
+    pub status: String,
+    /// When its first copy was uploaded, RFC 3339 in UTC.
+    pub first_at: String,
+}
+
 impl Record {
     pub fn started(&self, server_url: &str) -> Option<SystemTime> {
         let secs = *self.started.get(server_url)?;
@@ -197,6 +208,35 @@ impl Record {
             self.dirty = true;
         }
         changed
+    }
+
+    /// Every match uploaded to `server_url`, once each, newest upload first: for the overlay's
+    /// match summary and session (#53). Each with its id on the site once the status refresh
+    /// brought one, and when it was first uploaded.
+    pub fn known_matches(&self, server_url: &str) -> Vec<KnownMatch> {
+        let mut known: Vec<KnownMatch> = Vec::new();
+        for (_, sent) in self.uploads(server_url) {
+            let Answer::Answered(answer) = &sent.answer else {
+                continue;
+            };
+            for m in answer.matches.iter().rev() {
+                let Some(key) = &m.match_key else { continue };
+                match known.iter_mut().find(|k| &k.match_key == key) {
+                    // An older copy: uploaded first then.
+                    Some(k) => {
+                        k.first_at = sent.at.clone();
+                        k.match_id = k.match_id.or(m.match_id);
+                    }
+                    None => known.push(KnownMatch {
+                        match_key: key.clone(),
+                        match_id: m.match_id,
+                        status: m.status.clone(),
+                        first_at: sent.at.clone(),
+                    }),
+                }
+            }
+        }
+        known
     }
 
     /// Whether a match uploaded to `server_url` has this id on the site and is public there.
@@ -399,6 +439,38 @@ mod tests {
             }),
             ..sent(1, at)
         }
+    }
+
+    #[test]
+    fn knows_each_match_once_with_its_id() {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        record.put(
+            server,
+            "Log-a.txt",
+            answered("2026-10-03T10:00:00Z", &["1"], "accepted"),
+        );
+        record.put(
+            server,
+            "Log-b.txt",
+            answered("2026-10-03T11:00:00Z", &["1", "2"], "accepted"),
+        );
+        record.update_states(
+            server,
+            &[MatchState {
+                match_key: "1".into(),
+                match_id: Some(40),
+                status: "accepted".into(),
+                rejection: None,
+                review_reasons: vec![],
+            }],
+        );
+        let known = record.known_matches(server);
+        let keys: Vec<_> = known.iter().map(|k| k.match_key.as_str()).collect();
+        assert_eq!(keys, ["2", "1"]);
+        assert_eq!(known[1].match_id, Some(40));
+        assert_eq!(known[1].first_at, "2026-10-03T10:00:00Z");
+        assert!(record.known_matches("https://other").is_empty());
     }
 
     #[test]

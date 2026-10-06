@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::uploads::{Answer, Record};
+use crate::uploads::{Answer, Record, SentTourney};
 use crate::watcher::{QueueState, Queued};
 
 /// The watcher's queue as of the last poll, with the server and folder it was polled for: it only
@@ -74,6 +74,8 @@ pub struct Entry {
     /// Not uploaded as it is now: being played, due, or failed. A file uploaded before that grew
     /// since has both.
     pub queued: Option<QueueState>,
+    /// Its tourney matches (none: only ranked ones), as it is now.
+    pub tourneys: Vec<SentTourney>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -114,6 +116,7 @@ pub fn page(
             },
             answer: sent.map(|s| s.answer.clone()),
             queued: Some(q.state.clone()),
+            tourneys: q.tourneys.clone(),
         }
     });
     let done = uploads
@@ -125,6 +128,7 @@ pub fn page(
             players: sent.players.clone(),
             answer: Some(sent.answer.clone()),
             queued: None,
+            tourneys: sent.tourneys.clone(),
         });
     Page {
         entries: waiting
@@ -166,6 +170,7 @@ mod tests {
                     review_reasons: vec![],
                 }],
             }),
+            tourneys: vec![],
         }
     }
 
@@ -174,6 +179,7 @@ mod tests {
             file: file.into(),
             players: vec!["Mochi".into()],
             state,
+            tourneys: vec![],
         }
     }
 
@@ -260,6 +266,35 @@ mod tests {
             files(&page(&record, SERVER, &queue, 1, 3)),
             ["Log-4.txt", "Log-2.txt", "Log-1.txt"]
         );
+    }
+
+    #[test]
+    fn marks_tourney_matches() {
+        let tourney = SentTourney {
+            lobby_key: "073518264903".into(),
+            ended: true,
+        };
+        let mut record = record();
+        record.put(
+            SERVER,
+            "Log-6.txt",
+            Sent {
+                tourneys: vec![tourney.clone()],
+                ..sent("2026-10-03T16:00:00Z", "accepted")
+            },
+        );
+        let playing = Queued {
+            tourneys: vec![SentTourney {
+                ended: false,
+                ..tourney.clone()
+            }],
+            ..queued("Log-7.txt", QueueState::Playing)
+        };
+        let first = page(&record, SERVER, &[playing], 0, 3);
+        assert_eq!(files(&first), ["Log-7.txt", "Log-6.txt", "Log-5.txt"]);
+        assert!(!first.entries[0].tourneys[0].ended);
+        assert_eq!(first.entries[1].tourneys, [tourney]);
+        assert!(first.entries[2].tourneys.is_empty());
     }
 
     #[test]

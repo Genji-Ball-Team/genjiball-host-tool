@@ -131,7 +131,7 @@ fn fits(text: &str) -> bool {
 }
 
 /// `Custom String("<text>")`, with `"` and `\` escaped.
-fn custom_string(text: &str) -> String {
+pub fn custom_string(text: &str) -> String {
     let escaped = text.replace('\\', r"\\").replace('"', r#"\""#);
     format!(r#"Custom String("{escaped}")"#)
 }
@@ -175,10 +175,11 @@ pub fn rank_tags_action(tags: &RankTags) -> Result<(String, usize, usize), Strin
     Ok((action, names, skipped))
 }
 
-/// The whole rule, in the shape the spec gives, with `eol` between lines.
-fn rule(action: &str, eol: &str) -> String {
+/// The whole rule, starting with the line `start`, in the shape the specs give (`rank-tags.md`,
+/// `tourney-rule.md`): one action, on every tick of `Ongoing - Global`. `eol` between lines.
+fn rule(start: &str, action: &str, eol: &str) -> String {
     [
-        RULE_START,
+        start,
         "    event {",
         "        Ongoing - Global;",
         "    }",
@@ -190,9 +191,21 @@ fn rule(action: &str, eol: &str) -> String {
     .join(eol)
 }
 
-/// `code` with its `RANKS - generated` rule replaced by one holding `tags`. Everything else,
-/// line endings included, stays as it was.
-pub fn fill(code: &str, tags: &RankTags) -> Result<Filled, String> {
+/// Why a generated rule couldn't be replaced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RuleError {
+    /// No line is exactly the rule's first line.
+    Missing,
+    /// More than one is: the tool can't tell which to fill.
+    Twice,
+    /// No line after it is exactly `}`.
+    Unended,
+}
+
+/// `code` with the rule whose first line is exactly `start` (it must be there once) replaced, up
+/// to the first line after it that is exactly `}`, by one in the same shape holding `action`.
+/// Everything else, line endings included, stays as it was.
+pub fn replace_rule(code: &str, start: &str, action: &str) -> Result<String, RuleError> {
     // Line starts, with each line's text without its line ending.
     let mut lines = Vec::new();
     let mut at = 0;
@@ -204,32 +217,43 @@ pub fn fill(code: &str, tags: &RankTags) -> Result<Filled, String> {
         at += line.len();
     }
 
-    let mut starts = lines.iter().enumerate().filter(|(_, l)| l.1 == RULE_START);
-    let (start_index, &(start, start_text, start_len)) = starts
-        .next()
-        .ok_or("The release's code has no RANKS - generated rule. Is it a ranked (R) build?")?;
+    let mut starts = lines.iter().enumerate().filter(|(_, l)| l.1 == start);
+    let (start_index, &(begin, start_text, start_len)) = starts.next().ok_or(RuleError::Missing)?;
     if starts.next().is_some() {
-        return Err(
-            "The release's code has the RANKS - generated rule twice, so the host tool can't tell which to fill".into(),
-        );
+        return Err(RuleError::Twice);
     }
     let &(end, end_text, end_len) = lines[start_index + 1..]
         .iter()
         .find(|l| l.1 == RULE_END)
-        .ok_or("The RANKS - generated rule in the release's code never ends")?;
+        .ok_or(RuleError::Unended)?;
 
     // The rule's own line endings: whatever its first line uses.
-    let eol = &code[start + start_text.len()..start + start_len];
+    let eol = &code[begin + start_text.len()..begin + start_len];
     let eol = if eol.is_empty() { "\n" } else { eol };
     // Whatever followed the closing `}` (nothing at the end of the file).
     let after = &code[end + end_text.len()..end + end_len];
 
-    let (action, names, skipped) = rank_tags_action(tags)?;
     let mut filled = String::with_capacity(code.len() + action.len());
-    filled.push_str(&code[..start]);
-    filled.push_str(&rule(&action, eol));
+    filled.push_str(&code[..begin]);
+    filled.push_str(&rule(start, action, eol));
     filled.push_str(after);
     filled.push_str(&code[end + end_len..]);
+    Ok(filled)
+}
+
+/// `code` with its `RANKS - generated` rule replaced by one holding `tags`. Everything else,
+/// line endings included, stays as it was.
+pub fn fill(code: &str, tags: &RankTags) -> Result<Filled, String> {
+    let (action, names, skipped) = rank_tags_action(tags)?;
+    let filled = replace_rule(code, RULE_START, &action).map_err(|e| match e {
+        RuleError::Missing => {
+            "The release's code has no RANKS - generated rule. Is it a ranked (R) build?"
+        }
+        RuleError::Twice => {
+            "The release's code has the RANKS - generated rule twice, so the host tool can't tell which to fill"
+        }
+        RuleError::Unended => "The RANKS - generated rule in the release's code never ends",
+    })?;
     Ok(Filled {
         code: filled,
         names,

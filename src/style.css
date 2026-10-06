@@ -95,6 +95,25 @@ details form { margin-top: .75rem; }
 .soft { color: var(--soft); }
 .pager { align-items: center; font-size: .85rem; }
 
+/* Tourneys (#8, #9, #10): one block per assigned lobby. */
+#tourneys-state { margin: 0; }
+.tourneys { list-style: none; margin: .75rem 0 0; padding: 0; }
+.tourneys:empty { display: none; }
+.tourneys > li { padding: .75rem 0; border-top: 1px solid var(--line); font-size: .9rem; }
+.tourneys > li:first-child { border-top: 0; }
+.tourneys p { margin: .35rem 0 0; }
+.tourneys .headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .6rem; }
+.tourneys .headline .tag { margin-left: 0; }
+.tourneys .tag.live { border-color: var(--bad); color: var(--bad); }
+.tourneys .row { align-items: center; margin-top: .5rem; }
+.tourneys .row button { padding: .3rem .75rem; font-size: .85rem; }
+.tourneys .shot { margin-top: .5rem; padding: .5rem 0 .25rem .9rem; border-left: 2px solid var(--line); }
+.shot-preview {
+  display: flex; align-items: center; justify-content: center; min-height: 6rem; padding: .5rem;
+  background: var(--panel); border: 1px dashed var(--border); border-radius: 4px;
+}
+.shot-preview img { display: block; max-width: 100%; max-height: 16rem; object-fit: contain; }
+
 .tunable { margin-top: 1rem; }
 .tunable:first-child { margin-top: 0; }
 .tunable .row { align-items: center; margin-top: 0; }

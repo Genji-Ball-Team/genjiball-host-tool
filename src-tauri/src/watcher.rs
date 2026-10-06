@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::config;
 use crate::log_scan::{self, RoundStart, Scan};
 use crate::settings::Settings;
+use crate::uploads::SentTourney;
 
 /// A file to upload.
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +43,8 @@ pub struct Queued {
     pub file: String,
     pub players: Vec<String>,
     pub state: QueueState,
+    /// Its tourney matches, so far.
+    pub tourneys: Vec<SentTourney>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -292,6 +295,7 @@ impl Tracker {
             .map(|(name, t)| Queued {
                 file: name.clone(),
                 players: t.scan.players.clone(),
+                tourneys: SentTourney::of(&t.scan),
                 state: match (&t.error, t.due) {
                     (Some(error), _) => QueueState::Failed {
                         error: error.clone(),

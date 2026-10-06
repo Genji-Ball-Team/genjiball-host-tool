@@ -56,6 +56,33 @@ pub struct Sent {
     #[serde(default)]
     pub players: Vec<String>,
     pub answer: Answer,
+    /// The tourney matches in what was sent (`TOURNEY` lines): the history marks them, and a
+    /// lobby whose match ended is asked for its verify screenshot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tourneys: Vec<SentTourney>,
+}
+
+/// A tourney match in an upload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentTourney {
+    /// Its lobby's key (`TOURNEY|time|lobbyKey|roundLimit`).
+    pub lobby_key: String,
+    /// It ended with `MATCH_END ROUNDS`: the final standings were shown.
+    pub ended: bool,
+}
+
+impl SentTourney {
+    /// The tourney matches of a scanned file.
+    pub fn of(scan: &crate::log_scan::Scan) -> Vec<Self> {
+        scan.tourneys
+            .iter()
+            .map(|t| SentTourney {
+                lobby_key: t.lobby_key.clone(),
+                ended: t.ended,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,6 +212,21 @@ impl Record {
             })
     }
 
+    /// Whether a tourney match of the lobby with `lobby_key` was uploaded to `server_url` with its
+    /// end (`MATCH_END ROUNDS`), and the server took the upload.
+    pub fn tourney_ended(&self, server_url: &str, lobby_key: &str) -> bool {
+        self.servers
+            .get(server_url)
+            .into_iter()
+            .flat_map(|files| files.values())
+            .filter(|sent| matches!(sent.answer, Answer::Answered(_)))
+            .any(|sent| {
+                sent.tourneys
+                    .iter()
+                    .any(|t| t.ended && t.lobby_key == lobby_key)
+            })
+    }
+
     /// Every file uploaded to `server_url` and its last upload, newest first.
     pub fn uploads(&self, server_url: &str) -> Vec<(&str, &Sent)> {
         let mut all: Vec<_> = self
@@ -236,7 +278,56 @@ mod tests {
                 error: "not_ranked".into(),
                 message: "x".into(),
             },
+            tourneys: vec![],
         }
+    }
+
+    #[test]
+    fn knows_which_tourney_lobbies_had_their_match_uploaded() {
+        let mut record = Record::default();
+        let server = "https://genjiball.us";
+        let tourney = |key: &str, ended| SentTourney {
+            lobby_key: key.into(),
+            ended,
+        };
+        record.put(
+            server,
+            "Log-a.txt",
+            Sent {
+                tourneys: vec![tourney("111", false)],
+                ..answered("2026-10-03T10:00:00Z", &["1"], "accepted")
+            },
+        );
+        // Being played: not ended yet.
+        assert!(!record.tourney_ended(server, "111"));
+        record.put(
+            server,
+            "Log-b.txt",
+            Sent {
+                tourneys: vec![tourney("111", true)],
+                ..answered("2026-10-03T11:00:00Z", &["1"], "accepted")
+            },
+        );
+        assert!(record.tourney_ended(server, "111"));
+        assert!(!record.tourney_ended(server, "222"));
+        assert!(!record.tourney_ended("https://test.genjiball.us", "111"));
+        // Refused by the server: not uploaded.
+        record.put(
+            server,
+            "Log-c.txt",
+            Sent {
+                tourneys: vec![tourney("333", true)],
+                ..sent(1, "2026-10-03T12:00:00Z")
+            },
+        );
+        assert!(!record.tourney_ended(server, "333"));
+        // Kept in uploads.json, and left out of it for a ranked file.
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains(r#""tourneys":[{"lobbyKey":"111","ended":false}]"#));
+        let back: Record = serde_json::from_str(&json).unwrap();
+        assert!(back.tourney_ended(server, "111"));
+        let ranked = serde_json::to_string(&sent(1, "x")).unwrap();
+        assert!(!ranked.contains("tourneys"), "{ranked}");
     }
 
     #[test]

@@ -24,6 +24,23 @@ You can close the window afterwards: the tool keeps uploading from the tray (nex
 
 Only matches played after you first saved a token for a server are uploaded to that server.
 
+## Hosting a tourney lobby
+
+An admin assigns hosts to tourney lobbies. Yours are under **Tourneys** in the tool: the tourney's name, the lobby (like "Lobby 1/2"), its region, when it starts in your time with a countdown, and how many rounds it lasts. If you aren't assigned to any, it says so. The tool checks with the server every few minutes; "Check again" checks now.
+
+The tool shows a Windows notification when a lobby's code becomes available, shortly before it starts, and when its screenshot is due.
+
+1. **Copy the code.** About an hour before the start, **Copy tourney code** works. It's the ranked code with the lobby's tourney rule turned on: the tourney's name and lobby on the HUD, its round limit, and the rank tags of the tourney's region. The tool shows what it put in. Before the code is available, the button says when it will be.
+2. **Import it** into a new custom game as usual, then set **00 - Preset** to **Tournament** in the Workshop settings. Any other preset makes the match unranked.
+3. **Play.** The match lasts the round limit, then the game shows the **final standings** for 30 seconds. **Take a screenshot** of them (Overwatch's screenshot key, or any capture tool).
+4. **Upload the screenshot.** Once the match is uploaded, the lobby asks for it. The tool offers the newest picture in your Overwatch screenshots folder and updates the offer when you take a new one. You can also click "Choose image…", drop an image on the window, or paste one (Ctrl+V). Check the preview, then click **Upload**. Until an admin has verified it you can replace or delete it.
+
+**Region.** A tourney is played in its region, whatever yours is. If a lobby is in the other region, the tool warns you, and uploads that lobby's match as the tourney's region anyway; your other matches still go as the region you picked.
+
+**Screenshots folder.** The tool looks in `Documents\Overwatch\ScreenShots\Overwatch`. If your screenshots go elsewhere, choose that folder under Tourneys → Screenshots folder.
+
+In the upload list, a tourney match says "Tourney match" with its lobby.
+
 ## Your lobby on the site
 
 While you host a ranked match, the tool lists your lobby on genjiball.us, under your region, with how many players are in it, so players can find it. Under "Live lobby" in the tool you can give it a name (optional, shown next to your host name), or untick the box to stop listing it. The tool says whether it's listed right now.

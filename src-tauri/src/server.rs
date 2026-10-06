@@ -294,6 +294,204 @@ pub async fn leaderboard(
     read_leaderboard(status, &body)
 }
 
+/// The tourney a lobby is in, as `GET /api/host/tourneys` gives it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LobbyTourney {
+    pub id: i64,
+    pub name: String,
+    pub region: String,
+    /// When it starts, ISO 8601 in UTC.
+    pub starts_at: String,
+    /// `scheduled`, `live`, `done` or `cancelled`.
+    pub status: String,
+}
+
+/// The values of the game's `TOURNEY - generated` rule for a lobby (GenjiBall-CE
+/// `docs/tourney-rule.md`), while its code window is open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TourneyCodeValues {
+    /// The server's id for the lobby: digits, text.
+    pub lobby_key: String,
+    pub round_limit: u32,
+    pub name: String,
+    pub label: String,
+}
+
+/// A tourney lobby the host is assigned to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TourneyLobby {
+    pub id: i64,
+    /// `Lobby 1/2`.
+    pub label: String,
+    /// Its tourney's region: the region its match must be uploaded as.
+    pub region: String,
+    pub round_limit: u32,
+    pub tourney: LobbyTourney,
+    /// The match linked to it, whatever its status.
+    #[serde(default)]
+    pub match_id: Option<i64>,
+    /// The verify screenshot's URL on the server, `None` while there's none.
+    #[serde(default)]
+    pub screenshot: Option<String>,
+    #[serde(default)]
+    pub screenshot_expired: bool,
+    /// An admin checked the screenshot: only an admin can change it now.
+    #[serde(default)]
+    pub verified: bool,
+    /// When the code window opens (ISO 8601), `None` from a server that doesn't say.
+    #[serde(default)]
+    pub code_from: Option<String>,
+    /// The rule's values, only while the code window is open.
+    #[serde(default)]
+    pub code: Option<TourneyCodeValues>,
+}
+
+/// What `GET /api/host/tourneys` answers.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostTourneys {
+    /// How long before a start the code window opens, in minutes.
+    #[serde(default)]
+    pub code_lead_minutes: Option<u64>,
+    /// Soonest start first.
+    pub lobbies: Vec<TourneyLobby>,
+}
+
+/// Why the tourneys couldn't be read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TourneysError {
+    /// The token doesn't work (`401`) or was revoked (`403`).
+    TokenRejected { revoked: bool },
+    /// Offline, the server down, an older server, or an answer that isn't one.
+    Failed { message: String },
+}
+
+/// What a `GET /api/host/tourneys` answer means.
+pub fn read_host_tourneys(status: u16, body: &str) -> Result<HostTourneys, TourneysError> {
+    let failed = |message: String| TourneysError::Failed { message };
+    match status {
+        200 => serde_json::from_str(body).map_err(|_| {
+            failed("The server's tourney list wasn't what the host tool expected".into())
+        }),
+        401 => Err(TourneysError::TokenRejected { revoked: false }),
+        403 => Err(TourneysError::TokenRejected { revoked: true }),
+        // An older server without the route, or the wrong URL.
+        404 => Err(failed(
+            "This server has no tourneys yet (it may need updating), or the server URL is wrong"
+                .into(),
+        )),
+        _ => Err(failed(api_message(body).unwrap_or_else(|| {
+            format!("The server answered {status} when asked for your tourneys")
+        }))),
+    }
+}
+
+/// The tourney lobbies the host with `token` is assigned to, in every region.
+pub async fn host_tourneys(
+    server_url: &str,
+    token: &str,
+    timeout: Duration,
+) -> Result<HostTourneys, TourneysError> {
+    let failed = |e: reqwest::Error| TourneysError::Failed {
+        message: format!("Couldn't reach the server: {}", e.without_url()),
+    };
+    let client = client(timeout).map_err(|message| TourneysError::Failed { message })?;
+    let response = client
+        .get(format!("{server_url}/api/host/tourneys"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(failed)?;
+    let status = response.status().as_u16();
+    log::debug!("{server_url} answered {status} to the tourney list");
+    match response.text().await {
+        Ok(body) => read_host_tourneys(status, &body),
+        Err(_) if matches!(status, 401 | 403) => read_host_tourneys(status, ""),
+        Err(e) => Err(failed(e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ScreenshotAnswer {
+    lobby: Option<TourneyLobby>,
+}
+
+/// What a `PUT` or `DELETE` of `/api/host/lobbies/:id/screenshot` answered: the lobby as it is now
+/// (`None` if it stopped being the host's right after), or why it didn't work, in words.
+pub fn read_screenshot(status: u16, body: &str) -> Result<Option<TourneyLobby>, String> {
+    let error = serde_json::from_str::<ApiError>(body).ok();
+    let code = error.as_ref().map(|e| e.error.as_str()).unwrap_or_default();
+    let ours = match (status, code) {
+        (200, _) => {
+            return serde_json::from_str::<ScreenshotAnswer>(body)
+                .map(|a| a.lobby)
+                .map_err(|_| "The server's answer wasn't what the host tool expected".into())
+        }
+        (401, _) => "The server doesn't know your host token",
+        (403, "not_assigned") => "This lobby isn't assigned to you any more",
+        (403, _) => "Your host token was revoked",
+        (404, "not_found") => "The server has no such lobby any more",
+        (404, _) => "This server can't take verify screenshots yet (it may need updating)",
+        (409, "verified") => {
+            "An admin already verified this lobby's screenshot: only an admin can change it now"
+        }
+        (409, "wrong_region") => "The lobby is in another region than the one sent",
+        (409, _) => "Something changed on the server meanwhile (the tourney was cancelled, say). Check again and retry",
+        (413, _) => "The image is too big for the server",
+        (415, _) => "The server only takes PNG, JPEG or WebP images",
+        _ => "",
+    };
+    let message = error
+        .map(|e| e.message)
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| format!("The server answered {status}"));
+    Err(if ours.is_empty() {
+        message
+    } else {
+        ours.to_string()
+    })
+}
+
+/// Uploads `image` (of type `content_type`) as lobby `lobby_id`'s verify screenshot, replacing
+/// the one there; `None` deletes it.
+pub async fn put_screenshot(
+    server_url: &str,
+    token: &str,
+    lobby_id: i64,
+    image: Option<(Vec<u8>, &str)>,
+    timeout: Duration,
+) -> Result<Option<TourneyLobby>, String> {
+    let client = client(timeout)?;
+    let url = format!("{server_url}/api/host/lobbies/{lobby_id}/screenshot");
+    let request = match image {
+        Some((bytes, content_type)) => client
+            .put(url)
+            .header("Content-Type", content_type)
+            .body(bytes),
+        None => client.delete(url),
+    };
+    let response = request
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let status = response.status().as_u16();
+    log::debug!("{server_url} answered {status} to the screenshot of lobby {lobby_id}");
+    let body = response.text().await.unwrap_or_default();
+    read_screenshot(status, &body)
+}
+
+/// The `message` of an error answer, if it has one.
+fn api_message(body: &str) -> Option<String> {
+    serde_json::from_str::<ApiError>(body)
+        .ok()
+        .map(|e| e.message)
+        .filter(|m| !m.is_empty())
+}
+
 #[derive(Deserialize)]
 struct ApiError {
     error: String,
@@ -1422,6 +1620,110 @@ mod tests {
             .recv()
             .unwrap()
             .starts_with("DELETE /api/host/lobby "));
+    }
+
+    /// `GET /api/host/tourneys`'s example answer (genjiball-ranked `docs/api.md`).
+    const TOURNEYS: &str = r#"{"region":null,"codeLeadMinutes":60,"lobbies":[{"id":7,"label":"Lobby 1/2","region":"eu","roundLimit":30,"tourney":{"id":3,"name":"October Cup","region":"eu","startsAt":"2026-10-10T17:00:00Z","status":"scheduled"},"matchId":null,"screenshot":null,"screenshotExpired":false,"verified":false,"codeFrom":"2026-10-10T16:00:00Z","code":{"lobbyKey":"482913507226","roundLimit":30,"name":"October Cup","label":"Lobby 1/2"}}]}"#;
+
+    #[test]
+    fn reads_the_hosts_tourneys() {
+        let found = read_host_tourneys(200, TOURNEYS).unwrap();
+        assert_eq!(found.code_lead_minutes, Some(60));
+        let lobby = &found.lobbies[0];
+        assert_eq!((lobby.id, lobby.label.as_str()), (7, "Lobby 1/2"));
+        assert_eq!(lobby.tourney.starts_at, "2026-10-10T17:00:00Z");
+        assert_eq!(
+            lobby.code,
+            Some(TourneyCodeValues {
+                lobby_key: "482913507226".into(),
+                round_limit: 30,
+                name: "October Cup".into(),
+                label: "Lobby 1/2".into(),
+            })
+        );
+        // Outside the window: no code.
+        let closed = TOURNEYS.replace(
+            r#""code":{"lobbyKey":"482913507226","roundLimit":30,"name":"October Cup","label":"Lobby 1/2"}"#,
+            r#""code":null"#,
+        );
+        assert_eq!(
+            read_host_tourneys(200, &closed).unwrap().lobbies[0].code,
+            None
+        );
+        assert!(read_host_tourneys(200, r#"{"lobbies":[]}"#)
+            .unwrap()
+            .lobbies
+            .is_empty());
+    }
+
+    #[test]
+    fn tourney_list_errors_say_what_went_wrong() {
+        assert_eq!(
+            read_host_tourneys(401, ""),
+            Err(TourneysError::TokenRejected { revoked: false })
+        );
+        assert_eq!(
+            read_host_tourneys(403, r#"{"error":"revoked"}"#),
+            Err(TourneysError::TokenRejected { revoked: true })
+        );
+        for (status, body) in [(200, "<html>"), (404, ""), (500, "")] {
+            assert!(
+                matches!(
+                    read_host_tourneys(status, body),
+                    Err(TourneysError::Failed { .. })
+                ),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_a_screenshot_answer() {
+        let lobby = TOURNEYS
+            .split_once(r#""lobbies":["#)
+            .unwrap()
+            .1
+            .trim_end_matches("]}");
+        let answer = format!(r#"{{"lobby":{lobby}}}"#);
+        assert_eq!(read_screenshot(200, &answer).unwrap().unwrap().id, 7);
+        assert_eq!(read_screenshot(200, r#"{"lobby":null}"#), Ok(None));
+        let verified = read_screenshot(409, r#"{"error":"verified","message":"x"}"#);
+        assert!(verified.unwrap_err().contains("verified"));
+        assert!(read_screenshot(403, r#"{"error":"not_assigned"}"#)
+            .unwrap_err()
+            .contains("isn't assigned"));
+        assert!(read_screenshot(415, "").unwrap_err().contains("PNG"));
+        // Anything else: the server's own words.
+        assert_eq!(
+            read_screenshot(400, r#"{"error":"empty","message":"No image"}"#),
+            Err("No image".into())
+        );
+    }
+
+    #[test]
+    fn sends_a_screenshot() {
+        use tauri::async_runtime::block_on as run;
+        let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
+        let (seen, request) = std::sync::mpsc::channel();
+        let answer = r#"{"lobby":null}"#;
+        let url = test_server_seeing(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}",
+                answer.len()
+            ),
+            "PNGDATA",
+            seen,
+        );
+        let image = Some((b"PNGDATA".to_vec(), "image/png"));
+        assert_eq!(run(put_screenshot(&url, "t", 7, image, timeout)), Ok(None));
+        let head = request.recv().unwrap();
+        assert!(
+            head.starts_with("PUT /api/host/lobbies/7/screenshot "),
+            "{head}"
+        );
+        let lower = head.to_ascii_lowercase();
+        assert!(lower.contains("\r\ncontent-type: image/png\r\n"), "{head}");
+        assert!(lower.contains("\r\nauthorization: bearer t\r\n"), "{head}");
     }
 
     #[test]

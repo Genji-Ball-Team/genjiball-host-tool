@@ -15,6 +15,8 @@ mod ranked_code;
 mod release;
 mod server;
 mod settings;
+mod tourney;
+mod tourneys;
 mod updates;
 mod uploader;
 mod uploads;
@@ -37,6 +39,7 @@ use log_folder::LogFolder;
 use release::ReleaseCache;
 use server::TokenCheck;
 use settings::Settings;
+use tourneys::{Tourneys, TourneysStatus};
 use updates::{UpdateStatus, Updates};
 use uploader::{UploadStatus, Uploader};
 
@@ -107,6 +110,12 @@ struct AppState {
     default_server_url: &'static str,
     has_token: bool,
     log_folder: Option<LogFolder>,
+    /// Where the verify screenshot of a tourney lobby is offered from (#10).
+    screenshot_folder: Option<LogFolder>,
+    /// The biggest verify screenshot the server takes, in bytes.
+    screenshot_max_bytes: u64,
+    /// How often the window looks for a new screenshot while it asks for one, in seconds.
+    screenshot_poll_secs: u64,
     /// The region the host picked, `None` for their home region.
     region: Option<String>,
     regions: &'static [config::Region],
@@ -158,6 +167,9 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         default_server_url: config::DEFAULT_SERVER_URL,
         has_token: store.tokens.get(settings.server_url())?.is_some(),
         log_folder: log_folder::current(settings.log_folder.as_deref()),
+        screenshot_folder: log_folder::screenshots(settings.screenshot_folder.as_deref()),
+        screenshot_max_bytes: config::SCREENSHOT_MAX_BYTES,
+        screenshot_poll_secs: config::SCREENSHOT_POLL_SECS,
         region: settings.region.clone(),
         regions: &config::REGIONS,
         live_lobby: settings.live_lobby_on(),
@@ -229,6 +241,7 @@ async fn save_token(
     store: State<'_, Store>,
     uploader: State<'_, Uploader>,
     lobby: State<'_, LiveLobby>,
+    tourneys: State<'_, Tourneys>,
 ) -> Result<TokenCheck, String> {
     let token = token.trim();
     if token.is_empty() {
@@ -250,6 +263,7 @@ async fn save_token(
         uploader.token_ok();
         uploader.changed();
         lobby.changed();
+        tourneys.refresh();
     }
     Ok(check)
 }
@@ -259,12 +273,14 @@ fn forget_token(
     store: State<Store>,
     uploader: State<Uploader>,
     lobby: State<LiveLobby>,
+    tourneys: State<Tourneys>,
 ) -> Result<(), String> {
     let server_url = store.get().server_url().to_string();
     store.tokens.delete(&server_url)?;
     log::info!("Token for {server_url} forgotten");
     uploader.changed();
     lobby.changed();
+    tourneys.refresh();
     Ok(())
 }
 
@@ -367,12 +383,14 @@ fn set_server_url(
     store: State<Store>,
     uploader: State<Uploader>,
     lobby: State<LiveLobby>,
+    tourneys: State<Tourneys>,
 ) -> Result<AppState, String> {
     let url = settings::normalize_server_url(&url)?;
     store.update(|s| s.server_url = url)?;
     log::info!("Server set to {}", store.get().server_url());
     uploader.changed();
     lobby.changed();
+    tourneys.refresh();
     app_state(&app, &store)
 }
 
@@ -781,6 +799,250 @@ async fn home_region(
     }
 }
 
+/// The tourney lobbies the host is assigned to, as last read (#8).
+#[tauri::command]
+fn get_tourneys(tourneys: State<Tourneys>) -> TourneysStatus {
+    tourneys.status()
+}
+
+/// Asks the server for the host's tourney lobbies now ("Check again").
+#[tauri::command]
+async fn check_tourneys(
+    app: tauri::AppHandle,
+    tourneys: State<'_, Tourneys>,
+) -> Result<TourneysStatus, String> {
+    tourneys::check(&app).await;
+    Ok(tourneys.status())
+}
+
+/// A tourney lobby's Workshop code, for the window to copy (#9).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TourneyCode {
+    code: String,
+    /// The server it's for: the window drops a code built for a server the host switched from.
+    server_url: String,
+    lobby_id: i64,
+    /// The `TOURNEY - generated` rule's values, as written.
+    values: tourney::Written,
+    /// The lobby's region: its rank tags are in the code, and its match is uploaded as it.
+    region: String,
+    /// The GenjiBall-CE release it's built from (`1.3.3R`).
+    release: String,
+    /// Top players tagged with their place and rating, names tagged with their rank tier, and
+    /// names left out (the Workshop can't show them).
+    top: usize,
+    names: usize,
+    skipped_names: usize,
+}
+
+/// The ranked code for lobby `lobby_id`'s region, with the lobby's `TOURNEY - generated` rule
+/// turned on. Only while the server gives the lobby's code values (its code window).
+#[tauri::command]
+async fn build_tourney_code(
+    lobby_id: i64,
+    store: State<'_, Store>,
+    releases: State<'_, ReleaseCache>,
+    uploader: State<'_, Uploader>,
+) -> Result<TourneyCode, String> {
+    let built = tourney_code(lobby_id, &store, &releases, &uploader).await;
+    match &built {
+        Ok(code) => log::info!(
+            "Built the tourney code for lobby {} ({}, {}, key {}, {} rounds) from release {} for {} (region {})",
+            code.lobby_id,
+            code.values.name,
+            code.values.label,
+            code.values.lobby_key,
+            code.values.round_limit,
+            code.release,
+            code.server_url,
+            code.region
+        ),
+        Err(e) => log::warn!("Couldn't build the tourney code for lobby {lobby_id}: {e}"),
+    }
+    built
+}
+
+async fn tourney_code(
+    lobby_id: i64,
+    store: &Store,
+    releases: &ReleaseCache,
+    uploader: &Uploader,
+) -> Result<TourneyCode, String> {
+    let settings = store.get();
+    let server_url = settings.server_url().to_string();
+    let keep = settings.secs(&config::RELEASE_CACHE_SECS);
+    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let token = store
+        .tokens
+        .get(&server_url)?
+        .ok_or("No host token saved for this server")?;
+    // Asked now: the code values are only there while the window is open, and an admin may have
+    // changed the lobby since the list was read.
+    let list = server::host_tourneys(&server_url, &token, timeout)
+        .await
+        .map_err(|e| match e {
+            server::TourneysError::TokenRejected { .. } => {
+                "The server turned your host token down".to_string()
+            }
+            server::TourneysError::Failed { message } => message,
+        })?;
+    uploader.learn_lobbies(&server_url, &list.lobbies);
+    let lobby = list
+        .lobbies
+        .iter()
+        .find(|l| l.id == lobby_id)
+        .ok_or("This lobby isn't assigned to you any more")?;
+    let Some(values) = &lobby.code else {
+        let opens = lobby
+            .code_from
+            .as_deref()
+            .and_then(tourney::parse_time)
+            .filter(|_| !tourney::is_done(lobby));
+        return Err(match opens {
+            Some(at) => format!(
+                "The code for {} isn't available yet: it opens {}",
+                lobby.label,
+                at.with_timezone(&chrono::Local).format("%a %e %b at %H:%M")
+            ),
+            None => format!(
+                "The code for {} isn't available any more: the lobby is done",
+                lobby.label
+            ),
+        });
+    };
+    let (release, base) = releases
+        .get(settings.release_tag.as_deref(), keep, timeout)
+        .await?;
+    let region = Some(lobby.region.as_str());
+    let tiers = server::rank_tags(&server_url, region, timeout).await?;
+    let leaderboard = server::leaderboard(&server_url, region, timeout).await?;
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let built = ranked_code::top_tags(&tiers, &leaderboard, &date);
+    let filled = ranked_code::fill(&base, &built.tags)?;
+    let (code, values) = tourney::fill(&filled.code, values)?;
+    Ok(TourneyCode {
+        code,
+        server_url,
+        lobby_id,
+        values,
+        region: lobby.region.clone(),
+        release,
+        top: built.top,
+        names: filled.names - built.top,
+        skipped_names: built.skipped + filled.skipped,
+    })
+}
+
+/// The screenshots folder in use, if it's there.
+fn screenshot_folder(store: &Store) -> Result<PathBuf, String> {
+    log_folder::screenshots(store.get().screenshot_folder.as_deref())
+        .filter(|f| f.exists)
+        .map(|f| f.path)
+        .ok_or_else(|| {
+            "The screenshots folder isn't there. Choose the folder your screenshots go to".into()
+        })
+}
+
+/// The newest image in the screenshots folder, `None` when it has none.
+#[tauri::command]
+fn newest_screenshot(store: State<Store>) -> Result<Option<tourney::ScreenshotFile>, String> {
+    tourney::newest_screenshot(&screenshot_folder(&store)?)
+        .map_err(|e| format!("Couldn't read the screenshots folder: {e}"))
+}
+
+/// An image the host picked, dropped or was offered, for its preview: its bytes, only if it's an
+/// image the server takes (`tourney::read_screenshot`).
+#[tauri::command]
+fn read_screenshot(path: PathBuf) -> Result<tauri::ipc::Response, String> {
+    let (bytes, _) = tourney::read_screenshot(&path)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Uploads the image in the request's body as the verify screenshot of the lobby in its
+/// `lobby-id` header, replacing the one there, then reads the lobbies again.
+#[tauri::command]
+async fn upload_screenshot(
+    request: tauri::ipc::Request<'_>,
+    app: tauri::AppHandle,
+    store: State<'_, Store>,
+    tourneys: State<'_, Tourneys>,
+) -> Result<TourneysStatus, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("No image was sent".into());
+    };
+    let lobby_id = request
+        .headers()
+        .get("lobby-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .ok_or("No lobby was given")?;
+    let kind = tourney::check_screenshot(bytes)?;
+    change_screenshot(
+        &app,
+        &store,
+        &tourneys,
+        lobby_id,
+        Some((bytes.clone(), kind)),
+    )
+    .await
+}
+
+/// Deletes the verify screenshot of lobby `lobby_id`, then reads the lobbies again.
+#[tauri::command]
+async fn delete_screenshot(
+    lobby_id: i64,
+    app: tauri::AppHandle,
+    store: State<'_, Store>,
+    tourneys: State<'_, Tourneys>,
+) -> Result<TourneysStatus, String> {
+    change_screenshot(&app, &store, &tourneys, lobby_id, None).await
+}
+
+async fn change_screenshot(
+    app: &tauri::AppHandle,
+    store: &Store,
+    tourneys: &Tourneys,
+    lobby_id: i64,
+    image: Option<(Vec<u8>, &str)>,
+) -> Result<TourneysStatus, String> {
+    let settings = store.get();
+    let server_url = settings.server_url().to_string();
+    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let token = store
+        .tokens
+        .get(&server_url)?
+        .ok_or("No host token saved for this server")?;
+    let what = match &image {
+        Some((bytes, kind)) => format!("Uploading a {kind} of {} bytes", bytes.len()),
+        None => "Deleting".into(),
+    };
+    log::info!("{what} as the verify screenshot of lobby {lobby_id} on {server_url}");
+    let changed = server::put_screenshot(&server_url, &token, lobby_id, image, timeout).await;
+    match &changed {
+        Ok(_) => log::info!("Verify screenshot of lobby {lobby_id}: done"),
+        Err(e) => log::warn!("Verify screenshot of lobby {lobby_id}: {e}"),
+    }
+    // The list as the server has it now, whatever came of it.
+    tourneys::check(app).await;
+    changed.map(|_| tourneys.status())
+}
+
+/// `None` goes back to the detected screenshots folder.
+#[tauri::command]
+fn set_screenshot_folder(
+    path: Option<PathBuf>,
+    app: tauri::AppHandle,
+    store: State<Store>,
+) -> Result<AppState, String> {
+    store.update(|s| s.screenshot_folder = path)?;
+    log::info!(
+        "Screenshots folder set to {:?}",
+        log_folder::screenshots(store.get().screenshot_folder.as_deref()).map(|f| f.path)
+    );
+    app_state(&app, &store)
+}
+
 fn show_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -832,6 +1094,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Only its Rust API is used (`updates.rs`): the window has no updater permission.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Only its Rust API is used (`tourneys.rs`): the window has no notification permission.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let store = Store::open(&dir);
@@ -845,8 +1109,10 @@ pub fn run() {
             app.manage(ReleaseCache::default());
             app.manage(Updates::default());
             app.manage(LiveLobby::default());
+            app.manage(Tourneys::default());
             uploader::start(app.handle().clone());
             live_lobby::start(app.handle().clone());
+            tourneys::start(app.handle().clone());
             updates::start(app.handle().clone());
             tray(app)?;
             Ok(())
@@ -884,6 +1150,14 @@ pub fn run() {
             open_match,
             read_match_log,
             read_live_log,
+            get_tourneys,
+            check_tourneys,
+            build_tourney_code,
+            newest_screenshot,
+            read_screenshot,
+            upload_screenshot,
+            delete_screenshot,
+            set_screenshot_folder,
             get_update_status,
             check_for_update,
             install_update

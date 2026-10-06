@@ -17,6 +17,8 @@ import type {
  * - Each `GBR` line starts a match. Lines before the first `GBR`, after `MATCH_END`, and lines that
  *   aren't ours are ignored.
  * - A match in a format version not in `acceptedFormats` is rejected and its lines are skipped.
+ * - Format 2 adds tourney matches: a `TOURNEY` line after `GBR` and `MATCH_END` `ROUNDS`. A format 1
+ *   match is read as before, `TOURNEY` lines included (skipped): it's a ranked match.
  */
 export function parseLog(text: string, options: ParseOptions): ParseResult {
   const matches: ParsedMatch[] = [];
@@ -50,7 +52,11 @@ export interface ParseOptions {
   acceptedFormats: readonly number[];
 }
 
+/** The first format version with tourney matches (`TOURNEY`, `MATCH_END` `ROUNDS`). */
+const tourneyFormat = 2;
+
 const eventTypes = new Set([
+  "TOURNEY",
   "MATCH_START",
   "JOIN",
   "LEAVE",
@@ -86,6 +92,8 @@ class MatchParser {
   private closed = false;
   /** File line being read, for problems found later than their line (a round never closed). */
   private lineNumber: number;
+  /** Number of the last `ROUND_START`, ended or not: a tourney match ends after round `roundLimit`. */
+  private lastRound: number | null = null;
 
   constructor(fields: string[], lineNumber: number, options: ParseOptions) {
     const formatField = fields[2] ?? "";
@@ -100,6 +108,7 @@ class MatchParser {
       rejection: null,
       unranked: [],
       review: [],
+      tourney: null,
       settings: null,
       startTime: null,
       endResult: null,
@@ -123,6 +132,8 @@ class MatchParser {
 
   line(type: string, fields: string[], lineNumber: number): void {
     if (this.closed) return;
+    // Format 1 has no tourney matches: its parser skipped the line, as an unknown one.
+    if (type === "TOURNEY" && this.match.format < tourneyFormat) return;
     this.lineNumber = lineNumber;
     this.match.lineCount++;
     const time = num(fields[1]);
@@ -137,6 +148,18 @@ class MatchParser {
   /** Applies one event. Returns why the line was skipped, if it was. */
   private event(type: string, time: number, f: string[]): string | void {
     switch (type) {
+      case "TOURNEY": {
+        if (this.match.tourney) return "second TOURNEY in the match";
+        const lobbyKey = f[0] ?? "";
+        const limit = int(f[1]);
+        // Read even when something's off: a match with a TOURNEY line is never a ranked one.
+        this.match.tourney = { lobbyKey, roundLimit: limit !== null && limit >= 1 ? limit : null };
+        if (this.match.settings) this.problem(this.lineNumber, "TOURNEY: after MATCH_START (read anyway)");
+        if (!/^\d+$/.test(lobbyKey)) this.problem(this.lineNumber, `TOURNEY: lobbyKey "${lobbyKey}" isn't digits`);
+        if (this.match.tourney.roundLimit === null) this.problem(this.lineNumber, `TOURNEY: roundLimit "${f[1] ?? ""}" isn't a whole number from 1`);
+        return;
+      }
+
       case "MATCH_START": {
         if (this.match.settings) return "second MATCH_START in the match";
         this.match.settings = {
@@ -184,6 +207,7 @@ class MatchParser {
         const unknown = playerIds.filter((id) => !this.players.has(id));
         if (unknown.length) return `round ${number} lists players that never joined: ${unknown.join(", ")}`;
         this.round = { number, startTime: time, playerIds, elims: [], leftIds: [] };
+        this.lastRound = number;
         return;
       }
 
@@ -244,11 +268,26 @@ class MatchParser {
 
       case "MATCH_END": {
         if (this.round) this.dropRound(`round ${this.round.number} has no ROUND_END before MATCH_END`);
-        this.match.endResult = f[0] ?? "";
+        const result = f[0] ?? "";
+        this.match.endResult = result;
         this.match.endTime = time;
         this.closed = true;
+        if (this.match.format >= tourneyFormat) return this.checkEnd(result);
         return;
       }
+    }
+  }
+
+  /**
+   * A format 2 `MATCH_END` that doesn't fit the match: `TIME` ends a ranked match, `ROUNDS` a tourney
+   * match after round `roundLimit`. Only reported: the match ended either way.
+   */
+  private checkEnd(result: string): string | void {
+    const tourney = this.match.tourney;
+    const expected = tourney ? "ROUNDS" : "TIME";
+    if (result !== expected) return `"${result}" ends a ${tourney ? "tourney" : "ranked"} match, expected ${expected}`;
+    if (tourney && tourney.roundLimit !== null && this.lastRound !== tourney.roundLimit) {
+      return `ROUNDS after round ${this.lastRound ?? "(none)"}, the roundLimit is ${tourney.roundLimit}`;
     }
   }
 

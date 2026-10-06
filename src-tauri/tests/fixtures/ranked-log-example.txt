@@ -1,5 +1,5 @@
 [00:00:01] some other inspector line, ignored
-[00:00:02] GBR|2.38|1|1.3.3R|482913507226
+[00:00:02] GBR|2.38|2|1.3.3R|482913507226
 [00:00:02] MATCH_START|2.38|workshop-island-night|Default|0|
 [00:00:02] JOIN|2.38|1|Sparrow|1
 [00:00:02] JOIN|2.38|2|Tidal|

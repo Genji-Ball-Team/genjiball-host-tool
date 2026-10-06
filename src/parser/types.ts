@@ -26,12 +26,14 @@ export interface ParsedMatch {
   unranked: string[];
   /** Reasons an admin must look at the match before it counts (`duplicate_name`). */
   review: ReviewReason[];
+  /** `TOURNEY` (format 2): a tourney match, for the lobby with this `lobbyKey`. `null`: a ranked match. */
+  tourney: TourneyInfo | null;
 
   /** `null` until `MATCH_START`. */
   settings: MatchSettings | null;
   /** `time` of `MATCH_START`. */
   startTime: number | null;
-  /** `MATCH_END` result (`TIME`), or `null` when the file ended first. */
+  /** `MATCH_END` result (`TIME` ranked, `ROUNDS` tourney), or `null` when the file ended first. */
   endResult: string | null;
   endTime: number | null;
 
@@ -43,6 +45,13 @@ export interface ParsedMatch {
 
   /** Lines that were ours but didn't make sense. They are skipped, and listed here. */
   problems: Problem[];
+}
+
+export interface TourneyInfo {
+  /** The server's id for the tourney lobby (`tourney_lobbies.lobby_key`): digits, kept as text. */
+  lobbyKey: string;
+  /** Rounds the match lasts, or `null` when the field isn't a whole number from 1. */
+  roundLimit: number | null;
 }
 
 export interface MatchSettings {

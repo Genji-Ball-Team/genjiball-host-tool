@@ -6,19 +6,24 @@ For hosts of Genji Ball Ranked. You run the host tool next to Overwatch; it uplo
 
 1. **Install the tool.** Download the `.exe` from the [Releases page](https://github.com/Genji-Ball-Team/genjiball-host-tool/releases) and run it. Windows will warn about an unknown app (the installer isn't code-signed): click "More info", then "Run anyway".
 2. **Get a host token.** Ask a genjiball.us admin for one. Admins make them at <https://genjiball.us/admin>. The token is like a password for your uploads: don't share it.
-3. **Paste the token** into the "Host token" box and click "Check and save". The tool checks it with the server and keeps it on your PC, encrypted for your Windows account. Once it's accepted you'll see your host name.
-4. **Pick your region**, EU or NA. Ranked keeps the two apart, so pick the one you're about to host in. If you host in the other region another night, switch it first. The tool shows the region it uploads as, under "Uploads".
+3. **Paste the token.** The first time, Home shows a short setup: **Add token** opens **Settings → Account**. Paste it into the "Host token" box and click "Check and save". The tool checks it with the server and keeps it on your PC, encrypted for your Windows account. Once it's accepted you'll see your host name.
+4. **Pick your region**, EU or NA, under **Settings → Game**. Ranked keeps the two apart, so pick the one you're about to host in. If you host in the other region another night, switch it first. Home shows the region you upload as.
 5. **Turn on the Workshop log file in Overwatch.** Overwatch only writes the log the tool reads if **Enable Workshop Inspector Log File** is on (Options, Gameplay, General). Without it, nothing is uploaded.
-6. **Check the log folder.** The tool looks in `Documents\Overwatch\Workshop` and says "Found automatically". If it says the folder isn't there yet, that's normal until Overwatch has written its first log. If your Documents folder is somewhere else, or the logs go elsewhere, click "Choose folder..." and pick it.
+6. **Check the log folder** under **Settings → Game**. The tool looks in `Documents\Overwatch\Workshop` and says "Found automatically". If it says the folder isn't there yet, that's normal until Overwatch has written its first log. If your Documents folder is somewhere else, or the logs go elsewhere, click "Choose folder..." and pick it.
 
-The tool updates itself: when a new version is out, a banner at the top offers "Install and restart" (or use "Check for updates"). If you have v0.1.0, which can't, download the newest installer by hand once. Under **Advanced → Updates** you can stop it looking by itself, or switch to the **Pre-release** channel if an admin asks you to try a test version.
+The tool updates itself: when a new version is out, a notification in the corner offers "Install and restart" ("Later" hides it until the next version; **Settings → Updates** has "Check for updates"). If you have v0.1.0, which can't, download the newest installer by hand once. Under **Settings → Updates** you can stop it looking by itself, or switch to the **Pre-release** channel if an admin asks you to try a test version.
+
+## The window
+
+The sidebar has five views: **Home**, **Match**, **Uploads**, **Tourneys** and **Settings** (Ctrl+1 to Ctrl+5). A red dot on one means something there needs you. **Home** shows whether uploads are going, your host name, region and data center, the newest log, anything that's wrong with a button to fix it, **Copy ranked code** (or Ctrl+Shift+C from any view), the AFK and live lobby switches, and your last upload. The title bar shows the same state in short, and **AFK** while it's on. The status dot pulses while a ranked match is being played.
 
 You can close the window afterwards: the tool keeps uploading from the tray (next to the clock). Quit it from the tray icon's menu.
 
 ## Every time you host
 
-1. Open the tool. Check the region is the one you're hosting in.
-2. Click **Copy ranked code**. The tool builds the code for the latest ranked version of Genji Ball and copies it. The top 10 players of your region are tagged with their place and rating, and everyone else with their rank tier. The tags are as new as the code, so copy a fresh one each time you host.
+1. Open the tool. On Home, check the region is the one you're hosting in and nothing is listed as wrong.
+2. Click **Copy ranked code** on Home. The tool builds the code for the latest ranked version of Genji Ball and copies it. The top 10 players of your region are tagged with their place and rating, and everyone else with their rank tier. The tags are as new as the code, so copy a fresh one each time you host.
+   The code also puts the lobby on your region's data center: **Netherlands** for EU and **USA - Central** for NA. Pick another one for each region under **Settings → Game → Data center**, or "Best available" to let the game pick the best ping for you.
 3. In Overwatch, create a new custom game, open Settings and import the code with the "Import / paste settings" button (top right), as in the [Genji Ball setup steps](https://github.com/Genji-Ball-Team/GenjiBall-CE#readme). Importing on top of an existing custom game can fail. Start the lobby as usual and host the game.
 4. Play. Ranked matches are uploaded when they end. If you move to spectator, close the lobby or Overwatch crashes mid-match, the tool uploads what's in the log once it stops growing.
 
@@ -26,11 +31,11 @@ Only matches played after you first saved a token for a server are uploaded to t
 
 ## Hosting a tourney lobby
 
-An admin assigns hosts to tourney lobbies. Yours are under **Tourneys** in the tool: the tourney's name, the lobby (like "Lobby 1/2"), its region, when it starts in your time with a countdown, and how many rounds it lasts. If you aren't assigned to any, it says so. The tool checks with the server every few minutes; "Check again" checks now.
+An admin assigns hosts to tourney lobbies. Yours are in the **Tourneys** view: the tourney's name, the lobby (like "Lobby 1/2"), its region, when it starts in your time with a countdown, and how many rounds it lasts. If you aren't assigned to any, it says so. The tool checks with the server every few minutes; "Check again" checks now.
 
 The tool shows a Windows notification when a lobby's code becomes available, shortly before it starts, and when its screenshot is due.
 
-1. **Copy the code.** About an hour before the start, **Copy tourney code** works. It's the ranked code with the lobby's tourney rule turned on: the tourney's name and lobby on the HUD, its round limit, and the rank tags of the tourney's region. The tool shows what it put in. Before the code is available, the button says when it will be.
+1. **Copy the code.** About an hour before the start, **Copy tourney code** works. It's the ranked code with the lobby's tourney rule turned on: the tourney's name and lobby on the HUD, its round limit, the rank tags of the tourney's region, and that region's data center. The tool shows what it put in. Before the code is available, the button says when it will be.
 2. **Import it** into a new custom game as usual, then set **00 - Preset** to **Tournament** in the Workshop settings. Any other preset makes the match unranked.
 3. **Play.** The match lasts the round limit, then the game shows the **final standings** for 30 seconds. **Take a screenshot** of them (Overwatch's screenshot key, or any capture tool).
 4. **Upload the screenshot.** Once the match is uploaded, the lobby asks for it. The tool offers the newest picture in your Overwatch screenshots folder and updates the offer when you take a new one. You can also click "Choose image…", drop an image on the window, or paste one (Ctrl+V). Check the preview, then click **Upload**. Until an admin has verified it you can replace or delete it.
@@ -43,21 +48,21 @@ In the upload list, a tourney match says "Tourney match" with its lobby.
 
 ## Your lobby on the site
 
-While you host a ranked match, the tool lists your lobby on genjiball.us, under your region, with how many players are in it, so players can find it. Under "Live lobby" in the tool you can give it a name (optional, shown next to your host name), or untick the box to stop listing it. The tool says whether it's listed right now.
+While you host a ranked match, the tool lists your lobby on genjiball.us, under your region, with how many players are in it, so players can find it. The **Live lobby** switch on Home turns it off or on, and says whether it's listed right now. Give it a name (optional, shown next to your host name) under **Settings → Lobby**.
 
 It's taken off the list when the match ends, when the log stops growing (you closed the lobby or Overwatch closed), and when you quit the tool. If the tool can't tell the server (you went offline, say), the site drops it by itself after a few minutes. A match the game marks UNRANKED isn't listed.
 
 ## Going AFK
 
-If you have to step away but want to keep the lobby going, click **Go AFK** at the top of the tool. You keep your slot, and your rating doesn't change in rounds that start while AFK is on: the server leaves you out of them, as if you had left. Other players still count, and are rated on their order without you.
+If you have to step away but want to keep the lobby going, turn on the **AFK** switch on Home. You keep your slot, and your rating doesn't change in rounds that start while AFK is on: the server leaves you out of them, as if you had left. Other players still count, and are rated on their order without you.
 
-- A round already under way when you click still counts for you. AFK starts with the next round.
-- AFK stays on across matches, and when you restart the tool, until you click **I'm back: turn AFK off**. While it's on, the AFK section is red and the header says **AFK**.
+- A round already under way when you switch it on still counts for you. AFK starts with the next round.
+- AFK stays on across matches, and when you restart the tool, until you switch it off. While it's on, a red edge runs round the window and the title bar says **AFK**.
 - The AFK rounds go up with the match's upload. The tool shows which rounds of the latest match weren't rated for you so far.
 
 ## The upload list
 
-Under "Uploads" each log file is listed with the players in it and what happened to it.
+In the **Uploads** view each log file is listed with the players in it and what happened to it.
 
 | It says | What it means |
 |---|---|
@@ -75,11 +80,13 @@ The status can change later: an admin may accept, reject or void a match after y
 
 ## Watching a match
 
-"Current match", near the top, shows the match in your newest log while you play, laid out like its page on the site: the map, the players, the round in progress (who's still in, who's out and who got them), round wins and kills so far, and a grid of every finished round. "Show match" on a file in the upload list shows the same for that file.
+The **Match** view shows the match in your newest log while you play, laid out like its page on the site: the map, the players, the round in progress (who's still in, who's out and who got them), round wins and kills so far, and a grid of every finished round. "Show match" on a file in the upload list shows the same for that file.
 
 It also says, before you upload, whether the match will count the way the server reads it: **Won't count** with the reasons the game logged (a bot, the wrong map or preset, add-ons on) or no rated round, and **two players with the same name**, which sends it to an admin. Ratings aren't shown: only the server works them out, from every host's matches. Once a match is accepted, "View on the site" shows them.
 
 ## The line above the list
+
+At the top of the Uploads view. Home lists the same problems, each with a button to the place that fixes it.
 
 | It says | What to do |
 |---|---|
@@ -95,7 +102,7 @@ If something else is wrong, ask in the [Discord](https://discord.gg/sv9VVjh5pT).
 
 ## Reporting a problem
 
-Under **Advanced → Debug**:
+Under **Settings → Advanced → Debug**:
 
 - **Export diagnostics...** saves one file (offered in your Downloads folder) to attach to a bug report or send to an admin. It holds the tool's version, its settings, what it uploaded, its recent log and the names of the files in your Workshop log folder (not the logs themselves). It never holds your host token.
 - If the problem is hard to catch, set **Log level** to **debug** first, make it happen again, then export. Set it back to **info** afterwards.
@@ -103,4 +110,4 @@ Under **Advanced → Debug**:
 - **Dry run** stops uploads without stopping the tool: ranked logs are picked as usual, but nothing is sent. Use it to check what the tool would upload. Turn it off when you're done: the logs it held back are uploaded then.
 - **Debug panel** lists the logs waiting to upload, the latest uploads (and dry runs) with what was sent and what the server answered, and the last events in your newest log. "Show match" shows an upload's matches as the server reads them.
 
-Under **Advanced → Ranked code release** you can build the ranked code on an older Genji Ball release by its tag (like `1.3.2R`). Leave it empty unless an admin asks: empty always uses the latest ranked release.
+Under **Settings → Advanced → Ranked code release** you can build the ranked code on an older Genji Ball release by its tag (like `1.3.2R`). Leave it empty unless an admin asks: empty always uses the latest ranked release.

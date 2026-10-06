@@ -46,4 +46,4 @@ strip = true
 tempfile = "3.27.0"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_UI_Input_KeyboardAndMouse"] }

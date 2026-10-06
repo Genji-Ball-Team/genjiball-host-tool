@@ -5,6 +5,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { ago, headline, problems, type Fix, type HomeInput } from "./home-model";
+import { setTitlebarState } from "./titlebar";
 import { currentView, markView, onViewChange } from "./views";
 
 /** Mirrors `LiveFile` in src-tauri/src/match_log.rs: what `get_live_file` returns. */
@@ -62,6 +63,7 @@ export function renderHome(): void {
   const found = problems(state);
   markView("home", state.hasToken && found.length > 0);
   if (!state.hasToken) {
+    setTitlebarState("Not set up", "warn");
     const folder = state.logFolder;
     el("setup-folder-state").textContent = !folder ? "No Documents folder found: choose it." : folder.exists ? "Found." : "Not there yet: it appears once the game writes a log, or choose it.";
     el("setup-folder").classList.toggle("done", Boolean(folder?.exists));
@@ -69,6 +71,7 @@ export function renderHome(): void {
   }
 
   const head = headline(state, state.serverName);
+  setTitlebarState(head.tone === "bad" ? "Paused" : state.dryRun ? "Dry run" : head.tone === "warn" ? "Retrying" : state.serverName, head.tone);
   el("home-status").dataset.tone = head.tone;
   el("home-headline").textContent = head.text;
   el("home-detail").textContent = head.detail;

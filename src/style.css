@@ -3,6 +3,7 @@
   --bg: #090b10; --panel: #0e1117; --raised: #151922; --line: #1d222b; --border: #252a34;
   --fg: #eef1f7; --soft: #b4bbc7; --muted: #858d9a; --faint: #5d6573; --good: #67d49a; --bad: #ef6b6b;
   --gold: #f3cf6b;
+  --titlebar: 2.25rem;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -17,11 +18,8 @@ body {
 }
 
 /* The app shell (#33): the sidebar, then one view that fills the rest. Only a view's body scrolls. */
-.app { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); height: 100vh; }
-.sidebar { display: flex; flex-direction: column; min-height: 0; padding: .9rem .6rem .75rem; background: var(--panel); border-right: 1px solid var(--line); }
-.brand { display: flex; align-items: center; gap: .55rem; padding: 0 .5rem 1.1rem; font-weight: 650; }
-/* The app's icon (app-icon.svg), the same mark as the ranked site's. */
-.brand-mark { flex: none; width: 1.4rem; height: 1.4rem; }
+.app { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); height: calc(100vh - var(--titlebar)); }
+.sidebar { display: flex; flex-direction: column; min-height: 0; padding: .6rem .6rem .75rem; background: var(--panel); border-right: 1px solid var(--line); }
 .nav { display: flex; flex-direction: column; gap: .15rem; }
 .nav button {
   position: relative; display: flex; align-items: center; gap: .65rem; width: 100%; padding: .45rem .55rem;
@@ -50,16 +48,33 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .view-body > * { max-width: 44rem; }
 .view-foot { margin: 0; padding: .5rem 1.5rem; border-top: 1px solid var(--line); }
 
+/* The title bar (#37): the window has no Windows frame. Dragged by the bar; its own buttons on the right. */
+.titlebar { display: flex; align-items: center; gap: .6rem; height: var(--titlebar); padding-left: .75rem; background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: .5rem; min-width: 0; font-size: .8rem; font-weight: 600; color: var(--soft); }
+.brand-mark { flex: none; width: 1.1rem; height: 1.1rem; }
+.brand-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.titlebar .tag { margin-left: 0; font-size: .7rem; }
+.connection { --tone: var(--good); display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.connection[data-tone="warn"] { --tone: var(--gold); }
+.connection[data-tone="bad"] { --tone: var(--bad); }
+.connection i { flex: none; width: .45rem; height: .45rem; border-radius: 50%; background: var(--tone); }
+.window-controls { display: flex; align-self: stretch; margin-left: auto; }
+.window-controls button { display: grid; place-items: center; width: 2.9rem; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--soft); }
+.window-controls button:hover { background: var(--raised); color: var(--fg); }
+.window-controls .close:hover { background: #c42b1c; color: #fff; }
+.window-controls svg { width: .65rem; height: .65rem; fill: none; stroke: currentColor; stroke-width: 1; }
+.window-controls button:focus-visible { outline-offset: -2px; }
+
 /* Narrow window: the sidebar keeps its icons only. */
 @media (max-width: 600px) {
   .app { grid-template-columns: 3.25rem minmax(0, 1fr); }
   .sidebar { padding-inline: .4rem; }
-  .brand { justify-content: center; padding-inline: 0; }
-  .brand-name, .nav span, #version { display: none; }
+  .nav span, #version { display: none; }
   .nav button { justify-content: center; padding-inline: 0; }
   .nav button[aria-current="page"]::before { left: -.4rem; }
   .nav .dot { left: auto; right: .45rem; }
   .sidebar-foot { justify-content: center; padding: 0; }
+  .brand-name { display: none; }
   .banners { padding-inline: 1rem; }
   .view-head, .view-foot { padding-inline: 1rem; }
   .view-body { padding-inline: 1rem; }

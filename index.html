@@ -45,10 +45,6 @@
       <main>
         <div class="banners">
           <p class="banner bad" id="settings-error" hidden></p>
-          <div class="banner update" id="update-banner" hidden>
-            <span id="update-banner-text"></span>
-            <button type="button" id="update-install">Install and restart</button>
-          </div>
         </div>
 
         <section class="view" id="view-home">
@@ -393,6 +389,18 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div class="corner">
+      <div class="notice" id="update-banner" role="status" hidden>
+        <b>Update available</b>
+        <span id="update-banner-text"></span>
+        <div class="row">
+          <button type="button" id="update-install">Install and restart</button>
+          <button type="button" class="quiet" id="update-later">Later</button>
+        </div>
+      </div>
+      <div class="toasts" id="toasts" aria-live="polite"></div>
     </div>
   </body>
 </html>

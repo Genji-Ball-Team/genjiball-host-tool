@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
-import { VIEWS, onViewChange, savedView, setupViews, showView } from "../src/views";
+import { VIEWS, markView, onViewChange, savedView, setupViews, showView } from "../src/views";
 
 describe("savedView", () => {
   it("opens the view kept from last time, else Home", () => {
@@ -13,7 +13,7 @@ describe("savedView", () => {
 describe("the sidebar", () => {
   beforeEach(() => {
     localStorage.clear();
-    document.body.innerHTML = VIEWS.map((v) => `<button id="nav-${v}"></button><section id="view-${v}"></section>`).join("");
+    document.body.innerHTML = VIEWS.map((v) => `<button id="nav-${v}" title="${v}"><i id="nav-${v}-dot" hidden></i></button><section id="view-${v}"></section>`).join("");
   });
 
   it("shows one view, marks its button and keeps it for the next start", () => {
@@ -35,5 +35,14 @@ describe("the sidebar", () => {
     // Showing the view already shown changes nothing.
     showView("match");
     expect(seen).toEqual(["settings", "match"]);
+  });
+
+  it("says when a view needs the host, in its dot and its name", () => {
+    markView("uploads", true);
+    expect(document.getElementById("nav-uploads-dot")?.hidden).toBe(false);
+    expect(document.getElementById("nav-uploads")?.getAttribute("aria-label")).toBe("uploads, needs attention");
+    markView("uploads", false);
+    expect(document.getElementById("nav-uploads-dot")?.hidden).toBe(true);
+    expect(document.getElementById("nav-uploads")?.getAttribute("aria-label")).toBe("uploads");
   });
 });

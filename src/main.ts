@@ -5,7 +5,7 @@ import { watchDebug } from "./debug-view";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import { renderTourneys, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
-import { currentView, onViewChange, setupViews } from "./views";
+import { currentView, markView, onViewChange, setupViews } from "./views";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
 interface AppState {
@@ -571,7 +571,7 @@ function renderUploads(status: UploadStatus): void {
 
   const retrying = el("upload-retrying");
   retrying.hidden = !status.retrying;
-  el("nav-uploads-dot").hidden = !status.problem && !status.retrying;
+  markView("uploads", Boolean(status.problem || status.retrying));
   retrying.textContent = status.retrying ? `Last upload failed, retrying: ${status.retrying}` : "";
 
   // The status carries the newest page. An older one is asked for again when anything in the

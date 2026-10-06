@@ -2,11 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { watchDebug } from "./debug-view";
+import { setupDesktop } from "./desktop";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import type { Fix } from "./home-model";
 import { homeFolderChanged, renderHome, setupHome } from "./home-view";
 import { renderTourneys, screenshotsDue, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
+import { toast } from "./toast";
 import { currentView, markView, onViewChange, setupViews, showPane, showView } from "./views";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
@@ -836,7 +838,7 @@ async function saveLobbyName(): Promise<void> {
   // Shown as saved: spaces around it dropped.
   name.value = next.lobbyName ?? "";
   await show(next);
-  setLobbyFormState("Saved.", "good");
+  toast("Lobby name saved");
 }
 
 /** Shows these settings, then the upload status for them (one sent before they were known was dropped). */
@@ -856,9 +858,13 @@ async function refresh(): Promise<void> {
   await show(await invoke<AppState>("get_state"));
 }
 
+/** The version whose notification the host closed with "Later". */
+let updateLater: string | null = null;
+
 function renderUpdate(status: UpdateStatus): void {
-  el("update-banner").hidden = !status.available;
-  el("update-banner-text").textContent = status.available ? `Version ${status.available} is available (you have v${state.version}).` : "";
+  el("update-banner").hidden = !status.available || status.available === updateLater;
+  el("update-banner-text").textContent = status.available ? `Version ${status.available} is ready to install. You have v${state.version}.` : "";
+  el("update-banner").dataset.version = status.available ?? "";
   const line = el("update-state");
   if (status.error) line.textContent = `Couldn't check for updates: ${status.error}`;
   else if (status.available) line.textContent = `Version ${status.available} is available`;
@@ -871,7 +877,7 @@ let running = 0;
 
 function setButtonsDisabled(disabled: boolean): void {
   // A button marked `data-off` (a tourney code before its window) stays disabled. The sidebar stays usable.
-  document.querySelectorAll<HTMLButtonElement>("main button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
+  document.querySelectorAll<HTMLButtonElement>("main button, #update-banner button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
 }
 
 /** Runs a button's action with the buttons disabled, and shows its error (by default next to the token). */
@@ -962,7 +968,7 @@ el("region").addEventListener("change", () => {
       // A code kept for the old region's tags is no use now.
       uncopied = null;
       await show(next);
-      setRegionStatus("Saved", "good");
+      toast(`Region saved: ${next.region ? regionLabel(next.region) : "your home region"}`);
     },
     (m) => {
       setRegionStatus(m, "bad");
@@ -977,7 +983,7 @@ async function saveAdvanced(values: Record<string, number>): Promise<void> {
   // Shown as saved, not as typed: a value at its default empties its field.
   for (const t of next.advanced) tunableInput(t.key).value = t.value === null ? "" : String(t.value);
   await show(next);
-  setAdvancedState("Saved.", "good");
+  toast("Timing saved");
 }
 
 el("advanced-form").addEventListener("submit", (e) => {
@@ -998,7 +1004,7 @@ el("release-form").addEventListener("submit", (e) => {
       // A code kept from the other release is no use now.
       uncopied = null;
       await show(next);
-      setLine("release-state", next.releaseTag ? `Saved. The ranked code is built on ${next.releaseTag}.` : "Saved. The ranked code is built on the latest ranked release.", "good");
+      toast("Release saved", next.releaseTag ? `The ranked code is built on ${next.releaseTag}.` : "The ranked code is built on the latest ranked release.");
     },
     (m) => setLine("release-state", m, "bad"),
   );
@@ -1010,7 +1016,7 @@ el("log-level").addEventListener("change", () => {
       setLine("debug-state", "", "muted");
       const level = el<HTMLSelectElement>("log-level").value;
       await show(await invoke<AppState>("set_log_level", { level: level === state.defaultLogLevel ? null : level }));
-      setLine("debug-state", `Logging at ${level} from now on.`, "good");
+      toast(`Logging at ${level} from now on`);
     },
     (m) => {
       setLine("debug-state", m, "bad");
@@ -1025,7 +1031,7 @@ el("dry-run").addEventListener("change", () => {
       setLine("debug-state", "", "muted");
       const on = el<HTMLInputElement>("dry-run").checked;
       await show(await invoke<AppState>("set_dry_run", { on }));
-      setLine("debug-state", on ? "Dry run on: nothing is uploaded." : "Dry run off: ranked logs are uploaded again.", "good");
+      toast(on ? "Dry run on" : "Dry run off", on ? "Nothing is uploaded." : "Ranked logs are uploaded again.");
     },
     (m) => {
       setLine("debug-state", m, "bad");
@@ -1050,7 +1056,7 @@ function saveUpdateSettings(): void {
       const autoCheck = el<HTMLInputElement>("update-auto").checked;
       const channel = el<HTMLSelectElement>("update-channel").value;
       await show(await invoke<AppState>("set_updates", { autoCheck, channel }));
-      setLine("updates-state", "Saved.", "good");
+      toast("Update settings saved");
     },
     (m) => {
       setLine("updates-state", m, "bad");
@@ -1069,7 +1075,7 @@ el("diagnostics-export").addEventListener("click", () => {
     async () => {
       setLine("debug-state", "", "muted");
       const path = await invoke<string | null>("export_diagnostics");
-      if (path) setLine("debug-state", `Saved to ${path}. Attach it to your bug report.`, "good");
+      if (path) toast("Diagnostics saved", `${path}. Attach it to your bug report.`);
     },
     (m) => setLine("debug-state", m, "bad"),
   );
@@ -1161,10 +1167,17 @@ async function copyRankedCode(): Promise<void> {
   const region = built.region ? `${regionLabel(built.region)} ` : "";
   const tiers = built.names === 1 ? "1 more with their rank" : `${built.names} more with their rank`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
-  setRankedCodeState(`Copied. Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`, "good");
+  setRankedCodeState("", "muted");
+  toast("Ranked code copied", `Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.`);
 }
 
-el("ranked-code-copy").addEventListener("click", () => void busy(copyRankedCode, (m) => setRankedCodeState(m, "bad")));
+el("ranked-code-copy").addEventListener("click", () =>
+  void busy(copyRankedCode, (m) => {
+    setRankedCodeState(m, "bad");
+    // Copied with Ctrl+Shift+C from another view: the line on Home isn't in sight.
+    if (currentView() !== "home") toast("Couldn't copy the ranked code", m);
+  }),
+);
 
 function showUpdateError(message: string): void {
   el("update-state").textContent = message;
@@ -1172,6 +1185,10 @@ function showUpdateError(message: string): void {
 
 el("update-check").addEventListener("click", () => void busy(async () => renderUpdate(await invoke<UpdateStatus>("check_for_update")), showUpdateError));
 el("update-install").addEventListener("click", () => void busy(() => invoke("install_update"), showUpdateError));
+el("update-later").addEventListener("click", () => {
+  updateLater = el("update-banner").dataset.version ?? null;
+  el("update-banner").hidden = true;
+});
 
 el("afk-toggle").addEventListener("click", () => {
   void busy(
@@ -1286,6 +1303,14 @@ el("setup-token-add").addEventListener("click", () => {
   el("token").focus();
 });
 el("setup-folder-choose").addEventListener("click", () => showPane("game"));
+
+setupDesktop({
+  showView,
+  copyRankedCode: () => {
+    const copy = el<HTMLButtonElement>("ranked-code-copy");
+    if (state?.hasToken && !copy.disabled) copy.click();
+  },
+});
 
 // The live log is read once the settings (its poll time) are known.
 onViewChange((view) => {

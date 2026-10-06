@@ -179,6 +179,33 @@ pub const TOP_TAGGED: usize = 10;
 /// `accepted` and `void` matches are public; the site answers any other with "not found".
 pub const MATCH_PAGE_PATH: &str = "/match";
 
+/// Live lobby (#6): whether the tool lists the host's lobby on the site while a ranked match is
+/// being played, for a host who hasn't switched it (`Settings::live_lobby`).
+pub const LIVE_LOBBY_ON_BY_DEFAULT: bool = true;
+
+/// How often a listed lobby is refreshed until the server says (`heartbeatSeconds` in its answer,
+/// which wins: genjiball-ranked `lobbyHeartbeatSeconds`).
+pub const LOBBY_HEARTBEAT_SECS: u64 = 60;
+
+/// The server refuses a heartbeat this soon after the last heartbeat or close
+/// (genjiball-ranked `lobbyHeartbeatMinSeconds`). Also the shortest heartbeat interval the tool
+/// takes from an answer, and the wait after a request that failed.
+pub const LOBBY_HEARTBEAT_MIN_SECS: u64 = 30;
+
+/// How long a lobby stays listed without a heartbeat until the server says (`ttlSeconds` in its
+/// answer: genjiball-ranked `lobbyTtlSeconds`). Past it, the tool knows it's off the list.
+pub const LOBBY_TTL_SECS: u64 = 180;
+
+/// The longest lobby name the server takes, in characters (genjiball-ranked `lobbyNameMaxLength`).
+pub const LOBBY_NAME_MAX_CHARS: usize = 64;
+
+/// The most players a heartbeat may say (genjiball-ranked `lobbyPlayersMax`).
+pub const LOBBY_PLAYERS_MAX: u32 = 12;
+
+/// How long quitting the tool waits for the server to take a listed lobby off the list. Past it
+/// the tool quits anyway, and the lobby drops off after `LOBBY_TTL_SECS`.
+pub const LOBBY_CLOSE_ON_QUIT_SECS: u64 = 3;
+
 /// How often the tool looks for a new version of itself, after the check at startup. The endpoint
 /// and the signing key are in `tauri.conf.json`, under `plugins.updater`.
 pub const UPDATE_CHECK_SECS: Tunable = Tunable {

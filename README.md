@@ -64,6 +64,7 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/watcher.rs`, `log_scan.rs` | Which log files to upload, and when |
 | `src-tauri/src/uploader.rs`, `uploads.rs` | The upload loop, and the record of what was uploaded (`uploads.json`) |
 | `src-tauri/src/afk.rs` | Host AFK: the rounds that start while it's on, per match (`afk.json`), sent as `X-Host-Afk` |
+| `src-tauri/src/lobby.rs`, `live_lobby.rs` | The live lobby: lists the host's lobby on the site while a ranked match is played |
 | `src-tauri/capabilities/` | What the window is allowed to call |
 
 ## Contributing

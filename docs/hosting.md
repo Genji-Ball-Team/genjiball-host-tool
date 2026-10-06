@@ -24,6 +24,12 @@ You can close the window afterwards: the tool keeps uploading from the tray (nex
 
 Only matches played after you first saved a token for a server are uploaded to that server.
 
+## Your lobby on the site
+
+While you host a ranked match, the tool lists your lobby on genjiball.us, under your region, with how many players are in it, so players can find it. Under "Live lobby" in the tool you can give it a name (optional, shown next to your host name), or untick the box to stop listing it. The tool says whether it's listed right now.
+
+It's taken off the list when the match ends, when the log stops growing (you closed the lobby or Overwatch closed), and when you quit the tool. If the tool can't tell the server (you went offline, say), the site drops it by itself after a few minutes. A match the game marks UNRANKED isn't listed.
+
 ## Going AFK
 
 If you have to step away but want to keep the lobby going, click **Go AFK** at the top of the tool. You keep your slot, and your rating doesn't change in rounds that start while AFK is on: the server leaves you out of them, as if you had left. Other players still count, and are rated on their order without you.

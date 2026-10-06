@@ -4,7 +4,7 @@
  */
 
 /** Log format versions the parser reads: genjiball-ranked `src/config.ts` `acceptedLogFormats`. */
-export const acceptedLogFormats: readonly number[] = [1];
+export const acceptedLogFormats: readonly number[] = [1, 2];
 
 /**
  * Different players a match needs in its rated rounds, or the server rejects it (`too_few_players`):
@@ -26,7 +26,7 @@ export const mapNames: Readonly<Record<string, string>> = { "workshop-island-nig
 export const unrankedReasons: Readonly<Record<string, string>> = {
   MAP: "the map isn't Workshop Island Night",
   MODE: "the mode isn't free-for-all",
-  PRESET: "the preset isn't Default",
+  PRESET: "the preset isn't Default (Tournament in a tourney match)",
   FEEL: "a ball or player feel toggle is on",
   ADD_ON: "a gameplay add-on is on (duels, endless, sandbox or custom abilities)",
   BOT: "a dummy bot is in the match",

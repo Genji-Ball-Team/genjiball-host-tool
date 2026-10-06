@@ -98,7 +98,7 @@ describe("why a match won't count", () => {
     const match = only(text);
     expect(match.rejected).toEqual([
       { code: "unranked", message: "Unranked: the map isn't Workshop Island Night" },
-      { code: "unranked", message: "Unranked: the preset isn't Default" },
+      { code: "unranked", message: "Unranked: the preset isn't Default (Tournament in a tourney match)" },
       { code: "unranked", message: "Unranked: a dummy bot is in the match" },
       { code: "unranked", message: "Unranked: SOMETHING_NEW" },
       { code: "too_few_players", message: "No rated round" },

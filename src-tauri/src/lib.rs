@@ -15,6 +15,7 @@ mod ranked_code;
 mod release;
 mod server;
 mod settings;
+mod snap;
 mod tourney;
 mod tourneys;
 mod updates;
@@ -354,6 +355,12 @@ fn read_live_log(
     store: State<Store>,
 ) -> Result<Option<match_log::LogText>, String> {
     match_log::read_live(&current_log_folder(&store)?, known.as_ref())
+}
+
+/// Windows' snap layouts, for the title bar's maximise button (`snap.rs`).
+#[tauri::command]
+fn show_snap_layouts(window: tauri::WebviewWindow) {
+    snap::show_layouts(&window);
 }
 
 /// The live log's name and when it last grew, for Home; `None` while there's none.
@@ -1171,6 +1178,7 @@ pub fn run() {
             read_match_log,
             read_live_log,
             get_live_file,
+            show_snap_layouts,
             get_tourneys,
             check_tourneys,
             build_tourney_code,

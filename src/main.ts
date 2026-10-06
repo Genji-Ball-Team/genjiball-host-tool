@@ -8,6 +8,7 @@ import type { TourneysStatus } from "./tourney-model";
 import type { Fix } from "./home-model";
 import { homeFolderChanged, renderHome, setupHome } from "./home-view";
 import { renderTourneys, screenshotsDue, setupTourneys, tourneyContextChanged, tourneyLabel } from "./tourneys-view";
+import { setupTitlebar } from "./titlebar";
 import { toast } from "./toast";
 import { currentView, markView, onViewChange, setupViews, showPane, showView } from "./views";
 
@@ -1317,6 +1318,8 @@ onViewChange((view) => {
   if (ready) watchLiveMatch(view === "match");
 });
 setupViews();
+
+void setupTitlebar();
 
 void busy(async () => {
   await listen<UploadStatus>("upload-status", (event) => {

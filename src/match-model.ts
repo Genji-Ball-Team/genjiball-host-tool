@@ -250,10 +250,11 @@ interface OpenRound {
 
 /**
  * The round in progress at the end of the file, which the parser drops (only finished rounds count).
- * Reads the match's lines after its `GBR` the way the parser does; `null` once the match has ended.
+ * Reads the match's lines after its `GBR` the way the parser does; `null` once the match has ended,
+ * or when the server can't read its format (it has no rounds at all then).
  */
 function openRound(text: string, match: ParsedMatch): OpenRound | null {
-  if (match.endResult !== null) return null;
+  if (match.endResult !== null || match.rejection?.code === "unknown_format") return null;
   let round: OpenRound | null = null;
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).slice(match.startLine);
   for (const line of lines) {

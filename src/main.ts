@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { watchDebug } from "./debug-view";
 import { watchLog, type LogWatch } from "./match-view";
 
 /** Mirrors `AppState` in src-tauri/src/lib.rs. */
@@ -28,6 +29,8 @@ interface AppState {
   /** The GenjiBall-CE release the ranked code is built from, `null` for the latest ranked one. */
   releaseTag: string | null;
   releaseTagSuffix: string;
+  /** Whether uploads are a dry run: picked as usual, but not sent. */
+  dryRun: boolean;
 }
 
 /** Mirrors `Region` in src-tauri/src/config.rs. */
@@ -84,6 +87,7 @@ interface UploadStatus {
   historyRevision: number;
   host: Host | null;
   afk: AfkStatus;
+  dryRun: boolean;
 }
 
 /** Mirrors `AfkStatus` in src-tauri/src/afk.rs: what `set_afk` returns. */
@@ -271,6 +275,7 @@ function render(): void {
   settingsError.hidden = !state.settingsError;
   settingsError.textContent = state.settingsError ? `${state.settingsError}. Uploads are paused until it's fixed. The defaults are shown; changing a setting writes a new file.` : "";
 
+  el("dry-run-banner").hidden = !state.dryRun;
   el("welcome").hidden = state.hasToken;
   el("server").textContent = state.serverUrl;
   el("default-server").textContent = state.defaultServerUrl;
@@ -325,7 +330,8 @@ function renderDebug(): void {
     );
   }
   select.value = state.logLevel ?? state.defaultLogLevel;
-  if (state.logLevel) el<HTMLDetailsElement>("debug").open = true;
+  el<HTMLInputElement>("dry-run").checked = state.dryRun;
+  if (state.logLevel || state.dryRun) el<HTMLDetailsElement>("debug").open = true;
 }
 
 function setLine(id: string, text: string, tone: "good" | "bad" | "muted"): void {
@@ -491,7 +497,9 @@ function renderUploads(status: UploadStatus): void {
   line.className = status.problem ? "bad" : "";
   line.textContent = status.problem
     ? describeProblem(status.problem)
-    : status.waiting === 1
+    : status.dryRun
+      ? "Dry run: ranked logs are picked as usual but not uploaded. The debug panel under Advanced lists them."
+      : status.waiting === 1
       ? "Watching. 1 ranked log to upload."
       : status.waiting
         ? `Watching. ${status.waiting} ranked logs to upload.`
@@ -924,6 +932,31 @@ el("log-level").addEventListener("change", () => {
   );
 });
 
+el("dry-run").addEventListener("change", () => {
+  void busy(
+    async () => {
+      setLine("debug-state", "", "muted");
+      const on = el<HTMLInputElement>("dry-run").checked;
+      await show(await invoke<AppState>("set_dry_run", { on }));
+      setLine("debug-state", on ? "Dry run on: nothing is uploaded." : "Dry run off: ranked logs are uploaded again.", "good");
+    },
+    (m) => {
+      setLine("debug-state", m, "bad");
+      renderDebug();
+    },
+  );
+});
+
+/** The debug panel, reading while it's open. */
+let debugWatch: { stop(): void } | null = null;
+
+function watchDebugPanel(open: boolean): void {
+  debugWatch?.stop();
+  debugWatch = open ? watchDebug(matchViewPollSecs) : null;
+}
+
+el("debug-panel").addEventListener("toggle", () => watchDebugPanel(el<HTMLDetailsElement>("debug-panel").open));
+
 el("log-open").addEventListener("click", () => void busy(() => invoke<void>("open_log_folder"), (m) => setLine("debug-state", m, "bad")));
 
 el("diagnostics-export").addEventListener("click", () => {
@@ -1073,6 +1106,7 @@ function logFolderChanged(): void {
     liveWatch = null;
     showLiveMatch(true);
   }
+  if (debugWatch) watchDebugPanel(true);
 }
 
 el("live-toggle").addEventListener("click", () => showLiveMatch(!liveWatch));

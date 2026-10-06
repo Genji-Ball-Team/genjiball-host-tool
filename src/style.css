@@ -103,6 +103,27 @@ details form { margin-top: .75rem; }
 #advanced-state { margin: .75rem 0 0; }
 #advanced-form > .row { margin-top: 1rem; }
 
+/* Dry run and the debug panel (Advanced → Debug). */
+#dry-run-banner { border-left-color: var(--gold); background: #1c1a10; }
+label.check.dry-run { margin: 1rem 0 0; }
+#debug-panel h3 { margin: 1rem 0 .25rem; font-size: .75rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+#debug-panel .note { margin-top: .25rem; }
+.debug-list { margin: 0; padding-left: 1.25rem; font-size: .85rem; overflow-wrap: anywhere; }
+.debug-list:empty, .events:empty { display: none; }
+pre.raw {
+  margin: .35rem 0 0; padding: .4rem .6rem; max-height: 14rem; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  font: .75rem/1.45 ui-monospace, Consolas, monospace; color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.events {
+  margin: .35rem 0 0; padding: .4rem .6rem; max-height: 18rem; overflow: auto; list-style: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  font: .75rem/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere;
+}
+.events li { display: flex; gap: .6rem; }
+.events b { color: var(--fg); font-weight: 600; }
+.events span:last-child { color: var(--soft); }
+
 /* Match view (#16): the ranked site's match page (genjiball-ranked public/style.css), its colours
    and structure: facts, the winner, standings, then players down and rounds across. */
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }

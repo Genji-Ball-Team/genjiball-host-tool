@@ -33,6 +33,9 @@ pub struct Settings {
     /// The GenjiBall-CE release the ranked code is built from (`1.3.3R`). `None`: the latest ranked
     /// release. Ends in `config::RELEASE_TAG_SUFFIX` (`normalize_release_tag`).
     pub release_tag: Option<String>,
+    /// Whether uploads are a dry run: picked as usual, but not sent. `None`:
+    /// `config::DRY_RUN_BY_DEFAULT`.
+    pub dry_run: Option<bool>,
     /// The `config::TUNABLES` the host changed under Advanced, by key. One left at its default
     /// isn't here (`normalize_advanced`). Keys this version doesn't know are kept, for a newer one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -54,6 +57,16 @@ impl Settings {
     /// Switches the live lobby on or off. At the default it's stored as `None`.
     pub fn set_live_lobby(&mut self, on: bool) {
         self.live_lobby = (on != config::LIVE_LOBBY_ON_BY_DEFAULT).then_some(on);
+    }
+
+    /// Whether uploads are a dry run.
+    pub fn dry_run_on(&self) -> bool {
+        self.dry_run.unwrap_or(config::DRY_RUN_BY_DEFAULT)
+    }
+
+    /// Switches the dry run on or off. At the default it's stored as `None`.
+    pub fn set_dry_run(&mut self, on: bool) {
+        self.dry_run = (on != config::DRY_RUN_BY_DEFAULT).then_some(on);
     }
 
     /// The host's value for `tunable`, or its default.
@@ -311,6 +324,7 @@ mod tests {
             lobby_name: Some("Kenzo's ranked".into()),
             log_level: Some("debug".into()),
             release_tag: Some("1.3.3R".into()),
+            dry_run: Some(true),
             advanced: BTreeMap::from([("quietSecs".into(), 90)]),
         };
         save(&path, &settings).unwrap();
@@ -471,6 +485,17 @@ mod tests {
         // Back at the default: stored as `null`, so a new default reaches this host.
         settings.set_live_lobby(true);
         assert_eq!(settings.live_lobby, None);
+    }
+
+    #[test]
+    fn the_dry_run_is_off_until_switched_on() {
+        let mut settings = Settings::default();
+        assert!(!settings.dry_run_on());
+        settings.set_dry_run(true);
+        assert_eq!(settings.dry_run, Some(true));
+        assert!(settings.dry_run_on());
+        settings.set_dry_run(false);
+        assert_eq!(settings.dry_run, None);
     }
 
     #[test]

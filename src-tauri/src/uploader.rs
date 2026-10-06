@@ -2,6 +2,7 @@
 //! at a time, keeps `uploads.json` up to date and tells the window. Runs for as long as the app
 //! does, window open or not.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,11 +15,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::afk::{AfkStatus, AfkStore};
+use crate::debug::{Attempt, Outcome, Recent};
 use crate::history::{self, Page, QueueSnapshot};
-use crate::log_scan::RoundStart;
+use crate::log_scan::{RoundStart, Scan};
 use crate::server::{self, Host, TokenCheck, UploadInfo, UploadOutcome};
 use crate::uploads::{self, Answer, Record, Sent};
-use crate::watcher::{self, Due, Timing, Tracker};
+use crate::watcher::{self, Due, Queued, Timing, Tracker};
 use crate::{config, log_folder, log_scan, Store};
 
 /// The event the window listens to for `UploadStatus`.
@@ -76,6 +78,8 @@ pub struct UploadStatus {
     pub host: Option<Host>,
     /// Whether the host is AFK, and the rounds noted for it lately.
     pub afk: AfkStatus,
+    /// A dry run: logs are picked as usual but not sent (the debug panel lists them).
+    pub dry_run: bool,
 }
 
 pub struct Uploader {
@@ -91,6 +95,8 @@ pub struct Uploader {
     queue: Mutex<QueueSnapshot>,
     /// Failed uploads the host asked to retry now, by file name.
     retries: Mutex<Vec<String>>,
+    /// The latest uploads and dry runs, for the debug panel.
+    recent: Mutex<Recent>,
     wake: Notify,
     /// Ask the server for the host and the listed matches' status at the next poll.
     refresh: AtomicBool,
@@ -118,6 +124,7 @@ impl Uploader {
             status: Mutex::new(UploadStatus::default()),
             queue: Mutex::new(QueueSnapshot::default()),
             retries: Mutex::new(Vec::new()),
+            recent: Mutex::new(Recent::default()),
             wake: Notify::new(),
             refresh: AtomicBool::new(false),
             token_ok: AtomicBool::new(false),
@@ -184,6 +191,20 @@ impl Uploader {
             page,
             config::UPLOADS_PAGE_SIZE,
         )
+    }
+
+    /// The ranked files waiting to be uploaded to `server_url` from `folder`, as of the last poll.
+    pub fn queue(&self, server_url: &str, folder: Option<&Path>) -> Vec<Queued> {
+        self.queue
+            .lock()
+            .unwrap()
+            .queue(server_url, folder)
+            .to_vec()
+    }
+
+    /// The latest uploads and dry runs, newest first.
+    pub fn recent(&self) -> Vec<Attempt> {
+        self.recent.lock().unwrap().list()
     }
 
     /// See `UploadStatus::history_revision`. Both parts only go up.
@@ -295,6 +316,27 @@ struct Run {
     /// The server and token an upload without a region was refused for (`no_region`): uploads
     /// without one wait, even while the server can't say the host's home region.
     no_region: Option<(String, String)>,
+    /// What a dry run went through, per server and file, as if it had been uploaded: it isn't
+    /// picked again until it grows. Forgotten when the dry run ends, so those files go then.
+    dry_sent: HashMap<String, HashMap<String, watcher::Sent>>,
+}
+
+/// A file as an upload sends it, besides its bytes: what's read from them.
+struct Prepared {
+    scan: Scan,
+    host_afk: Option<String>,
+    started_at: Option<String>,
+}
+
+impl Prepared {
+    fn info<'a>(&'a self, file_name: &'a str, region: Option<&'a str>) -> UploadInfo<'a> {
+        UploadInfo {
+            file_name,
+            started_at: self.started_at.as_deref(),
+            region,
+            host_afk: self.host_afk.as_deref(),
+        }
+    }
 }
 
 impl Run {
@@ -402,6 +444,10 @@ impl Run {
             return finish(self, None, status);
         };
         let polled = Some(folder.path.as_path());
+        let dry_run = settings.dry_run_on();
+        if !dry_run {
+            self.dry_sent.clear();
+        }
         // The retries the host asked for, before the poll picks what's due.
         for file in std::mem::take(&mut *uploader.retries.lock().unwrap()) {
             self.tracker.retry(&file);
@@ -410,15 +456,19 @@ impl Run {
             let record = uploader.record.lock().unwrap();
             // Before the first token for this server, count only what's written from now on.
             let since = record.started(&server_url).unwrap_or_else(SystemTime::now);
+            let dry_sent = self.dry_sent.get(&server_url);
             self.tracker.poll(
                 &folder.path,
                 Instant::now(),
                 SystemTime::now(),
                 since,
                 |name| {
-                    record.get(&server_url, name).map(|s| watcher::Sent {
-                        size: s.size,
-                        match_ends: s.match_ends,
+                    let dry = dry_sent.and_then(|files| files.get(name)).copied();
+                    dry.or_else(|| {
+                        record.get(&server_url, name).map(|s| watcher::Sent {
+                            size: s.size,
+                            match_ends: s.match_ends,
+                        })
                     })
                 },
             )
@@ -439,6 +489,21 @@ impl Run {
         }
         // Before any upload: a file that grew with a round started while AFK sends it.
         uploader.note_afk(self.tracker.live_rounds());
+
+        // Nothing goes to the server, so no token is needed. The region is the one picked, else
+        // the home region if it's known (else an upload would leave `X-Region` out).
+        if dry_run {
+            let host = match &token {
+                Ok(Some(token)) => self.known_host(&server_url, token),
+                _ => None,
+            };
+            status.dry_run = true;
+            status.region = region_of(host.as_ref());
+            status.host = host;
+            let done = self.dry_run(&uploader, &server_url, status.region.as_deref(), &poll.due);
+            status.waiting = status.waiting.saturating_sub(done);
+            return finish(self, polled, status);
+        }
 
         let token = match token {
             Ok(Some(token)) => token,
@@ -580,6 +645,73 @@ impl Run {
             .map_err(|message| Problem::Local { message })
     }
 
+    /// `due` as an upload sends it: only its complete lines (the game may be halfway through
+    /// writing the next one), and what's read from them. An error when it can't be read.
+    fn prepare(&self, uploader: &Uploader, due: &Due) -> Result<(Vec<u8>, Prepared), String> {
+        let mut bytes =
+            fs::read(&due.path).map_err(|e| format!("Couldn't read {}: {e}", due.name))?;
+        bytes.truncate(log_scan::complete_lines(&bytes).len());
+        let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
+        // The live log may have grown since the poll read it: a round that started meanwhile is
+        // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
+        if self.tracker.live() == Some(due.name.as_str()) {
+            uploader.note_afk(&scan.round_starts);
+        }
+        let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
+        let prepared = Prepared {
+            scan,
+            host_afk,
+            started_at: started_at(due),
+        };
+        Ok((bytes, prepared))
+    }
+
+    /// A dry run of the files `due` to `server_url` as `region`: what each upload would send goes
+    /// to the debug panel, and nothing is sent or put in `uploads.json`. How many are done with;
+    /// one that can't be read is tried at the next poll.
+    fn dry_run(
+        &mut self,
+        uploader: &Uploader,
+        server_url: &str,
+        region: Option<&str>,
+        due: &[Due],
+    ) -> usize {
+        let mut done = 0;
+        for due in due {
+            let (bytes, prepared) = match self.prepare(uploader, due) {
+                Ok(prepared) => prepared,
+                Err(message) => {
+                    log::warn!("Dry run: {message}");
+                    continue;
+                }
+            };
+            let size = bytes.len() as u64;
+            log::info!(
+                "Dry run: would upload {} ({size} bytes) to {server_url}",
+                due.name
+            );
+            let outcome = if size > config::MAX_UPLOAD_BYTES {
+                Outcome::TooLarge
+            } else {
+                Outcome::DryRun
+            };
+            let info = prepared.info(&due.name, region);
+            let attempt = Attempt::new(server_url, &info, size, &prepared.scan.match_keys, outcome);
+            uploader.recent.lock().unwrap().push(attempt);
+            self.tracker.sent(&due.name);
+            let sent = watcher::Sent {
+                size,
+                match_ends: prepared.scan.match_ends,
+            };
+            self.dry_sent
+                .entry(server_url.to_string())
+                .or_default()
+                .insert(due.name.clone(), sent);
+            done += 1;
+        }
+        done
+    }
+
     /// Uploads the files `due`, oldest first, until one stops every upload, the server says to
     /// hold off (`429`), or the settings or token changed since `generation` (the rest waits for
     /// the next poll, with the new ones). How many are done with, and the problem if one came up.
@@ -619,14 +751,9 @@ impl Run {
             token,
             region,
         } = target;
-        // Only its complete lines: the game may be halfway through writing the next one.
-        let bytes = match fs::read(&due.path) {
-            Ok(mut bytes) => {
-                bytes.truncate(log_scan::complete_lines(&bytes).len());
-                bytes
-            }
-            Err(e) => {
-                let message = format!("Couldn't read {}: {e}", due.name);
+        let (bytes, prepared) = match self.prepare(uploader, due) {
+            Ok(prepared) => prepared,
+            Err(message) => {
                 log::warn!("{message}. Trying again later");
                 self.tracker
                     .failed(&due.name, Instant::now(), None, message.clone());
@@ -635,14 +762,14 @@ impl Run {
             }
         };
         let size = bytes.len() as u64;
-        let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
-        // The live log may have grown since the poll read it: a round that started meanwhile is
-        // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
-        if self.tracker.live() == Some(due.name.as_str()) {
-            uploader.note_afk(&scan.round_starts);
-        }
-        let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
+        let scan = &prepared.scan;
+        let info = prepared.info(&due.name, region);
+        let note = |outcome| {
+            let attempt = Attempt::new(server_url, &info, size, &scan.match_keys, outcome);
+            uploader.recent.lock().unwrap().push(attempt);
+        };
         let answer = if size > config::MAX_UPLOAD_BYTES {
+            note(Outcome::TooLarge);
             Answer::Refused {
                 error: "too_large".into(),
                 message: format!(
@@ -651,20 +778,14 @@ impl Run {
                 ),
             }
         } else {
-            let started_at = started_at(due);
-            let info = UploadInfo {
-                file_name: &due.name,
-                started_at: started_at.as_deref(),
-                region,
-                host_afk: host_afk.as_deref(),
-            };
             log::info!(
                 "Uploading {} ({size} bytes) to {server_url} as {}",
                 due.name,
                 region.unwrap_or("the home region")
             );
-            let sent = server::upload(server_url, token, info, bytes, timeout);
-            match sent.await {
+            let uploaded = server::upload(server_url, token, info, bytes, timeout).await;
+            note(Outcome::of(&uploaded));
+            match uploaded.outcome {
                 UploadOutcome::Stored(answer) => {
                     // The answer has no match id on the site: the status refresh brings it, so
                     // ask for one at the end of this poll rather than in `STATUS_REFRESH_SECS`.
@@ -729,7 +850,7 @@ impl Run {
                 size,
                 match_ends: scan.match_ends,
                 at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                players: scan.players,
+                players: scan.players.clone(),
                 answer,
             },
         );
@@ -1074,5 +1195,97 @@ mod tests {
         ));
         assert!(!run.held(&server, Instant::now() + Duration::from_secs(7200)));
         assert!(!run.held("https://test.genjiball.us", start));
+    }
+
+    #[test]
+    fn a_dry_run_sends_nothing_and_lists_what_it_would_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        // Half a line at the end: left out, as an upload leaves it out.
+        let file = due(dir.path(), &format!("{EXAMPLE}MATCH_END|"));
+        let done = run.dry_run(&uploader, SERVER, Some("na"), std::slice::from_ref(&file));
+        assert_eq!(done, 1);
+        assert!(uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(SERVER, &file.name)
+            .is_none());
+
+        let listed = uploader.recent();
+        assert_eq!(listed.len(), 1);
+        let attempt = &listed[0];
+        assert_eq!(attempt.outcome, Outcome::DryRun);
+        assert_eq!(attempt.bytes, EXAMPLE.len() as u64);
+        assert_eq!(attempt.match_keys, ["482913507226"]);
+        let header = |name| {
+            attempt
+                .headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(header("X-Log-File"), Some(file.name.as_str()));
+        assert_eq!(header("X-Region"), Some("na"));
+        assert!(header("X-Log-Started-At").is_some());
+
+        // Gone through as if uploaded: picked again only once it grows.
+        let sent = run.dry_sent[SERVER][&file.name];
+        assert_eq!(sent.size, EXAMPLE.len() as u64);
+        assert_eq!(sent.match_ends, 1);
+    }
+
+    #[test]
+    fn an_upload_lists_the_servers_answer_without_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let stored = r#"{"result":"stored","matches":[]}"#;
+        let server = server::test_server(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{stored}",
+                stored.len()
+            ),
+            EXAMPLE,
+            || {},
+        );
+        let file = due(dir.path(), EXAMPLE);
+        let sent = block_on(run.send(&uploader, target(&server), &file, TIMEOUT));
+        assert_eq!(sent, Ok(true));
+        let attempt = &uploader.recent()[0];
+        assert_eq!(
+            attempt.outcome,
+            Outcome::Answered {
+                answer: server::RawAnswer {
+                    status: 200,
+                    body: stored.into()
+                }
+            }
+        );
+        assert!(attempt
+            .headers
+            .iter()
+            .all(|(name, value)| !name.eq_ignore_ascii_case("authorization") && value != "t"));
+    }
+
+    #[test]
+    fn a_failed_upload_lists_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        // Nothing listens there.
+        let closed = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let file = due(dir.path(), EXAMPLE);
+        let sent = block_on(run.send(&uploader, target(&closed), &file, TIMEOUT));
+        assert_eq!(sent, Ok(false));
+        assert!(
+            matches!(&uploader.recent()[0].outcome, Outcome::Unanswered { message } if message.contains("Couldn't reach")),
+            "{:?}",
+            uploader.recent()
+        );
     }
 }

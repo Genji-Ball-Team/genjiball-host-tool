@@ -1,6 +1,7 @@
 mod afk;
 mod config;
 mod credentials;
+mod debug;
 mod diagnostics;
 mod dpapi;
 mod history;
@@ -125,6 +126,8 @@ struct AppState {
     /// The GenjiBall-CE release the ranked code is built from, `None` for the latest ranked one.
     release_tag: Option<String>,
     release_tag_suffix: &'static str,
+    /// Whether uploads are a dry run (Advanced, Debug).
+    dry_run: bool,
 }
 
 /// A tunable under Advanced, as the window shows it. All in seconds.
@@ -174,6 +177,7 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
         default_log_level: config::DEFAULT_LOG_LEVEL,
         release_tag: settings.release_tag.clone(),
         release_tag_suffix: config::RELEASE_TAG_SUFFIX,
+        dry_run: settings.dry_run_on(),
     })
 }
 
@@ -480,6 +484,58 @@ fn set_release_tag(
     app_state(&app, &store)
 }
 
+/// Switches the dry run on or off. A poll under way stops sending, and the next one starts now:
+/// switched off, the files the dry run went through are uploaded then.
+#[tauri::command]
+fn set_dry_run(
+    on: bool,
+    app: tauri::AppHandle,
+    store: State<Store>,
+    uploader: State<Uploader>,
+) -> Result<AppState, String> {
+    store.update(|s| s.set_dry_run(on))?;
+    log::info!("Dry run {}", if on { "on" } else { "off" });
+    uploader.changed();
+    app_state(&app, &store)
+}
+
+/// What the debug panel shows (Advanced, Debug).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugInfo {
+    /// The ranked files waiting to be uploaded, as of the last poll.
+    queue: Vec<watcher::Queued>,
+    /// The latest uploads and dry runs, newest first.
+    uploads: Vec<debug::Attempt>,
+    /// The live log's newest events, `None` while there's no log.
+    events: Option<debug::LiveEvents>,
+    /// Why the live log couldn't be read.
+    events_error: Option<String>,
+}
+
+#[tauri::command]
+fn get_debug(store: State<Store>, uploader: State<Uploader>) -> DebugInfo {
+    let settings = store.get();
+    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    let folder = folder.as_ref().map(|f| f.path.as_path());
+    let (events, events_error) =
+        match folder.map(|f| debug::live_events(f, config::DEBUG_EVENTS_SHOWN)) {
+            None => (
+                None,
+                Some("The Workshop log folder isn't there yet".to_string()),
+            ),
+            Some(Ok(events)) => (events, None),
+            // Locked for a moment while the game writes it: the next refresh reads it.
+            Some(Err(e)) => (None, Some(format!("Couldn't read the newest log: {e}"))),
+        };
+    DebugInfo {
+        queue: uploader.queue(settings.server_url(), folder),
+        uploads: uploader.recent(),
+        events,
+        events_error,
+    }
+}
+
 /// Opens the tool's log folder in Explorer, through the opener's Rust API.
 #[tauri::command]
 fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
@@ -523,6 +579,7 @@ async fn export_diagnostics(
         workshop_folder: workshop.as_ref().map(|f| f.path.as_path()),
         upload_status: serde_json::to_value(uploader.status()).unwrap_or_default(),
         update_status: serde_json::to_value(updates.status()).unwrap_or_default(),
+        recent_uploads: serde_json::to_value(uploader.recent()).unwrap_or_default(),
     };
     let now = chrono::Local::now();
     let text = diagnostics::collect(&sources, &secrets, now);
@@ -772,6 +829,8 @@ pub fn run() {
             set_region,
             set_log_level,
             set_release_tag,
+            set_dry_run,
+            get_debug,
             open_log_folder,
             export_diagnostics,
             get_upload_status,

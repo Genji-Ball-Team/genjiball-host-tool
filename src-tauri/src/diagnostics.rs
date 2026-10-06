@@ -1,8 +1,8 @@
 //! A diagnostics export for bug reports (Advanced → Debug → "Export diagnostics"): one JSON file
 //! with the app version and OS, `settings.json`, `uploads.json`, `afk.json`, the upload and update
-//! status the window shows, the newest of the tool's own log (up to `DIAGNOSTICS_LOG_BYTES`), and
-//! the names, sizes and times of the files in the Workshop log folder and the tool's log folder
-//! (not the Workshop logs themselves).
+//! status the window shows, the debug panel's latest uploads, the newest of the tool's own log
+//! (up to `DIAGNOSTICS_LOG_BYTES`), and the names, sizes and times of the files in the Workshop log
+//! folder and the tool's log folder (not the Workshop logs themselves).
 //!
 //! Never a token: `tokens.json` and the credential store aren't read, and every token passed in
 //! `secrets` is blanked out of the whole export in case one slipped into a file.
@@ -34,6 +34,8 @@ pub struct Sources<'a> {
     /// What the window shows: `UploadStatus` and `UpdateStatus`, serialized.
     pub upload_status: Value,
     pub update_status: Value,
+    /// The debug panel's latest uploads and dry runs (`debug::Attempt`), serialized.
+    pub recent_uploads: Value,
 }
 
 /// The export, as pretty JSON, with every one of `secrets` blanked out. `now` is when it's made.
@@ -53,6 +55,7 @@ pub fn collect(sources: &Sources, secrets: &[String], now: DateTime<Local>) -> S
         "afk": file(config::AFK_FILE),
         "uploadStatus": sources.upload_status,
         "updateStatus": sources.update_status,
+        "recentUploads": sources.recent_uploads,
         "workshopFolder": sources.workshop_folder.map(folder),
         "logFolder": sources.log_dir.map(folder),
         "logs": sources.log_dir.map(|dir| own_logs(dir, config::DIAGNOSTICS_LOG_BYTES)),
@@ -174,6 +177,7 @@ mod tests {
             workshop_folder: Some(workshop),
             upload_status: json!({ "waiting": 1 }),
             update_status: json!({ "available": null }),
+            recent_uploads: json!([]),
         }
     }
 

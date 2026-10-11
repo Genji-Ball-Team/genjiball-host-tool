@@ -859,7 +859,7 @@ struct RankedCode {
     release: String,
     /// When the leaderboard was read for the tags (ISO 8601).
     tags_updated_at: String,
-    /// Top players tagged with their place and rating.
+    /// Top players in the game's top 10 list.
     top: usize,
     /// Names tagged with their rank tier.
     names: usize,
@@ -995,7 +995,7 @@ struct TourneyCode {
     region: String,
     /// The GenjiBall-CE release it's built from (`1.3.3R`).
     release: String,
-    /// Top players tagged with their place and rating, names tagged with their rank tier, and
+    /// Top players in the game's top 10 list, names tagged with their rank tier, and
     /// names left out (the Workshop can't show them).
     top: usize,
     names: usize,

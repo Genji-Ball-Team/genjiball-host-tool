@@ -22,7 +22,7 @@ You can close the window afterwards: the tool keeps uploading from the tray (nex
 ## Every time you host
 
 1. Open the tool. On Home, check the region is the one you're hosting in and nothing is listed as wrong.
-2. Click **Copy ranked code** on Home. The tool builds the code for the latest ranked version of Genji Ball and copies it. The top 10 players of your region are tagged with their place and rating, and everyone else with their rank tier. The tags are as new as the code, so copy a fresh one each time you host.
+2. Click **Copy ranked code** on Home. The tool builds the code for the latest ranked version of Genji Ball and copies it. Every player in a rank tier, the top 10 too, is tagged with their rank tier, and the top 10 of your region are listed on the right with their place and rating. The tags are as new as the code, so copy a fresh one each time you host.
    The code also puts the lobby on your region's data center: **Netherlands** for EU and **USA - Central** for NA. Pick another one for each region under **Settings → Game → Data center**, or "Best available" to let the game pick the best ping for you.
 3. In Overwatch, create a new custom game, open Settings and import the code with the "Import / paste settings" button (top right), as in the [Genji Ball setup steps](https://github.com/Genji-Ball-Team/GenjiBall-CE#readme). Importing on top of an existing custom game can fail. Start the lobby as usual and host the game.
 4. Play. Ranked matches are uploaded when they end. If you move to spectator, close the lobby or Overwatch crashes mid-match, the tool uploads what's in the log once it stops growing.

@@ -933,7 +933,7 @@ async fn ranked_code(store: &Store, releases: &ReleaseCache) -> Result<RankedCod
         release,
         tags_updated_at: now.to_rfc3339(),
         top: built.top,
-        names: filled.names - built.top,
+        names: filled.names,
         skipped_names: built.skipped + filled.skipped,
         keep_secs: keep.as_secs(),
         data_center,
@@ -1099,7 +1099,7 @@ async fn tourney_code(
         region: lobby.region.clone(),
         release,
         top: built.top,
-        names: filled.names - built.top,
+        names: filled.names,
         skipped_names: built.skipped + filled.skipped,
         data_center,
     })

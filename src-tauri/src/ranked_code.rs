@@ -537,7 +537,7 @@ mod tests {
         let (action, names, _) = rank_tags_action(&tags).unwrap();
         assert_eq!(names, 0);
         assert!(
-            action.ends_with(r#"Array(Custom String(""), Custom Color(150, 0, 0, 255), Custom String("#1 Kenzo - 2143"))));"#),
+            action.ends_with(r##"Array(Custom String(""), Custom Color(150, 0, 0, 255), Custom String("#1 Kenzo - 2143"))));"##),
             "{action}"
         );
     }

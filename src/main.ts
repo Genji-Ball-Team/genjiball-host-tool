@@ -1276,11 +1276,11 @@ async function copyRankedCode(): Promise<void> {
     throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
   }
   const region = built.region ? `${regionLabel(built.region)} ` : "";
-  const tiers = built.names === 1 ? "1 player tagged with their rank" : `${built.names} players tagged with their rank`;
+  const tiers = built.names === 1 ? "1 more with their rank" : `${built.names} more with their rank`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
   setRankedCodeState("", "muted");
   setCodeButton("copied");
-  toast("Ranked code copied", `Genji Ball ${built.release}: ${region}top ${built.top} listed with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.${built.dataCenter ? ` Puts the lobby on ${built.dataCenter}.` : ""}`);
+  toast("Ranked code copied", `Genji Ball ${built.release}: ${region}top ${built.top} tagged with place and rating, ${tiers}, from ${new Date(built.tagsUpdatedAt).toLocaleString()}${skipped}.${built.dataCenter ? ` Puts the lobby on ${built.dataCenter}.` : ""}`);
 }
 
 el("ranked-code-copy").addEventListener("click", () =>

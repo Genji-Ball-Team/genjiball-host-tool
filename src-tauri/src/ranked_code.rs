@@ -2,9 +2,8 @@
 //! `docs/rank-tags.md` (on `v1.3.3R`) defines it. Pure: the release and the leaderboard are
 //! fetched elsewhere.
 //!
-//! Everyone in a rank tier, the top players too, gets the tier's name as their tag. The region's
-//! top players are an entry each after the tiers, with a line in the game's top 10 list
-//! (`#1 Kenzo - 2143`) and no names, so they add no tag.
+//! The region's top players are an entry each, so the tag over them is their place and rating
+//! (`#1 | 2143`). Before them come the rank tiers, so everyone else in a tier gets its name.
 
 use crate::config;
 use crate::server::{Leaderboard, RankTiers};
@@ -38,18 +37,18 @@ const UNTIERED_COLOR: [u8; 4] = [255, 255, 255, 255];
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopTags {
     pub tags: RankTags,
-    /// Top players in the game's top 10 list.
+    /// Top players tagged with their place and rating.
     pub top: usize,
     /// Top players left out: the Workshop can't show their names.
     pub skipped: usize,
 }
 
 /// `rankTags`: the server's rank tiers, lowest first, with no line in the game's list, then the
-/// leaderboard's top `config::TOP_TAGGED` players, an entry each, the best last, with their
-/// list line and no names. The game gives a player the last entry with their name, so the top
-/// players keep their tier's tag like everyone else. The list shows the top players best first,
-/// under a line with `date`. Top players whose name the Workshop can't show are left out, and
-/// the next one takes their spot; their place stays as the site shows it.
+/// leaderboard's top `config::TOP_TAGGED` players, an entry each, the best last, tagged with
+/// their place and rating. A top player is left out of their tier, so everyone else in a tier
+/// gets its name (the game would take the last entry with their name anyway). The list shows the top players
+/// best first, under a line with `date`. Top players whose name the Workshop can't show are left
+/// out, and the next one takes their spot; their place stays as the site shows it.
 pub fn top_tags(tiers: &RankTiers, leaderboard: &Leaderboard, date: &str) -> TopTags {
     let mut skipped = 0;
     let mut top = Vec::new();
@@ -67,10 +66,10 @@ pub fn top_tags(tiers: &RankTiers, leaderboard: &Leaderboard, date: &str) -> Top
             [t.color[0], t.color[1], t.color[2], 255]
         });
         top.push(Tier {
-            label: String::new(),
+            label: format!("#{} | {rating}", player.rank),
             color,
             guide,
-            names: vec![],
+            names: vec![player.name.clone()],
         });
     }
     top.reverse();
@@ -88,7 +87,12 @@ pub fn top_tags(tiers: &RankTiers, leaderboard: &Leaderboard, date: &str) -> Top
             label: tier.label.clone(),
             color: tier.color,
             guide: String::new(),
-            names: tier.names.clone(),
+            names: tier
+                .names
+                .iter()
+                .filter(|name| !top.iter().any(|t| t.names.contains(name)))
+                .cloned()
+                .collect(),
         })
         .collect();
     entries.extend(top);
@@ -504,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_the_top_players_without_tagging_them() {
+    fn tags_the_top_players_with_place_and_rating() {
         let TopTags { tags, skipped, .. } = top_tags(
             &no_tiers(),
             &board(vec![
@@ -520,24 +524,24 @@ mod tests {
                 header: "Top 2 on 2026-10-05".into(),
                 tiers: vec![
                     Tier {
-                        label: String::new(),
+                        label: "#2 | 1010".into(),
                         color: [255, 255, 255, 255],
                         guide: "#2 Hana - 1010".into(),
-                        names: vec![],
+                        names: vec!["Hana".into()],
                     },
                     Tier {
-                        label: String::new(),
+                        label: "#1 | 2143".into(),
                         color: [150, 0, 0, 255],
                         guide: "#1 Kenzo - 2143".into(),
-                        names: vec![],
+                        names: vec!["Kenzo".into()],
                     },
                 ],
             }
         );
         let (action, names, _) = rank_tags_action(&tags).unwrap();
-        assert_eq!(names, 0);
+        assert_eq!(names, 2);
         assert!(
-            action.ends_with(r##"Array(Custom String(""), Custom Color(150, 0, 0, 255), Custom String("#1 Kenzo - 2143"))));"##),
+            action.contains(r##"Array(Custom String("#1 | 2143"), Custom Color(150, 0, 0, 255)"##),
             "{action}"
         );
     }
@@ -550,7 +554,9 @@ mod tests {
         let TopTags { tags, top, .. } = top_tags(&no_tiers(), &board(players), "2026-10-05");
         assert_eq!(top, config::TOP_TAGGED);
         assert_eq!(tags.tiers.len(), config::TOP_TAGGED);
-        // The best last, so the game's list shows them best first.
+        // The best last: the game looks names up from the end.
+        assert_eq!(tags.tiers[9].names, vec!["P1".to_string()]);
+        assert_eq!(tags.tiers[0].names, vec!["P10".to_string()]);
         assert_eq!(tags.header, "Top 10 on 2026-10-05");
         assert_eq!(tags.tiers[9].guide, "#1 P1 - 1999");
         assert_eq!(tags.tiers[0].guide, "#10 P10 - 1990");
@@ -568,7 +574,7 @@ mod tests {
         );
         assert_eq!(skipped, 1);
         assert_eq!(tags.tiers.len(), 1);
-        assert_eq!(tags.tiers[0].guide, "#2 Kenzo - 2000");
+        assert_eq!(tags.tiers[0].label, "#2 | 2000");
     }
 
     #[test]
@@ -583,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn top_players_keep_their_tier_tag() {
+    fn puts_the_tiers_before_the_top_players_with_no_list_line() {
         let tiers = RankTiers {
             tiers: vec![
                 RankTier {
@@ -610,18 +616,13 @@ mod tests {
         let entries = &built.tags.tiers;
         assert_eq!(
             entries.iter().map(|t| t.label.as_str()).collect::<Vec<_>>(),
-            vec!["Apprentice", "Champion", ""]
+            vec!["Apprentice", "Champion", "#1 | 2600"]
         );
-        // The tiers aren't in the list. The top player stays in their tier, and their list entry
-        // has no names, so the last entry with their name is the tier: its tag is over them.
+        // The tiers aren't in the list, and the top player isn't in their tier.
         assert_eq!(entries[0].guide, "");
         assert_eq!(entries[1].guide, "");
-        assert_eq!(
-            entries[1].names,
-            vec!["Kenzo".to_string(), "Genji".to_string()]
-        );
+        assert_eq!(entries[1].names, vec!["Genji".to_string()]);
         assert_eq!(entries[2].guide, "#1 Kenzo - 2600");
-        assert!(entries[2].names.is_empty());
         let (action, names, _) = rank_tags_action(&built.tags).unwrap();
         assert_eq!(names, 3);
         assert!(

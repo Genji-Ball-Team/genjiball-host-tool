@@ -200,12 +200,14 @@ impl Ratings {
 
     fn done(&self, scope: &Scope, job: &Job, store: impl FnOnce(&mut Inner)) {
         let mut inner = self.inner.lock().unwrap();
-        inner.running.remove(job);
-        // The settings changed while it was asked: it's about others.
-        if inner.scope.as_ref() == Some(scope) {
-            inner.failed.remove(job);
-            store(&mut inner);
+        // The settings changed while it was asked: it's about others, and the same job may be
+        // running for the new ones.
+        if inner.scope.as_ref() != Some(scope) {
+            return;
         }
+        inner.running.remove(job);
+        inner.failed.remove(job);
+        store(&mut inner);
     }
 }
 
@@ -347,9 +349,11 @@ mod tests {
         ratings.jobs(&scope(), &lobby, &[], now);
         let na = ("https://genjiball.us".to_string(), Some("na".to_string()));
         assert_eq!(ratings.jobs(&na, &lobby, &[], now), [Job::Leaderboard]);
-        // The EU answer comes in late.
+        // The EU answer comes in late, and the NA one is still running: not asked twice.
         ratings.board_read(&scope(), vec![standing("Kenzo", 1700.0)], now);
+        ratings.failed(&scope(), &Job::Leaderboard, now);
         assert_eq!(ratings.players(&na, &lobby)[0].state, RatingState::Pending);
+        assert!(ratings.jobs(&na, &lobby, &[], now).is_empty());
     }
 
     #[test]

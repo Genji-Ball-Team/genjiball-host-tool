@@ -19,6 +19,8 @@ interface AppState {
   serverUrl: string;
   defaultServerUrl: string;
   hasToken: boolean;
+  /** Why the saved token can't be read (`hasToken` is then false). */
+  tokenError: string | null;
   logFolder: LogFolder | null;
   /** Where the verify screenshot of a tourney lobby is offered from. */
   screenshotFolder: LogFolder | null;
@@ -383,6 +385,7 @@ function render(): void {
   if (!state.hasToken) {
     showHost(null);
     el("host").textContent = "No token yet";
+    if (state.tokenError) setStatus(state.tokenError, "bad");
   }
 
   const folder = state.logFolder;

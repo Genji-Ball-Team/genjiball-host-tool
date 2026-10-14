@@ -83,6 +83,15 @@ impl Store {
         self.settings.lock().unwrap().clone()
     }
 
+    /// Whether there's a token for `server_url`, and why it can't be read when it can't (a damaged
+    /// one, or another Windows user's): then none, as far as the window goes.
+    fn token_state(&self, server_url: &str) -> (bool, Option<String>) {
+        match self.tokens.get(server_url) {
+            Ok(token) => (token.is_some(), None),
+            Err(e) => (false, Some(e)),
+        }
+    }
+
     /// `load_error`, after reading the file again: a file fixed by hand counts as soon as it's saved.
     fn load_error(&self) -> Option<String> {
         let mut settings = self.settings.lock().unwrap();
@@ -100,9 +109,22 @@ impl Store {
     }
 
     fn update(&self, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
+        self.try_update(|s| {
+            change(s);
+            Ok(())
+        })
+    }
+
+    /// `update` with a change that may turn the settings down (then nothing is saved). It runs
+    /// under the lock, so it starts from the settings as they are, not as an earlier `get` read
+    /// them: two changes at once both count.
+    fn try_update(
+        &self,
+        change: impl FnOnce(&mut Settings) -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut settings = self.settings.lock().unwrap();
         let mut next = settings.clone();
-        change(&mut next);
+        change(&mut next)?;
         settings::save(&self.path, &next)?;
         *settings = next;
         *self.load_error.lock().unwrap() = None;
@@ -118,6 +140,8 @@ struct AppState {
     server_url: String,
     default_server_url: &'static str,
     has_token: bool,
+    /// Why the saved token can't be read (damaged, or another Windows user's), `has_token` false.
+    token_error: Option<String>,
     log_folder: Option<LogFolder>,
     /// Where the verify screenshot of a tourney lobby is offered from (#10).
     screenshot_folder: Option<LogFolder>,
@@ -254,14 +278,17 @@ struct AdvancedSetting {
     value: Option<u64>,
 }
 
-fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> {
+/// Never an error: the window must load even when the saved token can't be read.
+fn app_state(app: &tauri::AppHandle, store: &Store) -> AppState {
     let settings_error = store.load_error();
     let settings = store.get();
-    Ok(AppState {
+    let (has_token, token_error) = store.token_state(settings.server_url());
+    AppState {
         version: app.package_info().version.to_string(),
         server_url: settings.server_url().to_string(),
         default_server_url: config::DEFAULT_SERVER_URL,
-        has_token: store.tokens.get(settings.server_url())?.is_some(),
+        has_token,
+        token_error,
         log_folder: log_folder::current(settings.log_folder.as_deref()),
         screenshot_folder: log_folder::screenshots(settings.screenshot_folder.as_deref()),
         screenshot_max_bytes: config::SCREENSHOT_MAX_BYTES,
@@ -308,11 +335,11 @@ fn app_state(app: &tauri::AppHandle, store: &Store) -> Result<AppState, String> 
             .collect(),
         best_available: config::BEST_AVAILABLE,
         overlay: overlay_view(app, &settings),
-    })
+    }
 }
 
 #[tauri::command]
-fn get_state(app: tauri::AppHandle, store: State<Store>) -> Result<AppState, String> {
+fn get_state(app: tauri::AppHandle, store: State<Store>) -> AppState {
     app_state(&app, &store)
 }
 
@@ -520,7 +547,7 @@ fn set_server_url(
     uploader.changed();
     lobby.changed();
     tourneys.refresh();
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// `None` goes back to the detected folder.
@@ -539,7 +566,7 @@ fn set_log_folder(
     );
     uploader.changed();
     lobby.changed();
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// The region the host hosts in now, `None` for their home region. Uploads from the next one on
@@ -562,7 +589,7 @@ fn set_region(
     );
     uploader.changed();
     lobby.changed();
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// The Advanced values the host entered, by key. A key left out goes back to its default, so `{}`
@@ -581,7 +608,7 @@ fn set_advanced(
     // The next poll starts now, with the new values.
     uploader.wake();
     lobby.changed();
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// Switches the live lobby on or off and sets the name it's listed under (empty: none). The next
@@ -600,7 +627,7 @@ fn set_live_lobby(
         s.lobby_name = name;
     })?;
     lobby.changed();
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// Whether the host's lobby is listed on the site now, and why not.
@@ -621,7 +648,7 @@ fn set_log_level(
     let level = store.get().log_level().to_string();
     logging::set_level(&level);
     log::info!("Log level set to {level}");
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// The GenjiBall-CE release the ranked code is built from (`1.3.3R`). Empty: the latest ranked one.
@@ -637,7 +664,7 @@ fn set_release_tag(
         "Ranked code release set to {}",
         tag.as_deref().unwrap_or("the latest")
     );
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// Switches the dry run on or off. A poll under way stops sending, and the next one starts now:
@@ -652,7 +679,7 @@ fn set_dry_run(
     store.update(|s| s.set_dry_run(on))?;
     log::info!("Dry run {}", if on { "on" } else { "off" });
     uploader.changed();
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// What the debug panel shows (Advanced, Debug).
@@ -720,7 +747,7 @@ fn set_updates(
         let app = app.clone();
         tauri::async_runtime::spawn(async move { updates::check(&app).await });
     }
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// The data center `region`'s ranked and tourney codes put the lobby on: one of its
@@ -742,7 +769,7 @@ fn set_data_center(
         }
     })?;
     log::info!("Data center for {region}: {name}");
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// Opens the tool's log folder in Explorer, through the opener's Rust API.
@@ -1211,7 +1238,7 @@ fn set_screenshot_folder(
         "Screenshots folder set to {:?}",
         log_folder::screenshots(store.get().screenshot_folder.as_deref()).map(|f| f.path)
     );
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// What the overlay window shows now (#49). Async, so its file reads every poll stay off the main
@@ -1230,17 +1257,18 @@ async fn set_overlay(
     app: tauri::AppHandle,
     store: State<'_, Store>,
 ) -> Result<AppState, String> {
-    let current = store.get().overlay;
-    let normalized = settings::normalize_overlay(&OverlaySettings {
-        layout: current.layout,
-        sizes: current.sizes,
-        ..settings
+    store.try_update(|s| {
+        s.overlay = settings::normalize_overlay(&OverlaySettings {
+            layout: s.overlay.layout.clone(),
+            sizes: s.overlay.sizes.clone(),
+            ..settings
+        })?;
+        Ok(())
     })?;
-    store.update(|s| s.overlay = normalized)?;
     log::info!("Overlay settings changed");
     overlay_window::apply(&app);
     stream::apply(&app);
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 /// Where the host dragged the widgets, by key (a share of the screen, 0 to 1), and how big they
@@ -1253,13 +1281,14 @@ fn set_overlay_layout(
     app: tauri::AppHandle,
     store: State<Store>,
 ) -> Result<(), String> {
-    let current = store.get().overlay;
-    let normalized = settings::normalize_overlay(&OverlaySettings {
-        layout,
-        sizes,
-        ..current
+    store.try_update(|s| {
+        s.overlay = settings::normalize_overlay(&OverlaySettings {
+            layout,
+            sizes,
+            ..s.overlay.clone()
+        })?;
+        Ok(())
     })?;
-    store.update(|s| s.overlay = normalized)?;
     let _ = app.emit(overlay_window::CHANGED_EVENT, ());
     Ok(())
 }
@@ -1275,10 +1304,11 @@ fn set_overlay_widget(
     if !config::OVERLAY_WIDGETS.iter().any(|w| w.key == key) {
         return Err(format!("There's no widget {key}"));
     }
-    let mut overlay = store.get().overlay;
-    overlay.widgets.insert(key.clone(), on);
-    let normalized = settings::normalize_overlay(&overlay)?;
-    store.update(|s| s.overlay = normalized)?;
+    store.try_update(|s| {
+        s.overlay.widgets.insert(key.clone(), on);
+        s.overlay = settings::normalize_overlay(&s.overlay)?;
+        Ok(())
+    })?;
     log::info!("Overlay widget {key} {}", if on { "on" } else { "off" });
     let _ = app.emit(overlay_window::CHANGED_EVENT, ());
     Ok(())
@@ -1292,7 +1322,7 @@ fn set_overlay_editing(
     store: State<Store>,
 ) -> Result<AppState, String> {
     overlay_window::set_editing(&app, on);
-    app_state(&app, &store)
+    Ok(app_state(&app, &store))
 }
 
 fn show_window(app: &tauri::AppHandle) {
@@ -1463,6 +1493,45 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn a_change_turned_down_saves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path());
+        store.update(|s| s.overlay.opacity = Some(80)).unwrap();
+        let turned_down = store.try_update(|s| {
+            s.overlay.scale = Some(120);
+            Err("no".into())
+        });
+        assert_eq!(turned_down, Err("no".into()));
+        assert_eq!(store.get().overlay.scale, None);
+        // Each change starts from the last one saved.
+        store
+            .try_update(|s| {
+                s.overlay.scale = Some(120);
+                Ok(())
+            })
+            .unwrap();
+        let saved = settings::load(&dir.path().join(config::SETTINGS_FILE)).unwrap();
+        assert_eq!(
+            (saved.overlay.opacity, saved.overlay.scale),
+            (Some(80), Some(120))
+        );
+    }
+
+    #[test]
+    fn a_token_that_cant_be_read_is_none_with_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = config::DEFAULT_SERVER_URL;
+        fs::write(
+            dir.path().join(config::TOKENS_FALLBACK_FILE),
+            format!(r#"{{ "{url}": "not hex" }}"#),
+        )
+        .unwrap();
+        let (has_token, error) = Store::open(dir.path()).token_state(url);
+        assert!(!has_token);
+        assert!(error.unwrap().contains("damaged"));
+    }
 
     #[test]
     fn a_settings_error_lasts_until_the_file_is_fixed() {

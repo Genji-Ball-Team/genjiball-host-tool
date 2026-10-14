@@ -1,7 +1,7 @@
 //! What the watcher needs to know about a Workshop log file (GenjiBall-CE `docs/ranked-log.md` on
 //! `v1.3.3R`): whether it holds a ranked match, how many matches in it have ended, the players'
 //! names for the upload history, and which rounds each match has started (for host AFK, `afk.rs`).
-//! The server does the real parsing (and the match view, #16, will share its parser).
+//! The server does the real parsing (the match view, #16, uses its parser in the window).
 
 use std::time::SystemTime;
 

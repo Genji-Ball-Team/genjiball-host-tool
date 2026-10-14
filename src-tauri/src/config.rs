@@ -313,7 +313,7 @@ pub const UPDATE_CHECK_SECS: Tunable = Tunable {
 /// host who hasn't switched it (`Settings::auto_update_check`). "Check for updates" works either way.
 pub const AUTO_UPDATE_CHECK_BY_DEFAULT: bool = true;
 
-/// The update channels the host picks from under Advanced → Updates. `stable` reads the updater
+/// The update channels the host picks from under Settings → Updates. `stable` reads the updater
 /// endpoint in `tauri.conf.json` (`latest.json` on the latest release, which is never a
 /// pre-release); `prerelease` the `UPDATE_MANIFEST` of the newest release, pre-releases too.
 pub const UPDATE_CHANNELS: [&str; 2] = ["stable", "prerelease"];

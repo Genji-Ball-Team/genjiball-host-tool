@@ -981,13 +981,13 @@ async fn home_region(
     };
     match server::check_token(server_url, &token, timeout).await {
         TokenCheck::Ok { host } => host.region.map(Some).ok_or_else(|| {
-            "You have no home region: pick the region you host in under Ranked server".to_string()
+            "You have no home region: pick the region you host in under Settings → Game".to_string()
         }),
         TokenCheck::Unknown | TokenCheck::Revoked => {
-            Err("The server turned your host token down, so your home region isn't known. Pick the region you host in under Ranked server".into())
+            Err("The server turned your host token down, so your home region isn't known. Pick the region you host in under Settings → Game".into())
         }
         TokenCheck::Unreachable { message } => Err(format!(
-            "Couldn't ask the server for your home region ({message}). Pick the region you host in under Ranked server"
+            "Couldn't ask the server for your home region ({message}). Pick the region you host in under Settings → Game"
         )),
     }
 }

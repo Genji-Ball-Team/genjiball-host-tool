@@ -54,13 +54,15 @@ export interface OverlayView {
 
 interface Context {
   /** Runs a change with the buttons disabled; errors go to `showError`. */
-  busy: (action: () => Promise<void>, showError?: (message: string) => void) => Promise<void>;
+  busy: (action: () => Promise<void>, showError: (message: string) => void) => Promise<void>;
   /** Shows the state a command returned. */
   show: (next: { overlay: OverlayView }) => Promise<void>;
 }
 
 let view: OverlayView | null = null;
 let context: Context;
+/** The saves asked for, one after the other: each starts from what the one before saved. */
+let saving: Promise<void> = Promise.resolve();
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -104,20 +106,29 @@ function setState(text: string, tone: "good" | "bad"): void {
   state.className = `note ${tone}`;
 }
 
-async function save(change: Partial<OverlaySettings>, done?: string): Promise<void> {
-  if (!view) return;
-  const settings = withChange(view, change);
-  await context.busy(
-    async () => {
-      setState("", "good");
-      await context.show(await invoke<{ overlay: OverlayView }>("set_overlay", { settings }));
-      if (done) toast(done);
-    },
-    (message) => {
-      setState(message, "bad");
-      if (view) render(view);
-    },
+/**
+ * Saves a change, made to the settings as last saved: switches and sliders stay usable while a
+ * save runs, so a change made meanwhile waits for it rather than overwriting it.
+ */
+function save(change: (current: OverlayView) => Partial<OverlaySettings>, done?: string): Promise<void> {
+  const saved = saving.then(() =>
+    context.busy(
+      async () => {
+        if (!view) return;
+        setState("", "good");
+        const settings = withChange(view, change(view));
+        await context.show(await invoke<{ overlay: OverlayView }>("set_overlay", { settings }));
+        if (done) toast(done);
+      },
+      (message) => {
+        setState(message, "bad");
+        if (view) render(view);
+      },
+    ),
   );
+  // A save that failed (its error is shown) doesn't stop the ones after it.
+  saving = saved.catch(() => {});
+  return saved;
 }
 
 /** The widget switches, by Settings group. */
@@ -137,9 +148,12 @@ function widgetGroups(container: HTMLElement, on: string[], stream: boolean): vo
       input.type = "checkbox";
       input.checked = on.includes(widget.key);
       input.addEventListener("change", () => {
-        const next = input.checked ? [...on, widget.key] : on.filter((k) => k !== widget.key);
-        const map = Object.fromEntries(view!.widgets.map((w) => [w.key, next.includes(w.key)]));
-        void save(stream ? { streamWidgets: map } : { widgets: map });
+        const checked = input.checked;
+        void save((current) => {
+          const map = Object.fromEntries(current.widgets.map((w) => [w.key, (stream ? current.streamWidgetsOn : current.widgetsOn).includes(w.key)]));
+          map[widget.key] = checked;
+          return stream ? { streamWidgets: map } : { widgets: map };
+        });
       });
       const text = document.createElement("span");
       text.textContent = widget.label;
@@ -150,6 +164,11 @@ function widgetGroups(container: HTMLElement, on: string[], stream: boolean): vo
     }
     container.append(box);
   }
+}
+
+/** Every hotkey as saved, with `action`'s set to `keys` (empty: none). */
+function hotkeysWith(current: OverlayView, action: string, keys: string): Record<string, string> {
+  return Object.fromEntries(current.hotkeys.map((h) => [h.action, h.action === action ? keys : (h.keys ?? "")]));
 }
 
 function hotkeyInputs(): void {
@@ -176,8 +195,7 @@ function hotkeyInputs(): void {
       const keys = e.key === "Backspace" || e.key === "Delete" ? "" : hotkeyFrom(e);
       if (keys === null) return;
       input.value = keys;
-      const hotkeys = Object.fromEntries(view!.hotkeys.map((h) => [h.action, h.action === hotkey.action ? keys : (h.keys ?? "")]));
-      void save({ hotkeys }, keys ? `${hotkey.label}: ${keys}` : `${hotkey.label}: none`);
+      void save((current) => ({ hotkeys: hotkeysWith(current, hotkey.action, keys) }), keys ? `${hotkey.label}: ${keys}` : `${hotkey.label}: none`);
     });
     const reset = document.createElement("button");
     reset.type = "button";
@@ -186,8 +204,7 @@ function hotkeyInputs(): void {
     // Kept in the grid when hidden, so the rows stay lined up.
     reset.style.visibility = hotkey.keys === hotkey.default ? "hidden" : "";
     reset.addEventListener("click", () => {
-      const hotkeys = Object.fromEntries(view!.hotkeys.map((h) => [h.action, h.action === hotkey.action ? h.default : (h.keys ?? "")]));
-      void save({ hotkeys });
+      void save((current) => ({ hotkeys: hotkeysWith(current, hotkey.action, hotkey.default) }));
     });
     container.append(label, input, reset);
   }
@@ -240,7 +257,7 @@ export function setupOverlaySettings(ctx: Context): void {
   context = ctx;
   el("overlay-on").addEventListener("change", () => {
     const on = el<HTMLInputElement>("overlay-on").checked;
-    void save({ on }, on ? "Overlay on" : "Overlay off");
+    void save(() => ({ on }), on ? "Overlay on" : "Overlay off");
   });
   el("overlay-edit").addEventListener("click", () => {
     void context.busy(async () => context.show(await invoke<{ overlay: OverlayView }>("set_overlay_editing", { on: !view?.editing })), (m) => setState(m, "bad"));
@@ -262,16 +279,23 @@ export function setupOverlaySettings(ctx: Context): void {
   ] as const) {
     const input = el<HTMLInputElement>(id);
     input.addEventListener("input", () => (el(`${id}-value`).textContent = `${input.value}%`));
-    input.addEventListener("change", () => void save({ [key]: Number(input.value) }));
+    input.addEventListener("change", () => {
+      const value = Number(input.value);
+      void save(() => ({ [key]: value }));
+    });
   }
-  el("overlay-with-game").addEventListener("change", () => void save({ onlyWithGame: el<HTMLInputElement>("overlay-with-game").checked }));
+  el("overlay-with-game").addEventListener("change", () => {
+    const onlyWithGame = el<HTMLInputElement>("overlay-with-game").checked;
+    void save(() => ({ onlyWithGame }));
+  });
   el("stream-on").addEventListener("change", () => {
     const stream = el<HTMLInputElement>("stream-on").checked;
-    void save({ stream }, stream ? "Stream page on" : "Stream page off");
+    void save(() => ({ stream }), stream ? "Stream page on" : "Stream page off");
   });
   el("stream-port-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    void save({ streamPort: Number(el<HTMLInputElement>("stream-port").value) }, "Saved");
+    const streamPort = Number(el<HTMLInputElement>("stream-port").value);
+    void save(() => ({ streamPort }), "Saved");
   });
   el("stream-copy").addEventListener("click", () => {
     if (!view?.streamUrl) return;

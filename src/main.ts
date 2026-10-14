@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { watchDebug } from "./debug-view";
-import { setupDesktop } from "./desktop";
+import { copyBuilt, setupDesktop } from "./desktop";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import type { Fix } from "./home-model";
@@ -980,8 +980,8 @@ function setButtonsDisabled(disabled: boolean): void {
   document.querySelectorAll<HTMLButtonElement>("main button, #update-banner button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
 }
 
-/** Runs a button's action with the buttons disabled, and shows its error (by default next to the token). */
-async function busy(action: () => Promise<void>, showError: (message: string) => void = (m) => setStatus(m, "bad")): Promise<void> {
+/** Runs a button's action with the buttons disabled, and shows its error next to its setting. */
+async function busy(action: () => Promise<void>, showError: (message: string) => void): Promise<void> {
   running += 1;
   setButtonsDisabled(true);
   try {
@@ -1000,6 +1000,8 @@ async function checkSaved(): Promise<void> {
   showCheck(await invoke<TokenCheck>("check_saved_token"));
 }
 
+const showTokenError = (m: string) => setStatus(m, "bad");
+
 el("token-form").addEventListener("submit", (e) => {
   e.preventDefault();
   void busy(async () => {
@@ -1017,7 +1019,7 @@ el("token-form").addEventListener("submit", (e) => {
       showHost(null);
       setStatus(`Saved, but not checked: ${check.message}`, "bad");
     }
-  });
+  }, showTokenError);
 });
 
 el("token-cancel").addEventListener("click", () => {
@@ -1025,7 +1027,7 @@ el("token-cancel").addEventListener("click", () => {
   el<HTMLInputElement>("token").value = "";
   render();
 });
-el("token-check").addEventListener("click", () => void busy(checkSaved));
+el("token-check").addEventListener("click", () => void busy(checkSaved, showTokenError));
 el("token-change").addEventListener("click", () => {
   editingToken = true;
   render();
@@ -1036,12 +1038,13 @@ el("token-forget").addEventListener("click", () => {
     await invoke("forget_token");
     setStatus("");
     await refresh();
-  });
+  }, showTokenError);
 });
 
 el("server-form").addEventListener("submit", (e) => {
   e.preventDefault();
   void busy(async () => {
+    setLine("server-state", "", "muted");
     const next = await invoke<AppState>("set_server_url", { url: el<HTMLInputElement>("server-url").value });
     // A code kept for the old server's tags is no use now.
     uncopied = null;
@@ -1051,7 +1054,7 @@ el("server-form").addEventListener("submit", (e) => {
     // Another server's history, from its newest page: drops any page of the old one on its way.
     await showHistoryPage(0);
     if (state.hasToken) await checkSaved();
-  });
+  }, (m) => setLine("server-state", m, "bad"));
 });
 
 /** Counts region changes: the answer to one a later change replaced is dropped. */
@@ -1181,32 +1184,43 @@ el("diagnostics-export").addEventListener("click", () => {
   );
 });
 
+/** Saves the log folder (`null`: the detected one); its error shows under it. */
+async function saveLogFolder(path: string | null): Promise<void> {
+  const next = await invoke<AppState>("set_log_folder", { path });
+  logFolderChanged();
+  await show(next);
+}
+
+function showLogFolderError(message: string): void {
+  setLine("log-folder-state", message, "bad");
+}
+
 el("log-folder-choose").addEventListener("click", () => {
+  setLine("log-folder-state", "", "muted");
   void busy(async () => {
     const path = await open({ directory: true, defaultPath: state.logFolder?.path, title: "Workshop log folder" });
-    if (typeof path !== "string") return;
-    const next = await invoke<AppState>("set_log_folder", { path });
-    logFolderChanged();
-    await show(next);
-  });
+    if (typeof path === "string") await saveLogFolder(path);
+  }, showLogFolderError);
 });
 el("log-folder-reset").addEventListener("click", () => {
-  void busy(async () => {
-    const next = await invoke<AppState>("set_log_folder", { path: null });
-    logFolderChanged();
-    await show(next);
-  });
+  setLine("log-folder-state", "", "muted");
+  void busy(() => saveLogFolder(null), showLogFolderError);
 });
 
+function showScreenshotFolderError(message: string): void {
+  setLine("screenshot-folder-state", message, "bad");
+}
+
 el("screenshot-folder-choose").addEventListener("click", () => {
+  setLine("screenshot-folder-state", "", "muted");
   void busy(async () => {
     const path = await open({ directory: true, defaultPath: state.screenshotFolder?.path, title: "Screenshots folder" });
-    if (typeof path !== "string") return;
-    await show(await invoke<AppState>("set_screenshot_folder", { path }));
-  });
+    if (typeof path === "string") await show(await invoke<AppState>("set_screenshot_folder", { path }));
+  }, showScreenshotFolderError);
 });
 el("screenshot-folder-reset").addEventListener("click", () => {
-  void busy(async () => show(await invoke<AppState>("set_screenshot_folder", { path: null })));
+  setLine("screenshot-folder-state", "", "muted");
+  void busy(async () => show(await invoke<AppState>("set_screenshot_folder", { path: null })), showScreenshotFolderError);
 });
 
 function setRankedCodeState(text: string, tone: "good" | "bad" | "muted"): void {
@@ -1270,14 +1284,7 @@ async function copyRankedCode(): Promise<void> {
       return;
     }
   }
-  try {
-    await navigator.clipboard.writeText(built.code);
-  } catch (err) {
-    // Usually "Document is not focused": the host switched windows while it was built.
-    uncopied = { built, at: builtAt };
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
-  }
+  await copyBuilt(built.code, () => (uncopied = { built, at: builtAt }));
   const region = built.region ? `${regionLabel(built.region)} ` : "";
   const tiers = built.names === 1 ? "1 more with their rank" : `${built.names} more with their rank`;
   const skipped = built.skippedNames ? ` (${built.skippedNames} left out: the Workshop can't show their names)` : "";
@@ -1414,10 +1421,20 @@ function homeFix(target: Fix): void {
       el("token").focus();
       break;
     case "checkToken":
-      void busy(checkSaved);
+      void busy(checkSaved, showTokenError);
       break;
     case "dryRunOff":
-      void busy(async () => show(await invoke<AppState>("set_dry_run", { on: false })));
+      void busy(
+        async () => {
+          setLine("debug-state", "", "muted");
+          await show(await invoke<AppState>("set_dry_run", { on: false }));
+        },
+        // Under the switch in Settings, and in a toast: Home has no line for it.
+        (m) => {
+          setLine("debug-state", m, "bad");
+          toast("Couldn't turn the dry run off", m);
+        },
+      );
       break;
   }
 }
@@ -1445,6 +1462,13 @@ onViewChange((view) => {
 setupViews();
 
 void setupTitlebar();
+
+/** The window couldn't start (its settings or events): said above every view. */
+function showStartError(message: string): void {
+  const banner = el("settings-error");
+  banner.hidden = false;
+  banner.textContent = `The window couldn't start: ${message}`;
+}
 
 void busy(async () => {
   await listen<UploadStatus>("upload-status", (event) => {
@@ -1485,7 +1509,7 @@ void busy(async () => {
   watchLiveMatch(currentView() === "match");
   setupHome(homeState, homeFix);
   renderUpdate(await invoke<UpdateStatus>("get_update_status"));
-  if (state.hasToken) await checkSaved();
+  if (state.hasToken) await busy(checkSaved, showTokenError);
   // First start: Home shows the setup.
   else showView("home");
-});
+}, showStartError);

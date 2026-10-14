@@ -1,5 +1,5 @@
 import "./overlay.css";
-import { httpSource, inTauri, tauriSource, type Feed, type Source } from "./feed";
+import { httpSource, inTauri, oneAtATime, tauriSource, type Feed, type Source } from "./feed";
 import { overlayModel, readLiveLog, type OverlayModel, type ReadLog } from "./model";
 import { sample } from "./sample";
 import { docks, draw, h, widgetLabels } from "./widgets";
@@ -49,7 +49,8 @@ const layoutNow = (): Layout => pending?.layout ?? feed?.layout ?? {};
 const sizesNow = (): Sizes => pending?.sizes ?? feed?.sizes ?? {};
 const canEdit = () => Boolean(feed?.editing && source.saveLayout);
 
-async function poll(): Promise<void> {
+/** Reads the feed: the timer, change events, saves and menu actions all go through here, never two at once. */
+const poll = oneAtATime(async () => {
   window.clearTimeout(timer);
   try {
     const next = await source.read({ known, names: model?.names ?? [], matchKey: model?.matchKey ?? null });
@@ -71,7 +72,7 @@ async function poll(): Promise<void> {
     root.classList.add("offline");
   }
   timer = window.setTimeout(() => void poll(), feed?.pollMs ?? 1000);
-}
+});
 
 function render(): void {
   if (!feed || !model) return;
@@ -176,10 +177,14 @@ async function save(layout: Layout, sizes: Sizes): Promise<void> {
   try {
     await source.saveLayout?.(layout, sizes);
   } finally {
-    // A newer change while this one was saved stays pending until its own save.
+    // A newer change while this one was saved stays pending until its own save. Kept until a read
+    // from after the save, so one from before it doesn't put the widget back for a moment.
     if (pending === saved) {
-      pending = null;
       await poll();
+      if (pending === saved) {
+        pending = null;
+        render();
+      }
     }
   }
 }

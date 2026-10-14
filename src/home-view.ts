@@ -127,30 +127,45 @@ export function flash(target: HTMLElement, elapsed = 0): void {
   target.classList.add("fresh");
 }
 
-/** Reads the live log's name every `pollSecs`: Home shows it, and the title bar pulses while it grows. */
+/**
+ * Reads the live log's name every `pollSecs` while the window shows, whatever the view: Home shows
+ * it, and the title bar (on every view) pulses while it grows.
+ */
 let timer: ReturnType<typeof setTimeout> | undefined;
+/** Counts restarts: a read from before the last one is dropped and reads no more, so one loop runs. */
+let run = 0;
 
-async function pollLiveFile(): Promise<void> {
-  clearTimeout(timer);
+async function pollLiveFile(current: number): Promise<void> {
   if (!get) return;
   const state = get();
   if (state.hasToken && state.logFolder?.exists && document.visibilityState === "visible") {
+    let found: LiveFile | null = null;
+    let error: string | null = null;
     try {
-      liveFile = await invoke<LiveFile | null>("get_live_file");
-      liveFileError = null;
+      found = await invoke<LiveFile | null>("get_live_file");
     } catch (err) {
-      liveFileError = err instanceof Error ? err.message : String(err);
+      error = err instanceof Error ? err.message : String(err);
     }
+    if (current !== run) return;
+    liveFile = found;
+    liveFileError = error;
     renderHome();
   }
-  timer = setTimeout(() => void pollLiveFile(), state.pollSecs * 1000);
+  timer = setTimeout(() => void pollLiveFile(current), state.pollSecs * 1000);
+}
+
+/** Reads the live log's name at once, then every `pollSecs`, in place of the loop running so far. */
+function readLiveFile(): void {
+  clearTimeout(timer);
+  run += 1;
+  void pollLiveFile(run);
 }
 
 /** The log folder changed: the live log is read afresh. */
 export function homeFolderChanged(): void {
   liveFile = null;
   liveFileError = null;
-  void pollLiveFile();
+  readLiveFile();
 }
 
 /** Binds Home. Call once, once `state()` can answer. */
@@ -159,8 +174,8 @@ export function setupHome(state: () => HomeState, onFix: (fix: Fix) => void): vo
   fix = onFix;
   // Fresh as soon as Home shows.
   onViewChange((view) => {
-    if (view === "home") void pollLiveFile();
+    if (view === "home") readLiveFile();
   });
   renderHome();
-  void pollLiveFile();
+  readLiveFile();
 }

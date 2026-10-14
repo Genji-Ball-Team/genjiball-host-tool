@@ -45,6 +45,20 @@ function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit"].includes(target.type));
 }
 
+/**
+ * Copies a code just built. Copying fails when the window lost the focus while it was built
+ * ("Document is not focused"): `keep` keeps the code for the next click, and the error says to click again.
+ */
+export async function copyBuilt(code: string, keep: () => void = () => {}): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(code);
+  } catch (err) {
+    keep();
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
+  }
+}
+
 /** Binds the window's keys, menu, wheel and drags. Call once. */
 export function setupDesktop(actions: { showView(view: View): void; copyRankedCode(): void }): void {
   document.addEventListener("keydown", (event) => {

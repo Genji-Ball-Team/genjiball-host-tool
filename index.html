@@ -187,6 +187,7 @@
                 <button type="button" id="screenshot-folder-choose">Choose folder…</button>
                 <button type="button" class="quiet" id="screenshot-folder-reset" hidden>Use the detected folder</button>
               </div>
+              <p id="screenshot-folder-state" role="status" hidden></p>
               <p class="note">Where the tool looks for your newest screenshot of the final standings. Overwatch saves screenshots to Documents\Overwatch\ScreenShots\Overwatch.</p>
             </details>
           </div>
@@ -248,6 +249,7 @@
                     <input id="server-url" type="text" inputmode="url" spellcheck="false" placeholder="https://…" />
                     <button type="submit">Save</button>
                   </div>
+                  <p id="server-state" role="status" hidden></p>
                   <p class="note">Leave empty for <span id="default-server"></span>. Each server keeps its own token.</p>
                 </form>
               </div>
@@ -283,6 +285,7 @@
                   <button type="button" id="log-folder-choose">Choose folder…</button>
                   <button type="button" class="quiet" id="log-folder-reset" hidden>Use the detected folder</button>
                 </div>
+                <p id="log-folder-state" role="status" hidden></p>
               </div>
             </div>
 

@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
 use crate::lobby::{self, Heartbeat, Live, LogFile, Schedule, Step, Watch};
@@ -95,15 +95,7 @@ pub fn start(app: AppHandle) {
             let status = run.tick(&app).await;
             let lobby = app.state::<LiveLobby>();
             *lobby.listed_on.lock().unwrap() = run.listed_on();
-            let changed = {
-                let mut current = lobby.status.lock().unwrap();
-                let changed = *current != status;
-                *current = status.clone();
-                changed
-            };
-            if changed {
-                let _ = app.emit(STATUS_EVENT, status);
-            }
+            crate::publish(&app, STATUS_EVENT, &lobby.status, status);
             let interval = app.state::<Store>().get().secs(&config::POLL_INTERVAL_SECS);
             let _ = tokio::time::timeout(interval, lobby.wake.notified()).await;
         }
@@ -257,8 +249,7 @@ impl Run {
                 return Err(Some(LobbyProblem::TokenRejected { revoked: *revoked }));
             }
         }
-        let folder = log_folder::current(settings.log_folder.as_deref())
-            .filter(|f| f.exists)
+        let folder = log_folder::existing(settings.log_folder.as_deref())
             .ok_or(Some(LobbyProblem::NoFolder))?;
         let newest = watcher::newest_log(&folder.path).map_err(|e| {
             Some(LobbyProblem::FolderUnreadable {

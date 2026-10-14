@@ -202,6 +202,22 @@ pub enum RuleError {
     Unended,
 }
 
+impl RuleError {
+    /// What went wrong with the base release's `rule` (`RANKS`), `missing` saying it when it isn't
+    /// there.
+    pub fn message(self, rule: &str, missing: &str) -> String {
+        match self {
+            RuleError::Missing => missing.to_string(),
+            RuleError::Twice => format!(
+                "The base release has the {rule} - generated rule twice, so the host tool can't tell which to fill"
+            ),
+            RuleError::Unended => {
+                format!("The {rule} - generated rule in the base release never ends")
+            }
+        }
+    }
+}
+
 /// `code` with the rule whose first line is exactly `start` (it must be there once) replaced, up
 /// to the first line after it that is exactly `}`, by one in the same shape holding `action`.
 /// Everything else, line endings included, stays as it was.
@@ -245,14 +261,11 @@ pub fn replace_rule(code: &str, start: &str, action: &str) -> Result<String, Rul
 /// line endings included, stays as it was.
 pub fn fill(code: &str, tags: &RankTags) -> Result<Filled, String> {
     let (action, names, skipped) = rank_tags_action(tags)?;
-    let filled = replace_rule(code, RULE_START, &action).map_err(|e| match e {
-        RuleError::Missing => {
-            "The release's code has no RANKS - generated rule. Is it a ranked (R) build?"
-        }
-        RuleError::Twice => {
-            "The release's code has the RANKS - generated rule twice, so the host tool can't tell which to fill"
-        }
-        RuleError::Unended => "The RANKS - generated rule in the release's code never ends",
+    let filled = replace_rule(code, RULE_START, &action).map_err(|e| {
+        e.message(
+            "RANKS",
+            "The release's code has no RANKS - generated rule. Is it a ranked (R) build?",
+        )
     })?;
     Ok(Filled {
         code: filled,

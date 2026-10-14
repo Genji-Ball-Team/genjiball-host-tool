@@ -112,10 +112,9 @@ impl Record {
     }
 
     /// Notes that uploads to `server_url` start at `now`, unless they already started.
-    /// `true` when that's new.
-    pub fn start(&mut self, server_url: &str, now: SystemTime) -> bool {
+    pub fn start(&mut self, server_url: &str, now: SystemTime) {
         if self.started.contains_key(server_url) {
-            return false;
+            return;
         }
         let secs = now
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -123,7 +122,6 @@ impl Record {
             .as_secs();
         self.started.insert(server_url.to_string(), secs);
         self.dirty = true;
-        true
     }
 
     pub fn get(&self, server_url: &str, file: &str) -> Option<&Sent> {
@@ -168,8 +166,9 @@ impl Record {
         keys
     }
 
-    /// Puts the server's status now on every upload of those matches. `true` when one changed.
-    pub fn update_states(&mut self, server_url: &str, states: &[MatchState]) -> bool {
+    /// Puts the server's status now on every upload of those matches. The revision goes up when
+    /// one changed.
+    pub fn update_states(&mut self, server_url: &str, states: &[MatchState]) {
         let mut changed = false;
         let uploads = self
             .servers
@@ -207,7 +206,6 @@ impl Record {
             self.revision += 1;
             self.dirty = true;
         }
-        changed
     }
 
     /// Every match uploaded to `server_url`, once each, newest upload first: for the overlay's
@@ -559,8 +557,16 @@ mod tests {
             rejection: None,
             review_reasons: vec!["untrusted_host".into()],
         };
-        assert!(record.update_states(server, std::slice::from_ref(&accepted)));
-        assert!(!record.update_states(server, std::slice::from_ref(&accepted)));
+        assert!(changes(
+            &mut record,
+            server,
+            std::slice::from_ref(&accepted)
+        ));
+        assert!(!changes(
+            &mut record,
+            server,
+            std::slice::from_ref(&accepted)
+        ));
         let matches = |record: &Record| -> Vec<UploadedMatch> {
             record
                 .uploads(server)
@@ -589,10 +595,17 @@ mod tests {
             match_id: Some(40),
             ..accepted.clone()
         };
-        assert!(record.update_states(server, std::slice::from_ref(&with_id)));
-        assert!(!record.update_states(server, &[accepted]));
+        assert!(changes(&mut record, server, std::slice::from_ref(&with_id)));
+        assert!(!changes(&mut record, server, &[accepted]));
         let ids: Vec<_> = matches(&record).into_iter().map(|m| m.match_id).collect();
         assert_eq!(ids, [Some(40), None, Some(40)]);
+    }
+
+    /// Whether `update_states` changed anything.
+    fn changes(record: &mut Record, server: &str, states: &[MatchState]) -> bool {
+        let before = record.revision();
+        record.update_states(server, states);
+        record.revision() != before
     }
 
     #[test]
@@ -600,8 +613,8 @@ mod tests {
         let mut record = Record::default();
         let first = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
         assert_eq!(record.started("https://genjiball.us"), None);
-        assert!(record.start("https://genjiball.us", first));
-        assert!(!record.start("https://genjiball.us", first + Duration::from_secs(60)));
+        record.start("https://genjiball.us", first);
+        record.start("https://genjiball.us", first + Duration::from_secs(60));
         assert_eq!(record.started("https://genjiball.us"), Some(first));
         assert_eq!(record.started("https://test.genjiball.us"), None);
     }

@@ -169,7 +169,7 @@ pub fn feed(app: &AppHandle, request: &FeedRequest, stream: bool) -> Feed {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
     let widgets = settings.overlay.widgets_on(stream);
-    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    let folder = log_folder::existing(settings.log_folder.as_deref());
 
     let (log, log_written_at, log_error) = match &folder {
         None => (
@@ -177,12 +177,16 @@ pub fn feed(app: &AppHandle, request: &FeedRequest, stream: bool) -> Feed {
             None,
             Some("The Workshop log folder isn't there yet".to_string()),
         ),
-        Some(folder) => match match_log::read_live(&folder.path, request.known.as_ref()) {
-            Ok(log) => {
-                let written = match_log::live_file(&folder.path)
-                    .ok()
-                    .flatten()
-                    .map(|f| f.written_at);
+        // One look at the folder, so the time is the read file's even if a new one just started.
+        Some(folder) => match match_log::live_file(&folder.path).and_then(|live| {
+            live.map(|live| {
+                let log = match_log::read(&folder.path, &live.file, request.known.as_ref())?;
+                Ok((log, live.written_at))
+            })
+            .transpose()
+        }) {
+            Ok(live) => {
+                let (log, written) = live.unzip();
                 (log, written, None)
             }
             // Locked for a moment while the game writes it: the next poll reads it.

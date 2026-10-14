@@ -405,26 +405,40 @@ pub fn normalize_lobby_name(input: &str) -> Result<Option<String>, String> {
     Ok((!name.is_empty()).then(|| name.to_string()))
 }
 
+/// One of `choices` the host picked (a `what`), as it's stored: `None` for `default` (or nothing
+/// picked).
+fn normalize_choice(
+    picked: Option<&str>,
+    default: &str,
+    choices: &[&str],
+    what: &str,
+) -> Result<Option<String>, String> {
+    match picked {
+        None => Ok(None),
+        Some(picked) if picked == default => Ok(None),
+        Some(picked) if choices.contains(&picked) => Ok(Some(picked.to_string())),
+        Some(picked) => Err(format!("There's no {what} {picked}")),
+    }
+}
+
 /// A log level the host picked, as it's stored: `None` for the default (or nothing picked).
 pub fn normalize_log_level(level: Option<&str>) -> Result<Option<String>, String> {
-    match level {
-        None => Ok(None),
-        Some(level) if level == config::DEFAULT_LOG_LEVEL => Ok(None),
-        Some(level) if config::LOG_LEVELS.contains(&level) => Ok(Some(level.to_string())),
-        Some(level) => Err(format!("There's no log level {level}")),
-    }
+    normalize_choice(
+        level,
+        config::DEFAULT_LOG_LEVEL,
+        &config::LOG_LEVELS,
+        "log level",
+    )
 }
 
 /// An update channel the host picked, as it's stored: `None` for the default (or nothing picked).
 pub fn normalize_update_channel(channel: Option<&str>) -> Result<Option<String>, String> {
-    match channel {
-        None => Ok(None),
-        Some(channel) if channel == config::DEFAULT_UPDATE_CHANNEL => Ok(None),
-        Some(channel) if config::UPDATE_CHANNELS.contains(&channel) => {
-            Ok(Some(channel.to_string()))
-        }
-        Some(channel) => Err(format!("There's no update channel {channel}")),
-    }
+    normalize_choice(
+        channel,
+        config::DEFAULT_UPDATE_CHANNEL,
+        &config::UPDATE_CHANNELS,
+        "update channel",
+    )
 }
 
 /// A data center the host picked for `region`, as it's stored: `None` for the region's default.
@@ -489,6 +503,9 @@ pub fn load(path: &Path) -> Result<Settings, String> {
             normalize_lobby_name(name).map_err(|e| format!("{e} (in {})", path.display()))?;
     }
     // Edited by hand, like the region: stored as the window would have.
+    settings.set_live_lobby(settings.live_lobby_on());
+    settings.set_dry_run(settings.dry_run_on());
+    settings.set_auto_update_check(settings.auto_update_check_on());
     settings.log_level = normalize_log_level(settings.log_level.as_deref())
         .map_err(|e| format!("{e} in {}", path.display()))?;
     settings.update_channel = normalize_update_channel(settings.update_channel.as_deref())
@@ -839,6 +856,21 @@ mod tests {
         let settings = load(&path).unwrap();
         assert_eq!(settings.lobby_name.as_deref(), Some("EU night"));
         assert!(!settings.live_lobby_on());
+        // A switch at its default is read as `null`, as the window stores it.
+        fs::write(
+            &path,
+            r#"{ "liveLobby": true, "dryRun": false, "autoUpdateCheck": true }"#,
+        )
+        .unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(
+            (
+                settings.live_lobby,
+                settings.dry_run,
+                settings.auto_update_check
+            ),
+            (None, None, None)
+        );
         let long = "x".repeat(config::LOBBY_NAME_MAX_CHARS + 1);
         fs::write(&path, format!(r#"{{ "lobbyName": "{long}" }}"#)).unwrap();
         assert!(load(&path).unwrap_err().contains("lobby name"));

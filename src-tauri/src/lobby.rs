@@ -38,9 +38,8 @@ pub fn read(text: &str) -> Live {
         unranked: bool,
         players: BTreeSet<&'a str>,
     }
-    let complete = &text[..text.rfind('\n').map_or(0, |i| i + 1)];
     let mut current: Option<Match> = None;
-    for line in complete.lines().map(log_scan::event) {
+    for line in log_scan::complete_text(text).lines().map(log_scan::event) {
         let mut fields = line.split('|');
         let kind = fields.next().unwrap_or_default();
         // `TYPE|time|...`: the fields after the time.

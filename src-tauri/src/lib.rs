@@ -133,6 +133,21 @@ impl Store {
     }
 }
 
+/// Puts a loop's new `status` in `current`, and sends it to the window as `event` if it changed.
+/// The status it replaced.
+pub(crate) fn publish<T: Clone + PartialEq + Serialize>(
+    app: &tauri::AppHandle,
+    event: &str,
+    current: &Mutex<T>,
+    status: T,
+) -> T {
+    let before = std::mem::replace(&mut *current.lock().unwrap(), status.clone());
+    if before != status {
+        let _ = app.emit(event, status);
+    }
+    before
+}
+
 /// What the window shows. Never the token itself.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -430,7 +445,7 @@ fn get_upload_status(uploader: State<Uploader>) -> UploadStatus {
 #[tauri::command]
 fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader>) -> Page {
     let settings = store.get();
-    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    let folder = log_folder::existing(settings.log_folder.as_deref());
     uploader.history(
         settings.server_url(),
         folder.as_ref().map(|f| f.path.as_path()),
@@ -443,7 +458,7 @@ fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader
 #[tauri::command]
 fn set_afk(on: bool, store: State<Store>, uploader: State<Uploader>) -> Result<AfkStatus, String> {
     let settings = store.get();
-    let started = match log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists) {
+    let started = match log_folder::existing(settings.log_folder.as_deref()) {
         Some(folder) => live_round_starts(&folder.path)?,
         None => Vec::new(),
     };
@@ -473,8 +488,7 @@ fn live_round_starts(folder: &Path) -> Result<Vec<log_scan::RoundStart>, String>
 
 /// The log folder in use, if it's there.
 fn current_log_folder(store: &Store) -> Result<PathBuf, String> {
-    log_folder::current(store.get().log_folder.as_deref())
-        .filter(|f| f.exists)
+    log_folder::existing(store.get().log_folder.as_deref())
         .map(|f| f.path)
         .ok_or_else(|| "The Workshop log folder isn't there yet".to_string())
 }
@@ -700,7 +714,7 @@ struct DebugInfo {
 #[tauri::command]
 fn get_debug(store: State<Store>, uploader: State<Uploader>) -> DebugInfo {
     let settings = store.get();
-    let folder = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    let folder = log_folder::existing(settings.log_folder.as_deref());
     let folder = folder.as_ref().map(|f| f.path.as_path());
     let (events, events_error) =
         match folder.map(|f| debug::live_events(f, config::DEBUG_EVENTS_SHOWN)) {
@@ -799,7 +813,7 @@ async fn export_diagnostics(
     let settings = store.get();
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let log_dir = app.path().app_log_dir().ok();
-    let workshop = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists);
+    let workshop = log_folder::existing(settings.log_folder.as_deref());
     // Blanked out wherever they turn up. Tokens never go in these files; this makes sure.
     let mut secrets = Vec::new();
     for server_url in [settings.server_url(), config::DEFAULT_SERVER_URL] {
@@ -936,35 +950,71 @@ async fn ranked_code(store: &Store, releases: &ReleaseCache) -> Result<RankedCod
         Some(region) => Some(region.clone()),
         None => home_region(store, &server_url, timeout).await?,
     };
-    let (release, base) = releases
-        .get(settings.release_tag.as_deref(), keep, timeout)
-        .await?;
-    let tiers = server::rank_tags(&server_url, region.as_deref(), timeout).await?;
-    let leaderboard = server::leaderboard(&server_url, region.as_deref(), timeout).await?;
-    let now = chrono::Local::now();
-    let built = ranked_code::top_tags(&tiers, &leaderboard, &now.format("%Y-%m-%d").to_string());
-    let filled = ranked_code::fill(&base, &built.tags)?;
+    let built = build_code(&settings, releases, region.as_deref()).await?;
     // The region whose tags are in it, else the one asked for: the lobby goes on its data center.
-    let data_center = leaderboard
+    let data_center = built
         .region
         .as_deref()
         .or(region.as_deref())
         .and_then(|r| settings.data_center(r))
         .map(str::to_string);
-    let code = ranked_code::set_data_center(&filled.code, data_center.as_deref())?;
+    let code = ranked_code::set_data_center(&built.code, data_center.as_deref())?;
     Ok(RankedCode {
         code,
         server_url,
         chosen_region: settings.region,
         requested_region: region,
-        region: leaderboard.region,
+        region: built.region,
+        release: built.release,
+        tags_updated_at: built.at.to_rfc3339(),
+        top: built.top,
+        names: built.names,
+        skipped_names: built.skipped_names,
+        keep_secs: keep.as_secs(),
+        data_center,
+    })
+}
+
+/// The base release's code with a region's rank tags in it, before it's put on a data center.
+struct BuiltCode {
+    code: String,
+    /// The release's tag.
+    release: String,
+    /// The region whose tags they are, as the leaderboard said.
+    region: Option<String>,
+    /// When the tags were read.
+    at: chrono::DateTime<chrono::Local>,
+    top: usize,
+    names: usize,
+    skipped_names: usize,
+}
+
+/// The ranked code's base release (the pinned one, else the latest) with `region`'s rank tiers and
+/// top players in its `RANKS - generated` rule (the server's first region for `None`).
+async fn build_code(
+    settings: &Settings,
+    releases: &ReleaseCache,
+    region: Option<&str>,
+) -> Result<BuiltCode, String> {
+    let server_url = settings.server_url();
+    let keep = settings.secs(&config::RELEASE_CACHE_SECS);
+    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let (release, base) = releases
+        .get(settings.release_tag.as_deref(), keep, timeout)
+        .await?;
+    let tiers = server::rank_tags(server_url, region, timeout).await?;
+    let leaderboard = server::leaderboard(server_url, region, timeout).await?;
+    let at = chrono::Local::now();
+    let built = ranked_code::top_tags(&tiers, &leaderboard, &at.format("%Y-%m-%d").to_string());
+    let filled = ranked_code::fill(&base, &built.tags)?;
+    Ok(BuiltCode {
+        code: filled.code,
         release,
-        tags_updated_at: now.to_rfc3339(),
+        region: leaderboard.region,
+        at,
         top: built.top,
         names: filled.names - built.top,
         skipped_names: built.skipped + filled.skipped,
-        keep_secs: keep.as_secs(),
-        data_center,
     })
 }
 
@@ -1067,7 +1117,6 @@ async fn tourney_code(
 ) -> Result<TourneyCode, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
-    let keep = settings.secs(&config::RELEASE_CACHE_SECS);
     let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
     let token = store
         .tokens
@@ -1107,16 +1156,8 @@ async fn tourney_code(
             ),
         });
     };
-    let (release, base) = releases
-        .get(settings.release_tag.as_deref(), keep, timeout)
-        .await?;
-    let region = Some(lobby.region.as_str());
-    let tiers = server::rank_tags(&server_url, region, timeout).await?;
-    let leaderboard = server::leaderboard(&server_url, region, timeout).await?;
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let built = ranked_code::top_tags(&tiers, &leaderboard, &date);
-    let filled = ranked_code::fill(&base, &built.tags)?;
-    let (code, values) = tourney::fill(&filled.code, values)?;
+    let built = build_code(&settings, releases, Some(&lobby.region)).await?;
+    let (code, values) = tourney::fill(&built.code, values)?;
     let data_center = settings.data_center(&lobby.region).map(str::to_string);
     let code = ranked_code::set_data_center(&code, data_center.as_deref())?;
     Ok(TourneyCode {
@@ -1125,10 +1166,10 @@ async fn tourney_code(
         lobby_id,
         values,
         region: lobby.region.clone(),
-        release,
+        release: built.release,
         top: built.top,
-        names: filled.names - built.top,
-        skipped_names: built.skipped + filled.skipped,
+        names: built.names,
+        skipped_names: built.skipped_names,
         data_center,
     })
 }

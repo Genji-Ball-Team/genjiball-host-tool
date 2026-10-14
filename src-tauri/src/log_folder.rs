@@ -72,6 +72,11 @@ pub fn current(custom: Option<&Path>) -> Option<LogFolder> {
     resolve(custom, dirs::document_dir().as_deref())
 }
 
+/// `current`, only if it's there.
+pub fn existing(custom: Option<&Path>) -> Option<LogFolder> {
+    current(custom).filter(|f| f.exists)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

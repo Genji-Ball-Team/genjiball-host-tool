@@ -111,7 +111,7 @@ function setState(text: string, tone: "good" | "bad"): void {
  * save runs, so a change made meanwhile waits for it rather than overwriting it.
  */
 function save(change: (current: OverlayView) => Partial<OverlaySettings>, done?: string): Promise<void> {
-  saving = saving.then(() =>
+  const saved = saving.then(() =>
     context.busy(
       async () => {
         if (!view) return;
@@ -126,7 +126,9 @@ function save(change: (current: OverlayView) => Partial<OverlaySettings>, done?:
       },
     ),
   );
-  return saving;
+  // A save that failed (its error is shown) doesn't stop the ones after it.
+  saving = saved.catch(() => {});
+  return saved;
 }
 
 /** The widget switches, by Settings group. */

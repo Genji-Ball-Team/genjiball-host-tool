@@ -6,7 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ago, headline, matchInProgress, problems, type Fix, type HomeInput } from "./home-model";
 import { setTitlebarState } from "./titlebar";
-import { currentView, markView, onViewChange } from "./views";
+import { markView, onViewChange } from "./views";
 
 /** Mirrors `LiveFile` in src-tauri/src/match_log.rs: what `get_live_file` returns. */
 interface LiveFile {
@@ -127,9 +127,12 @@ export function flash(target: HTMLElement, elapsed = 0): void {
   target.classList.add("fresh");
 }
 
-/** Reads the live log's name every `pollSecs` while Home shows: Home shows it, and the title bar pulses while it grows. */
+/**
+ * Reads the live log's name every `pollSecs` while the window shows, whatever the view: Home shows
+ * it, and the title bar (on every view) pulses while it grows.
+ */
 let timer: ReturnType<typeof setTimeout> | undefined;
-/** Counts starts and stops: a read from before the last one is dropped and reads no more. */
+/** Counts restarts: a read from before the last one is dropped and reads no more, so one loop runs. */
 let run = 0;
 
 async function pollLiveFile(current: number): Promise<void> {
@@ -151,26 +154,28 @@ async function pollLiveFile(current: number): Promise<void> {
   timer = setTimeout(() => void pollLiveFile(current), state.pollSecs * 1000);
 }
 
-/** Starts reading the live log's name (afresh, at once), or stops. */
-function watchLiveFile(on: boolean): void {
+/** Reads the live log's name at once, then every `pollSecs`, in place of the loop running so far. */
+function readLiveFile(): void {
   clearTimeout(timer);
   run += 1;
-  if (on) void pollLiveFile(run);
+  void pollLiveFile(run);
 }
 
 /** The log folder changed: the live log is read afresh. */
 export function homeFolderChanged(): void {
   liveFile = null;
   liveFileError = null;
-  watchLiveFile(currentView() === "home");
+  readLiveFile();
 }
 
 /** Binds Home. Call once, once `state()` can answer. */
 export function setupHome(state: () => HomeState, onFix: (fix: Fix) => void): void {
   get = state;
   fix = onFix;
-  // Fresh as soon as Home shows; nothing read while another view does.
-  onViewChange((view) => watchLiveFile(view === "home"));
+  // Fresh as soon as Home shows.
+  onViewChange((view) => {
+    if (view === "home") readLiveFile();
+  });
   renderHome();
-  watchLiveFile(currentView() === "home");
+  readLiveFile();
 }

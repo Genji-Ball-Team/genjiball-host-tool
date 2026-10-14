@@ -90,6 +90,22 @@ describe("oneAtATime", () => {
     void poll();
     expect(read).toHaveBeenCalledTimes(3);
   });
+
+  it("goes on reading after a read that failed", async () => {
+    const ends: { resolve: () => void; reject: (err: Error) => void }[] = [];
+    const read = vi.fn(() => new Promise<void>((resolve, reject) => ends.push({ resolve, reject })));
+    const poll = oneAtATime(read);
+    const failing = poll();
+    const after = poll();
+    ends.shift()?.reject(new Error("the tool quit"));
+    await expect(failing).rejects.toThrow("the tool quit");
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    ends.shift()?.resolve();
+    await after;
+    // Not stuck on the failed read: a new call reads again.
+    void poll();
+    expect(read).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("saving the overlay settings", () => {
@@ -141,5 +157,43 @@ describe("saving the overlay settings", () => {
     answers.shift()?.({ overlay: view([]) });
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     expect(sent(1)).toEqual({ afk: false, killFeed: true });
+    answers.shift()?.({ overlay: view(["killFeed"]) });
+  });
+
+  it("goes on saving after a save that failed", async () => {
+    document.body.innerHTML = /<body>([\s\S]*)<\/body>/.exec(readFileSync("index.html", "utf8"))?.[1] ?? "";
+    invoke.mockReset();
+    const answers: { resolve: (next: { overlay: OverlayView }) => void; reject: (err: string) => void }[] = [];
+    invoke.mockImplementation(() => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+    const errors: string[] = [];
+    setupOverlaySettings({
+      // Shows the error, and passes it on: the next save must run all the same.
+      busy: async (action, showError) => {
+        try {
+          await action();
+        } catch (err) {
+          errors.push(String(err));
+          showError(String(err));
+          throw err;
+        }
+      },
+      show: async (next) => renderOverlaySettings(next.overlay),
+    });
+    renderOverlaySettings(view(["afk"]));
+    const box = (n: number) => document.querySelectorAll<HTMLInputElement>("#overlay-widgets input")[n]!;
+
+    box(0).checked = false;
+    box(0).dispatchEvent(new Event("change"));
+    box(1).checked = true;
+    box(1).dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    answers.shift()?.reject("The settings file can't be written");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(errors).toEqual(["The settings file can't be written"]);
+    // Made to the settings as last saved: the failed change isn't in it.
+    const sent = (invoke.mock.calls[1]?.[1] as { settings: OverlaySettings }).settings.widgets;
+    expect(sent).toEqual({ afk: true, killFeed: true });
+    answers.shift()?.resolve({ overlay: view(["afk", "killFeed"]) });
+    await vi.waitFor(() => expect(document.getElementById("overlay-state")?.hidden).toBe(true));
   });
 });

@@ -111,7 +111,7 @@ export interface Source {
 /**
  * `read`, one at a time: called while a read runs, it reads once more right after that one (which
  * may have begun before a change), however many calls came meanwhile. Each call's promise ends
- * with a read that began after it.
+ * with a read that began after it. A read that fails fails its own calls only.
  */
 export function oneAtATime(read: () => Promise<void>): () => Promise<void> {
   let running: Promise<void> | null = null;
@@ -123,10 +123,12 @@ export function oneAtATime(read: () => Promise<void>): () => Promise<void> {
       });
       return running;
     }
-    next ??= running.then(() => {
+    // After the running read, whether it worked or failed: a failed one never stops the reads.
+    const follow = () => {
       next = null;
       return start();
-    });
+    };
+    next ??= running.then(follow, follow);
     return next;
   };
   return start;

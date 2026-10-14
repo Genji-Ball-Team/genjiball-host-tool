@@ -31,29 +31,35 @@ describe("Home's live log", () => {
     vi.useRealTimers();
   });
 
-  it("is read only while Home shows, and an answer after it's hidden is dropped", async () => {
+  it("is read on every view for the title bar's pulse, and at once when Home shows", async () => {
     vi.useFakeTimers();
     document.body.innerHTML = /<body>([\s\S]*)<\/body>/.exec(readFileSync("index.html", "utf8"))?.[1] ?? "";
-    localStorage.setItem("view", "home");
-    let answer: (file: { file: string; writtenAt: string }) => void = () => {};
-    invoke.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    localStorage.setItem("view", "uploads");
+    const answers: ((file: { file: string; writtenAt: string }) => void)[] = [];
+    invoke.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    const pulsing = () => document.getElementById("titlebar-state")?.classList.contains("playing");
     setupViews();
     setupHome(state, () => {});
     expect(invoke).toHaveBeenCalledTimes(1);
 
-    // Another view while the read runs: its answer isn't shown, and nothing is read after it.
-    showView("uploads");
-    answer({ file: "Log-late.txt", writtenAt: new Date().toISOString() });
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(document.getElementById("home-log")?.textContent).not.toContain("Log-late.txt");
-
-    // Back on Home: read at once, then every `pollSecs`.
-    showView("home");
-    expect(invoke).toHaveBeenCalledTimes(2);
-    answer({ file: "Log-now.txt", writtenAt: new Date().toISOString() });
+    // On Uploads, with the live lobby off: a growing live log still makes the title bar pulse.
+    answers.shift()?.({ file: "Log-a.txt", writtenAt: new Date().toISOString() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pulsing()).toBe(true);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(document.getElementById("home-log")?.textContent).toContain("Log-now.txt");
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    // Home shows while that read runs: read again at once, and the older answer is dropped.
+    showView("home");
     expect(invoke).toHaveBeenCalledTimes(3);
+    const [late, now] = answers.splice(0);
+    now?.({ file: "Log-now.txt", writtenAt: new Date().toISOString() });
+    late?.({ file: "Log-late.txt", writtenAt: new Date().toISOString() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById("home-log")?.textContent).toContain("Log-now.txt");
+
+    // One loop: one read per `pollSecs`.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 });

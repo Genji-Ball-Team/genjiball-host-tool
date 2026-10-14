@@ -85,7 +85,7 @@ impl Updates {
 
     /// Takes `busy` until the guard is dropped, or `None` if something else holds it.
     fn begin(&self) -> Option<Busy<'_>> {
-        (!self.busy.swap(true, Ordering::AcqRel)).then_some(Busy(&self.busy))
+        (!self.busy.swap(true, Ordering::AcqRel)).then(|| Busy(&self.busy))
     }
 }
 
@@ -353,6 +353,8 @@ mod tests {
         let updates = Updates::default();
         let first = updates.begin();
         assert!(first.is_some());
+        // Turned down without letting go of the first one's hold.
+        assert!(updates.begin().is_none());
         assert!(updates.begin().is_none());
         drop(first);
         assert!(updates.begin().is_some());

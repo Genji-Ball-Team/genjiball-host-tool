@@ -185,8 +185,16 @@ impl Tracker {
             let mut tracked = match self.files.remove(&name) {
                 Some(tracked) if tracked.size == size && tracked.modified == modified => tracked,
                 before => {
-                    // A file still being written may be locked for a moment: try on the next poll.
-                    let Ok(bytes) = fs::read(&path) else { continue };
+                    // A file still being written may be locked for a moment: try on the next poll,
+                    // keeping what's known of it (a failed upload's backoff).
+                    let Ok(bytes) = fs::read(&path) else {
+                        if let Some(mut t) = before {
+                            t.due = false;
+                            poll.waiting += usize::from(t.waiting);
+                            seen.push((name, t));
+                        }
+                        continue;
+                    };
                     let complete = log_scan::complete_lines(&bytes);
                     let (failures, retry_at, error, changed_at) = match before {
                         Some(t) => (t.failures, t.retry_at, t.error, now),
@@ -687,6 +695,64 @@ mod tests {
             names(
                 &tracker
                     .poll(dir.path(), soon, SystemTime::now(), EPOCH, never_sent)
+                    .unwrap()
+            ),
+            [NAME]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_it_cant_read_keeps_its_backoff() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        tracker.failed(NAME, now, None, "offline".into());
+        // The game writes more while holding the file: it can't be read at this poll.
+        write(dir.path(), NAME, &format!("{EXAMPLE}\n"), Duration::ZERO);
+        let locked = File::options()
+            .read(true)
+            .share_mode(0)
+            .open(dir.path().join(NAME))
+            .unwrap();
+        let poll = tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(
+            poll,
+            Poll {
+                due: vec![],
+                waiting: 1
+            }
+        );
+        drop(locked);
+        // Read again, still held for the backoff, and still failed.
+        assert!(tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap()
+            .due
+            .is_empty());
+        assert_eq!(
+            states(&tracker),
+            [QueueState::Failed {
+                error: "offline".into()
+            }]
+        );
+        assert_eq!(
+            names(
+                &tracker
+                    .poll(
+                        dir.path(),
+                        now + backoff(1),
+                        SystemTime::now(),
+                        EPOCH,
+                        never_sent
+                    )
                     .unwrap()
             ),
             [NAME]

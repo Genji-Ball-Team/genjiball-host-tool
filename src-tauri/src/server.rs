@@ -895,8 +895,9 @@ pub async fn upload(
         .map(str::to_string);
     let (outcome, body) = match response.text().await {
         Ok(body) => (read_upload(status, retry_after.as_deref(), &body), body),
-        // The status alone says the token or the file won't do: the body only explains it.
-        Err(_) if matches!(status, 401 | 403 | 413 | 422) => {
+        // The status alone says the token or the file won't do: the body only explains it. Not a
+        // `422`: only its body tells a refused file from `no_region`, which is never recorded.
+        Err(_) if matches!(status, 401 | 403 | 413) => {
             (read_upload(status, None, ""), String::new())
         }
         Err(e) => return retry(e),
@@ -1708,22 +1709,27 @@ mod tests {
             .outcome,
             UploadOutcome::Refused { .. }
         ));
-        // Any other answer cut off is worth another try.
-        let failing = cut_off_server("HTTP/1.1 500 Internal Server Error\r\n", "x");
-        assert!(matches!(
-            run(upload(
-                &failing,
-                "t",
-                UploadInfo {
-                    file_name: "Log-a.txt",
-                    ..UploadInfo::default()
-                },
-                b"x".to_vec(),
-                timeout
-            ))
-            .outcome,
-            UploadOutcome::Retry { .. }
-        ));
+        // Any other answer cut off is worth another try, a `422` too: it may be `no_region`.
+        for head in [
+            "HTTP/1.1 500 Internal Server Error\r\n",
+            "HTTP/1.1 422 Unprocessable Entity\r\n",
+        ] {
+            let failing = cut_off_server(head, "x");
+            assert!(matches!(
+                run(upload(
+                    &failing,
+                    "t",
+                    UploadInfo {
+                        file_name: "Log-a.txt",
+                        ..UploadInfo::default()
+                    },
+                    b"x".to_vec(),
+                    timeout
+                ))
+                .outcome,
+                UploadOutcome::Retry { .. }
+            ));
+        }
     }
 
     #[test]

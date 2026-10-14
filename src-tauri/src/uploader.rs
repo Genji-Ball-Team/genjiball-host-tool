@@ -369,6 +369,8 @@ struct Target<'a> {
     server_url: &'a str,
     token: &'a str,
     region: Option<&'a str>,
+    /// `Uploader::generation` when the poll read the settings: a change since stops what's left.
+    generation: u64,
 }
 
 /// Starts the loop. Call once, after `Store` and `Uploader` are managed.
@@ -412,6 +414,9 @@ struct Run {
     /// What a dry run went through, per server and file, as if it had been uploaded: it isn't
     /// picked again until it grows. Forgotten when the dry run ends, so those files go then.
     dry_sent: HashMap<String, HashMap<String, watcher::Sent>>,
+    /// The server a dry run without a token for it began on, and when: it goes through what's
+    /// written from then on. Forgotten when the dry run ends.
+    dry_since: Option<(String, SystemTime)>,
 }
 
 /// A file as an upload sends it, besides its bytes: what's read from them.
@@ -433,6 +438,38 @@ impl Prepared {
 }
 
 impl Run {
+    /// The files a poll at `now` looks at are those started after this: `started`, when uploads
+    /// to `server_url` started (`Record::started`). Before the first token for it, only what's
+    /// written from now on, or, in a dry run, from when it began.
+    fn since(
+        &mut self,
+        started: Option<SystemTime>,
+        server_url: &str,
+        dry_run: bool,
+        now: SystemTime,
+    ) -> SystemTime {
+        if let Some(started) = started {
+            return started;
+        }
+        if !dry_run {
+            return now;
+        }
+        match &self.dry_since {
+            Some((url, at)) if url == server_url => *at,
+            _ => {
+                // In whole seconds, like `Record::started`: a log's name says when it started
+                // to the second, so one started later in the same second still counts.
+                let secs = now
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+                self.dry_since = Some((server_url.to_string(), at));
+                at
+            }
+        }
+    }
+
     /// Whether nothing may be uploaded to `server_url` at `now`: it answered `429` and its
     /// `Retry-After` isn't over yet.
     fn held(&self, server_url: &str, now: Instant) -> bool {
@@ -540,6 +577,7 @@ impl Run {
         let dry_run = settings.dry_run_on();
         if !dry_run {
             self.dry_sent.clear();
+            self.dry_since = None;
         }
         // The retries the host asked for, before the poll picks what's due.
         for file in std::mem::take(&mut *uploader.retries.lock().unwrap()) {
@@ -547,8 +585,12 @@ impl Run {
         }
         let poll = {
             let record = uploader.record.lock().unwrap();
-            // Before the first token for this server, count only what's written from now on.
-            let since = record.started(&server_url).unwrap_or_else(SystemTime::now);
+            let since = self.since(
+                record.started(&server_url),
+                &server_url,
+                dry_run,
+                SystemTime::now(),
+            );
             let dry_sent = self.dry_sent.get(&server_url);
             self.tracker.poll(
                 &folder.path,
@@ -651,10 +693,9 @@ impl Run {
             server_url: &server_url,
             token: &token,
             region: region.as_deref(),
+            generation,
         };
-        let (done, problem) = self
-            .send_due(&uploader, generation, target, &poll.due, timeout)
-            .await;
+        let (done, problem) = self.send_due(&uploader, target, &poll.due, timeout).await;
         status.waiting = status.waiting.saturating_sub(done);
         status.problem = problem;
         status.retrying = self.retrying.clone();
@@ -816,19 +857,21 @@ impl Run {
     }
 
     /// Uploads the files `due`, oldest first, until one stops every upload, the server says to
-    /// hold off (`429`), or the settings or token changed since `generation` (the rest waits for
-    /// the next poll, with the new ones). How many are done with, and the problem if one came up.
+    /// hold off (`429`), or the settings or token changed since `target`'s generation (the rest
+    /// waits for the next poll, with the new ones). How many are done with, and the problem if one
+    /// came up.
     async fn send_due(
         &mut self,
         uploader: &Uploader,
-        generation: u64,
         target: Target<'_>,
         due: &[Due],
         timeout: Duration,
     ) -> (usize, Option<Problem>) {
         let mut done = 0;
         for due in due {
-            if !uploader.is_current(generation) || self.held(target.server_url, Instant::now()) {
+            if !uploader.is_current(target.generation)
+                || self.held(target.server_url, Instant::now())
+            {
                 break;
             }
             match self.send(uploader, target, due, timeout).await {
@@ -892,7 +935,8 @@ impl Run {
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it
-    /// waits to be retried. A problem that stops every upload is an error.
+    /// waits to be retried (or for the next poll, when the settings changed meanwhile). A problem
+    /// that stops every upload is an error.
     async fn send(
         &mut self,
         uploader: &Uploader,
@@ -918,6 +962,11 @@ impl Run {
         let region = self
             .file_region(uploader, target, &due.name, scan, timeout)
             .await;
+        // Asking for the lobbies takes a while: a server, token or region picked meanwhile isn't
+        // this poll's to upload with. Not a failed upload, so no backoff.
+        if !uploader.is_current(target.generation) {
+            return Ok(false);
+        }
         let region = region.as_deref();
         let info = prepared.info(&due.name, region);
         let note = |outcome| {
@@ -1095,6 +1144,7 @@ mod tests {
             server_url: server,
             token: "t",
             region: None,
+            generation: 0,
         }
     }
 
@@ -1224,7 +1274,6 @@ mod tests {
         fs::create_dir(&logs).unwrap();
         let uploader = std::sync::Arc::new(Uploader::new(dir.path().join("uploads.json")));
         let mut run = Run::default();
-        let generation = uploader.generation.load(Ordering::Relaxed);
         // The host switches servers while the first upload is on its way.
         let changed = uploader.clone();
         let stored = r#"{"result":"stored","matches":[]}"#;
@@ -1244,7 +1293,6 @@ mod tests {
         fs::write(&second.path, EXAMPLE).unwrap();
         let (done, problem) = block_on(run.send_due(
             &uploader,
-            generation,
             target(&server),
             &[first.clone(), second.clone()],
             TIMEOUT,
@@ -1255,6 +1303,35 @@ mod tests {
         let record = uploader.record.lock().unwrap();
         assert!(record.get(&server, &first.name).is_some());
         assert!(record.get(&server, &second.name).is_none());
+    }
+
+    #[test]
+    fn a_change_of_settings_while_asking_for_the_lobbies_stops_the_upload() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = std::sync::Arc::new(Uploader::new(dir.path().join("uploads.json")));
+        let mut run = Run::default();
+        // A tourney match of a lobby the tool doesn't know: it asks for the host's lobbies first,
+        // and the host switches servers meanwhile.
+        let changed = uploader.clone();
+        let server = server::test_server(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".into(),
+            "",
+            move || changed.changed(),
+        );
+        let file = due(dir.path(), TOURNEY_LOG);
+        assert_eq!(
+            block_on(run.send(&uploader, target(&server), &file, TIMEOUT)),
+            Ok(false)
+        );
+        // Nothing was sent, and nothing failed: the next poll uploads it with the new settings.
+        assert!(uploader.recent().is_empty());
+        assert_eq!(run.retrying, None);
+        assert!(uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(&server, &file.name)
+            .is_none());
     }
 
     /// The request an upload of `text` (in `file`, rewritten first) sends, as `run` and `uploader`.
@@ -1492,6 +1569,49 @@ mod tests {
         let sent = run.dry_sent[SERVER][&file.name];
         assert_eq!(sent.size, EXAMPLE.len() as u64);
         assert_eq!(sent.match_ends, 1);
+    }
+
+    #[test]
+    fn a_dry_run_without_a_token_goes_through_what_was_written_since_it_began() {
+        let mut run = Run::default();
+        let began = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        let later = began + Duration::from_secs(600);
+        assert_eq!(run.since(None, SERVER, true, began), began);
+        // A log started meanwhile is still picked at a later poll.
+        assert_eq!(run.since(None, SERVER, true, later), began);
+        assert_eq!(
+            run.since(None, "https://test.genjiball.us", true, later),
+            later
+        );
+        // Once uploads to the server started, from then; without a dry run, from now.
+        let started = began - Duration::from_secs(60);
+        assert_eq!(run.since(Some(started), SERVER, true, later), started);
+        assert_eq!(run.since(None, SERVER, false, later), later);
+    }
+
+    #[test]
+    fn a_dry_run_picks_a_log_started_later_in_the_second_it_began() {
+        let dir = tempfile::tempdir().unwrap();
+        let second = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // The first poll at .200, the game opens its log at .800: named after the same second.
+        let first_poll = SystemTime::UNIX_EPOCH + Duration::from_millis(second * 1000 + 200);
+        let opened = SystemTime::UNIX_EPOCH + Duration::from_millis(second * 1000 + 800);
+        let name = DateTime::<Local>::from(opened)
+            .format("Log-%Y-%m-%d-%H-%M-%S.txt")
+            .to_string();
+        fs::write(dir.path().join(&name), EXAMPLE).unwrap();
+        let mut run = Run::default();
+        let since = run.since(None, SERVER, true, first_poll);
+        let poll = Tracker::default()
+            .poll(dir.path(), Instant::now(), SystemTime::now(), since, |_| {
+                None
+            })
+            .unwrap();
+        assert_eq!(poll.due.len(), 1);
+        assert_eq!(poll.due[0].name, name);
     }
 
     #[test]

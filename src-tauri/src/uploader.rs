@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
 use crate::afk::{AfkStatus, AfkStore};
@@ -380,16 +380,9 @@ pub fn start(app: AppHandle) {
         loop {
             let status = run.tick(&app).await;
             let uploader = app.state::<Uploader>();
-            let changed = {
-                let mut current = uploader.status.lock().unwrap();
-                log_problem(current.problem.as_ref(), status.problem.as_ref());
-                let changed = *current != status;
-                *current = status.clone();
-                changed
-            };
-            if changed {
-                let _ = app.emit(STATUS_EVENT, status);
-            }
+            let problem = status.problem.clone();
+            let before = crate::publish(&app, STATUS_EVENT, &uploader.status, status);
+            log_problem(before.problem.as_ref(), problem.as_ref());
             // Until the next poll, or until woken.
             let interval = app.state::<Store>().get().secs(&config::POLL_INTERVAL_SECS);
             let _ = tokio::time::timeout(interval, uploader.wake.notified()).await;
@@ -568,8 +561,7 @@ impl Run {
             return finish(self, None, status);
         }
 
-        let Some(folder) = log_folder::current(settings.log_folder.as_deref()).filter(|f| f.exists)
-        else {
+        let Some(folder) = log_folder::existing(settings.log_folder.as_deref()) else {
             status.problem = Some(Problem::NoFolder);
             return finish(self, None, status);
         };

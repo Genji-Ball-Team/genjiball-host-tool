@@ -323,12 +323,12 @@ mod tests {
             rejection: None,
             review_reasons: vec![],
         };
-        assert!(record.update_states(SERVER, std::slice::from_ref(&accepted)));
+        record.update_states(SERVER, std::slice::from_ref(&accepted));
         assert_eq!(page(&record, SERVER, &[], 0, 2), first);
         assert_ne!(record.revision(), before);
         // Nothing new: the same revision.
         let after = record.revision();
-        assert!(!record.update_states(SERVER, &[accepted]));
+        record.update_states(SERVER, &[accepted]);
         assert_eq!(record.revision(), after);
     }
 

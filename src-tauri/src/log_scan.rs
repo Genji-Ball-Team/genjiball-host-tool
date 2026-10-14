@@ -116,9 +116,14 @@ pub fn complete_lines(bytes: &[u8]) -> &[u8] {
     &bytes[..end]
 }
 
+/// `complete_lines` of a log already read as text.
+pub fn complete_text(text: &str) -> &str {
+    &text[..text.rfind('\n').map_or(0, |i| i + 1)]
+}
+
 /// What's in the complete lines of `text` (see `complete_lines`).
 pub fn scan(text: &str) -> Scan {
-    read(&text[..text.rfind('\n').map_or(0, |i| i + 1)]).0
+    read(complete_text(text)).0
 }
 
 /// What's in these lines, and the key of the match the last of them is in.
@@ -178,10 +183,10 @@ fn read(text: &str) -> (Scan, Option<&str>) {
 /// Every round started in `text`, with the line the game may be halfway through writing once its
 /// round is written in full (`round_start`): what has already started when the host turns AFK on.
 pub fn round_starts(text: &str) -> Vec<RoundStart> {
-    let complete = text.rfind('\n').map_or(0, |i| i + 1);
-    let (found, current) = read(&text[..complete]);
+    let complete = complete_text(text);
+    let (found, current) = read(complete);
     let mut starts = found.round_starts;
-    if let (Some(round), Some(key)) = (round_start(event(&text[complete..])), current) {
+    if let (Some(round), Some(key)) = (round_start(event(&text[complete.len()..])), current) {
         starts.push(RoundStart {
             match_key: key.to_string(),
             round,
@@ -362,11 +367,9 @@ mod tests {
 
     #[test]
     fn reads_lines_without_the_prefix() {
-        assert!(scan("GBR|2.38|1|1.3.3R|482913507226\nMATCH_END|9|TIME\n").ranked);
-        assert_eq!(
-            scan("GBR|2.38|1|1.3.3R|1\nMATCH_END|9|TIME\n").match_ends,
-            1
-        );
+        let found = scan("GBR|2.38|1|1.3.3R|482913507226\nMATCH_END|9|TIME\n");
+        assert!(found.ranked);
+        assert_eq!(found.match_ends, 1);
     }
 
     #[test]

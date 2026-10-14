@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::config;
 use crate::log_scan::Scan;
-use crate::ranked_code::{custom_string, replace_rule, RuleError};
+use crate::ranked_code::{custom_string, replace_rule};
 use crate::server::{TourneyCodeValues, TourneyLobby};
 
 /// The rule's first line. It's in a release with tourneys exactly once.
@@ -77,14 +77,11 @@ pub fn action(values: &TourneyCodeValues) -> Result<(String, Written), String> {
 /// `TOURNEY - generated` rule turned on with `values`. Everything else stays as it was.
 pub fn fill(code: &str, values: &TourneyCodeValues) -> Result<(String, Written), String> {
     let (action, written) = action(values)?;
-    let filled = replace_rule(code, RULE_START, &action).map_err(|e| match e {
-        RuleError::Missing => {
-            "The TOURNEY - generated rule marker isn't in the base release, so it can't make a tourney code. Use a Genji Ball release with tourneys (ask an admin which; Advanced → Ranked code release)"
-        }
-        RuleError::Twice => {
-            "The base release has the TOURNEY - generated rule twice, so the host tool can't tell which to fill"
-        }
-        RuleError::Unended => "The TOURNEY - generated rule in the base release never ends",
+    let filled = replace_rule(code, RULE_START, &action).map_err(|e| {
+        e.message(
+            "TOURNEY",
+            "The TOURNEY - generated rule marker isn't in the base release, so it can't make a tourney code. Use a Genji Ball release with tourneys (ask an admin which; Advanced → Ranked code release)",
+        )
     })?;
     Ok((filled, written))
 }

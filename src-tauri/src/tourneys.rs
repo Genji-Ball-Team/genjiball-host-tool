@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
 use crate::server::{self, TourneyLobby, TourneysError};
@@ -102,15 +102,7 @@ pub async fn check(app: &AppHandle) -> Duration {
     let tourneys = app.state::<Tourneys>();
     let mut run = tourneys.run.lock().await;
     let (status, wait) = run.tick(app).await;
-    let changed = {
-        let mut current = tourneys.status.lock().unwrap();
-        let changed = *current != status;
-        *current = status.clone();
-        changed
-    };
-    if changed {
-        let _ = app.emit(STATUS_EVENT, status);
-    }
+    crate::publish(app, STATUS_EVENT, &tourneys.status, status);
     wait
 }
 

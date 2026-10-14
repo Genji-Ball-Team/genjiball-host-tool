@@ -23,6 +23,7 @@ import {
   type TourneyProblem,
   type TourneysStatus,
 } from "./tourney-model";
+import { copyBuilt } from "./desktop";
 import { markView } from "./views";
 
 /** What the section needs from the rest of the window. */
@@ -62,8 +63,6 @@ let context: () => TourneyContext;
 let status: TourneysStatus | null = null;
 /** Per lobby: what "Copy tourney code" last said. */
 const codeLines = new Map<number, Line>();
-/** Per lobby: a code built but not copied (the window lost focus while it was built). */
-const uncopied = new Map<number, TourneyCode>();
 /** Per lobby: the image waiting to be uploaded, and what came of the last try. */
 const candidates = new Map<number, Candidate>();
 const shotLines = new Map<number, Line>();
@@ -160,7 +159,6 @@ export function tourneyContextChanged(): void {
   if (status && status.serverUrl !== context().serverUrl) {
     status = null;
     codeLines.clear();
-    uncopied.clear();
     for (const id of [...candidates.keys()]) dropCandidate(id);
     openShot = null;
   }
@@ -261,26 +259,16 @@ function setCodeLine(id: number, line: Line): void {
   draw();
 }
 
+/** Builds the lobby's code and copies it. A code that couldn't be copied isn't kept: the next click builds it again, for the settings then. */
 async function copyCode(lobby: LobbyView): Promise<void> {
   const ctx = context();
-  let built = uncopied.get(lobby.id);
-  uncopied.delete(lobby.id);
-  if (!built || built.serverUrl !== ctx.serverUrl) {
-    setCodeLine(lobby.id, { text: "Building the code…", tone: "muted" });
-    built = await invoke<TourneyCode>("build_tourney_code", { lobbyId: lobby.id });
-    if (built.serverUrl !== context().serverUrl) {
-      setCodeLine(lobby.id, { text: "The server changed while the code was built. Click again for this server's.", tone: "bad" });
-      return;
-    }
+  setCodeLine(lobby.id, { text: "Building the code…", tone: "muted" });
+  const built = await invoke<TourneyCode>("build_tourney_code", { lobbyId: lobby.id });
+  if (built.serverUrl !== context().serverUrl) {
+    setCodeLine(lobby.id, { text: "The server changed while the code was built. Click again for this server's.", tone: "bad" });
+    return;
   }
-  try {
-    await navigator.clipboard.writeText(built.code);
-  } catch (err) {
-    // Usually "Document is not focused": the host switched windows while it was built.
-    uncopied.set(lobby.id, built);
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
-  }
+  await copyBuilt(built.code);
   const v = built.values;
   const skipped = built.skippedNames ? `, ${built.skippedNames} names left out (the Workshop can't show them)` : "";
   setCodeLine(lobby.id, {

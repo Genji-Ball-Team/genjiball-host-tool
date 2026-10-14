@@ -108,6 +108,30 @@ export interface Source {
   onChange?(listener: () => void): Promise<void>;
 }
 
+/**
+ * `read`, one at a time: called while a read runs, it reads once more right after that one (which
+ * may have begun before a change), however many calls came meanwhile. Each call's promise ends
+ * with a read that began after it.
+ */
+export function oneAtATime(read: () => Promise<void>): () => Promise<void> {
+  let running: Promise<void> | null = null;
+  let next: Promise<void> | null = null;
+  const start = (): Promise<void> => {
+    if (!running) {
+      running = read().finally(() => {
+        running = null;
+      });
+      return running;
+    }
+    next ??= running.then(() => {
+      next = null;
+      return start();
+    });
+    return next;
+  };
+  return start;
+}
+
 /** Whether this page runs in the app's overlay window, not in a browser (OBS). */
 export function inTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;

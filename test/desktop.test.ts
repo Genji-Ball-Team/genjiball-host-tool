@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { shortcut, type Keys } from "../src/desktop";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { copyBuilt, shortcut, type Keys } from "../src/desktop";
 
 const press = (key: string, code: string, mods: Partial<Keys> = {}): Keys => ({ key, code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods });
 
@@ -33,5 +33,27 @@ describe("shortcut", () => {
     }
     expect(shortcut(press("a", "KeyA", { ctrlKey: true }))).toBeNull();
     expect(shortcut(press("v", "KeyV", { ctrlKey: true }))).toBeNull();
+  });
+});
+
+describe("copyBuilt", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("copies the code", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const keep = vi.fn();
+    await copyBuilt("code", keep);
+    expect(writeText).toHaveBeenCalledWith("code");
+    expect(keep).not.toHaveBeenCalled();
+  });
+
+  it("keeps a code it couldn't copy, and says to click again", async () => {
+    vi.stubGlobal("navigator", { clipboard: { writeText: async () => Promise.reject(new Error("Document is not focused")) } });
+    const keep = vi.fn();
+    await expect(copyBuilt("code", keep)).rejects.toThrow("Built the code but couldn't copy it (Document is not focused). Click again to copy.");
+    expect(keep).toHaveBeenCalledOnce();
   });
 });

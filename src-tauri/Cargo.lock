@@ -1317,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "genjiball-host-tool"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "chrono",
  "dirs",

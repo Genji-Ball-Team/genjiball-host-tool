@@ -1,5 +1,6 @@
 //! The settings file: what the host chose, with `None` meaning "use the default".
-//! The host token is never here: it lives in the OS credential store (`credentials.rs`).
+//! The host token is never here: it lives in the OS credential store, or encrypted with DPAPI
+//! when that refuses it (`credentials.rs`).
 
 use std::collections::BTreeMap;
 use std::fs;

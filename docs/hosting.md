@@ -87,7 +87,7 @@ In the **Uploads** view each log file is listed with the players in it and what 
 | Already uploaded | The server already has this match, nothing more to do |
 | No match in it | The file has no ranked match (for example a different game mode) |
 
-The status can change later: an admin may accept, reject or void a match after you uploaded it. "Check again" asks the server straight away.
+The status can change later: an admin may accept, reject or void a match after you uploaded it. The tool asks the server every couple of minutes; "Check again" next to your host token (Settings → Account) asks straight away.
 
 ## Watching a match
 

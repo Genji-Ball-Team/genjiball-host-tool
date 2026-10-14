@@ -457,8 +457,15 @@ impl Run {
         match &self.dry_since {
             Some((url, at)) if url == server_url => *at,
             _ => {
-                self.dry_since = Some((server_url.to_string(), now));
-                now
+                // In whole seconds, like `Record::started`: a log's name says when it started
+                // to the second, so one started later in the same second still counts.
+                let secs = now
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+                self.dry_since = Some((server_url.to_string(), at));
+                at
             }
         }
     }
@@ -1567,7 +1574,7 @@ mod tests {
     #[test]
     fn a_dry_run_without_a_token_goes_through_what_was_written_since_it_began() {
         let mut run = Run::default();
-        let began = SystemTime::now();
+        let began = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
         let later = began + Duration::from_secs(600);
         assert_eq!(run.since(None, SERVER, true, began), began);
         // A log started meanwhile is still picked at a later poll.
@@ -1580,6 +1587,31 @@ mod tests {
         let started = began - Duration::from_secs(60);
         assert_eq!(run.since(Some(started), SERVER, true, later), started);
         assert_eq!(run.since(None, SERVER, false, later), later);
+    }
+
+    #[test]
+    fn a_dry_run_picks_a_log_started_later_in_the_second_it_began() {
+        let dir = tempfile::tempdir().unwrap();
+        let second = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // The first poll at .200, the game opens its log at .800: named after the same second.
+        let first_poll = SystemTime::UNIX_EPOCH + Duration::from_millis(second * 1000 + 200);
+        let opened = SystemTime::UNIX_EPOCH + Duration::from_millis(second * 1000 + 800);
+        let name = DateTime::<Local>::from(opened)
+            .format("Log-%Y-%m-%d-%H-%M-%S.txt")
+            .to_string();
+        fs::write(dir.path().join(&name), EXAMPLE).unwrap();
+        let mut run = Run::default();
+        let since = run.since(None, SERVER, true, first_poll);
+        let poll = Tracker::default()
+            .poll(dir.path(), Instant::now(), SystemTime::now(), since, |_| {
+                None
+            })
+            .unwrap();
+        assert_eq!(poll.due.len(), 1);
+        assert_eq!(poll.due[0].name, name);
     }
 
     #[test]

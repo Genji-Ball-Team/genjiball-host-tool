@@ -637,7 +637,7 @@ struct ScreenshotAnswer {
 /// What a `PUT` or `DELETE` of `/api/host/lobbies/:id/screenshot` answered: the lobby as it is now
 /// (`None` if it stopped being the host's right after), or why it didn't work, in words.
 pub fn read_screenshot(status: u16, body: &str) -> Result<Option<TourneyLobby>, String> {
-    let error = serde_json::from_str::<ApiError>(body).ok();
+    let error = ApiError::read(body);
     let code = error.as_ref().map(|e| e.error.as_str()).unwrap_or_default();
     let ours = match (status, code) {
         (200, _) => {
@@ -660,7 +660,10 @@ pub fn read_screenshot(status: u16, body: &str) -> Result<Option<TourneyLobby>, 
         _ => "",
     };
     Err(if ours.is_empty() {
-        api_message(body).unwrap_or_else(|| format!("The server answered {status}"))
+        error
+            .as_ref()
+            .and_then(ApiError::message)
+            .unwrap_or_else(|| format!("The server answered {status}"))
     } else {
         ours.to_string()
     })
@@ -697,10 +700,7 @@ pub async fn put_screenshot(
 
 /// The `message` of an error answer, if it has one.
 fn api_message(body: &str) -> Option<String> {
-    serde_json::from_str::<ApiError>(body)
-        .ok()
-        .map(|e| e.message)
-        .filter(|m| !m.is_empty())
+    ApiError::read(body)?.message()
 }
 
 #[derive(Deserialize)]
@@ -708,6 +708,18 @@ struct ApiError {
     error: String,
     #[serde(default)]
     message: String,
+}
+
+impl ApiError {
+    /// An error answer's body, if it is one.
+    fn read(body: &str) -> Option<Self> {
+        serde_json::from_str(body).ok()
+    }
+
+    /// Its message, if it has one.
+    fn message(&self) -> Option<String> {
+        (!self.message.is_empty()).then(|| self.message.clone())
+    }
 }
 
 /// What came of an upload.
@@ -740,8 +752,13 @@ pub enum UploadOutcome {
 
 /// What a `POST /api/upload` answer means.
 pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> UploadOutcome {
-    let error = serde_json::from_str::<ApiError>(body).ok();
-    let message = |fallback: String| api_message(body).unwrap_or(fallback);
+    let error = ApiError::read(body);
+    let message = |fallback: String| {
+        error
+            .as_ref()
+            .and_then(ApiError::message)
+            .unwrap_or(fallback)
+    };
     match status {
         200 => match serde_json::from_str(body) {
             Ok(answer) => UploadOutcome::Stored(answer),
@@ -943,7 +960,7 @@ pub fn read_lobby(
     let unexpected = || LobbyOutcome::Failed {
         message: "The server's answer wasn't what the host tool expected".into(),
     };
-    let error = serde_json::from_str::<ApiError>(body).ok();
+    let error = ApiError::read(body);
     match status {
         // `{ "closed": false }` when no lobby was open: off the list all the same.
         200 if closing => match serde_json::from_str::<serde_json::Value>(body) {
@@ -964,7 +981,10 @@ pub fn read_lobby(
             message: "This server can't list live lobbies yet (it may need updating), or the server URL is wrong".into(),
         },
         _ => LobbyOutcome::Failed {
-            message: api_message(body).unwrap_or_else(|| format!("The server answered {status}")),
+            message: error
+                .as_ref()
+                .and_then(ApiError::message)
+                .unwrap_or_else(|| format!("The server answered {status}")),
         },
     }
 }

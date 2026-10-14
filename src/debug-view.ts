@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { el, type Tone } from "./dom";
 import { watchLog, type LogWatch } from "./match-view";
 
 /**
@@ -38,8 +39,6 @@ interface Attempt {
 /** Mirrors `Outcome` in src-tauri/src/debug.rs. */
 type Outcome = { kind: "dryRun" } | { kind: "tooLarge" } | { kind: "answered"; answer: { status: number; body: string } } | { kind: "unanswered"; message: string };
 
-type Tone = "good" | "bad" | "muted";
-
 /**
  * A log line split for the panel: `[00:01:02] ROUND_START|2.38|1|...` gives its time, event and
  * fields. A line that isn't an event (another inspector line) has no event, only its text.
@@ -74,12 +73,6 @@ export function prettyBody(body: string): string {
   } catch {
     return body;
   }
-}
-
-function el(id: string): HTMLElement {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`#${id} is missing from index.html`);
-  return found;
 }
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, className = ""): HTMLElementTagNameMap[K] {

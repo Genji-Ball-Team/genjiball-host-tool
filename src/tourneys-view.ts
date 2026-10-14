@@ -24,6 +24,7 @@ import {
   type TourneysStatus,
 } from "./tourney-model";
 import { copyBuilt } from "./desktop";
+import { el, node, type Tone } from "./dom";
 import { markView } from "./views";
 
 /** What the section needs from the rest of the window. */
@@ -54,7 +55,7 @@ interface Candidate {
   newest: ScreenshotFile | null;
 }
 
-type Line = { text: string; tone: "good" | "bad" | "muted" };
+type Line = { text: string; tone: Tone };
 
 /** How often the countdowns are written again, in milliseconds. */
 const COUNTDOWN_TICK_MS = 1000;
@@ -72,19 +73,6 @@ let openShot: number | null = null;
 const autoOpened = new Set<number>();
 /** Each lobby's code state at the last render: a change draws the list again. */
 const drawnStates = new Map<number, CodeState["kind"]>();
-
-function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`#${id} is missing from index.html`);
-  return found as T;
-}
-
-function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = "", className = ""): HTMLElementTagNameMap[K] {
-  const found = document.createElement(tag);
-  if (text) found.textContent = text;
-  if (className) found.className = className;
-  return found;
-}
 
 function showError(message: string): void {
   const error = el("tourneys-error");

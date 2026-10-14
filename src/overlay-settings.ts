@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { el } from "./dom";
 import { toast } from "./toast";
 
 /**
@@ -63,12 +64,6 @@ let view: OverlayView | null = null;
 let context: Context;
 /** The saves asked for, one after the other: each starts from what the one before saved. */
 let saving: Promise<void> = Promise.resolve();
-
-function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`#${id} is missing from index.html`);
-  return found as T;
-}
 
 /**
  * The keys a key press makes, as the hotkey settings take them (`Ctrl+Alt+O`): `null` while only

@@ -212,7 +212,6 @@ details form { margin-top: .75rem; }
 #advanced-form > .row { margin-top: 1rem; }
 
 /* Dry run and the debug panel (Advanced → Debug). */
-#dry-run-banner { border-left-color: var(--gold); background: #1c1a10; }
 label.check.dry-run { margin: 1rem 0 0; }
 #debug-panel h3 { margin: 1rem 0 .25rem; font-size: .85rem; font-weight: 600; color: var(--soft); }
 #debug-panel .note { margin-top: .25rem; }

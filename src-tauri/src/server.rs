@@ -210,21 +210,8 @@ pub async fn rank_tags(
     region: Option<&str>,
     timeout: Duration,
 ) -> Result<RankTiers, String> {
-    let mut url =
-        url::Url::parse(&format!("{server_url}/api/rank-tags")).map_err(|e| e.to_string())?;
-    if let Some(region) = region {
-        url.query_pairs_mut().append_pair("region", region);
-    }
-    let response = client(timeout)?
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
-    let status = response.status().as_u16();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let url = region_url(server_url, "/api/rank-tags", region)?;
+    let (status, body) = get_public(url, timeout).await?;
     read_rank_tags(status, &body)
 }
 
@@ -276,21 +263,8 @@ pub async fn leaderboard(
     region: Option<&str>,
     timeout: Duration,
 ) -> Result<Leaderboard, String> {
-    let mut url =
-        url::Url::parse(&format!("{server_url}/api/leaderboard")).map_err(|e| e.to_string())?;
-    if let Some(region) = region {
-        url.query_pairs_mut().append_pair("region", region);
-    }
-    let response = client(timeout)?
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
-    let status = response.status().as_u16();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let url = region_url(server_url, "/api/leaderboard", region)?;
+    let (status, body) = get_public(url, timeout).await?;
     read_leaderboard(status, &body)
 }
 
@@ -347,11 +321,7 @@ pub async fn leaderboard_page(
     page: u32,
     timeout: Duration,
 ) -> Result<StandingsPage, String> {
-    let mut url =
-        url::Url::parse(&format!("{server_url}/api/leaderboard")).map_err(|e| e.to_string())?;
-    if let Some(region) = region {
-        url.query_pairs_mut().append_pair("region", region);
-    }
+    let mut url = region_url(server_url, "/api/leaderboard", region)?;
     url.query_pairs_mut().append_pair("page", &page.to_string());
     let (status, body) = get_public(url, timeout).await?;
     read_standings_page(status, &body)
@@ -496,19 +466,47 @@ pub async fn match_result(
     read_match(status, &body)
 }
 
+/// `path` on the server, for `region` (`?region=`; the server's first region for `None`).
+fn region_url(server_url: &str, path: &str, region: Option<&str>) -> Result<url::Url, String> {
+    let mut url = url::Url::parse(&format!("{server_url}{path}")).map_err(|e| e.to_string())?;
+    if let Some(region) = region {
+        url.query_pairs_mut().append_pair("region", region);
+    }
+    Ok(url)
+}
+
 /// A `GET` of a public route: its status and body.
 async fn get_public(url: url::Url, timeout: Duration) -> Result<(u16, String), String> {
-    let response = client(timeout)?
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    send(client(timeout)?.get(url)).await
+}
+
+/// Sends `request`: the answer's status and body.
+async fn send(request: reqwest::RequestBuilder) -> Result<(u16, String), String> {
+    let response = request.send().await.map_err(unreachable)?;
     let status = response.status().as_u16();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let body = response.text().await.map_err(unreachable)?;
     Ok((status, body))
+}
+
+/// Without the URL: it can't hold the token, but keep messages short.
+fn unreachable(e: reqwest::Error) -> String {
+    format!("Couldn't reach the server: {}", e.without_url())
+}
+
+/// An answer's `Retry-After`, as sent.
+fn retry_after(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
+/// How long a `Retry-After` in seconds says to wait.
+fn wait(retry_after: Option<&str>) -> Option<Duration> {
+    retry_after
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 /// The tourney a lobby is in, as `GET /api/host/tourneys` gives it.
@@ -613,7 +611,7 @@ pub async fn host_tourneys(
     timeout: Duration,
 ) -> Result<HostTourneys, TourneysError> {
     let failed = |e: reqwest::Error| TourneysError::Failed {
-        message: format!("Couldn't reach the server: {}", e.without_url()),
+        message: unreachable(e),
     };
     let client = client(timeout).map_err(|message| TourneysError::Failed { message })?;
     let response = client
@@ -661,12 +659,8 @@ pub fn read_screenshot(status: u16, body: &str) -> Result<Option<TourneyLobby>, 
         (415, _) => "The server only takes PNG, JPEG or WebP images",
         _ => "",
     };
-    let message = error
-        .map(|e| e.message)
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| format!("The server answered {status}"));
     Err(if ours.is_empty() {
-        message
+        api_message(body).unwrap_or_else(|| format!("The server answered {status}"))
     } else {
         ours.to_string()
     })
@@ -694,7 +688,7 @@ pub async fn put_screenshot(
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+        .map_err(unreachable)?;
     let status = response.status().as_u16();
     log::debug!("{server_url} answered {status} to the screenshot of lobby {lobby_id}");
     let body = response.text().await.unwrap_or_default();
@@ -747,10 +741,7 @@ pub enum UploadOutcome {
 /// What a `POST /api/upload` answer means.
 pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> UploadOutcome {
     let error = serde_json::from_str::<ApiError>(body).ok();
-    let message = |fallback: String| match &error {
-        Some(e) if !e.message.is_empty() => e.message.clone(),
-        _ => fallback,
-    };
+    let message = |fallback: String| api_message(body).unwrap_or(fallback);
     match status {
         200 => match serde_json::from_str(body) {
             Ok(answer) => UploadOutcome::Stored(answer),
@@ -770,9 +761,7 @@ pub fn read_upload(status: u16, retry_after: Option<&str>, body: &str) -> Upload
         },
         _ => {
             let message = message(format!("The server answered {status}"));
-            let after = retry_after
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(Duration::from_secs);
+            let after = wait(retry_after);
             if status == 429 {
                 UploadOutcome::RateLimited { message, after }
             } else {
@@ -859,7 +848,7 @@ pub async fn upload(
     };
     let retry = |e: reqwest::Error| {
         unanswered(UploadOutcome::Retry {
-            message: format!("Couldn't reach the server: {}", e.without_url()),
+            message: unreachable(e),
             after: None,
         })
     };
@@ -888,11 +877,7 @@ pub async fn upload(
         "{server_url} answered {status} to the upload of {}",
         info.file_name
     );
-    let retry_after = response
-        .headers()
-        .get("Retry-After")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    let retry_after = retry_after(&response);
     let (outcome, body) = match response.text().await {
         Ok(body) => (read_upload(status, retry_after.as_deref(), &body), body),
         // The status alone says the token or the file won't do: the body only explains it. Not a
@@ -972,19 +957,14 @@ pub fn read_lobby(
         403 => LobbyOutcome::TokenRejected { revoked: true },
         422 if error.as_ref().is_some_and(|e| e.error == "no_region") => LobbyOutcome::NoRegion,
         429 => LobbyOutcome::RateLimited {
-            after: retry_after
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+            after: wait(retry_after),
         },
         // An older server without the route, or the wrong URL.
         404 => LobbyOutcome::Failed {
             message: "This server can't list live lobbies yet (it may need updating), or the server URL is wrong".into(),
         },
         _ => LobbyOutcome::Failed {
-            message: match error {
-                Some(e) if !e.message.is_empty() => e.message,
-                _ => format!("The server answered {status}"),
-            },
+            message: api_message(body).unwrap_or_else(|| format!("The server answered {status}")),
         },
     }
 }
@@ -1027,18 +1007,14 @@ pub async fn close_lobby(server_url: &str, token: &str, timeout: Duration) -> Lo
 
 async fn lobby_request(request: reqwest::RequestBuilder, closing: bool) -> LobbyOutcome {
     let failed = |e: reqwest::Error| LobbyOutcome::Failed {
-        message: format!("Couldn't reach the server: {}", e.without_url()),
+        message: unreachable(e),
     };
     let response = match request.send().await {
         Ok(response) => response,
         Err(e) => return failed(e),
     };
     let status = response.status().as_u16();
-    let retry_after = response
-        .headers()
-        .get("Retry-After")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    let retry_after = retry_after(&response);
     match response.text().await {
         Ok(body) => read_lobby(status, retry_after.as_deref(), &body, closing),
         // The status alone says the token is turned down, or to wait.
@@ -1061,9 +1037,8 @@ pub fn client(timeout: Duration) -> Result<reqwest::Client, String> {
 
 /// Asks the server whose token this is.
 pub async fn check_token(server_url: &str, token: &str, timeout: Duration) -> TokenCheck {
-    let unreachable = |e: reqwest::Error| TokenCheck::Unreachable {
-        // Without the URL: it can't hold the token, but keep messages short.
-        message: format!("Couldn't reach the server: {}", e.without_url()),
+    let failed = |e: reqwest::Error| TokenCheck::Unreachable {
+        message: unreachable(e),
     };
     let client = match client(timeout) {
         Ok(client) => client,
@@ -1076,7 +1051,7 @@ pub async fn check_token(server_url: &str, token: &str, timeout: Duration) -> To
         .await
     {
         Ok(response) => response,
-        Err(e) => return unreachable(e),
+        Err(e) => return failed(e),
     };
     let status = response.status().as_u16();
     log::debug!("{server_url} answered {status} to a token check");
@@ -1084,7 +1059,7 @@ pub async fn check_token(server_url: &str, token: &str, timeout: Duration) -> To
         Ok(body) => read_token_check(status, &body),
         // The status alone says the token is turned down.
         Err(_) if matches!(status, 401 | 403) => read_token_check(status, ""),
-        Err(e) => unreachable(e),
+        Err(e) => failed(e),
     }
 }
 
@@ -1100,17 +1075,7 @@ pub async fn match_states(
         [("keys", keys.join(","))],
     )
     .map_err(|e| e.to_string())?;
-    let response = client(timeout)?
-        .get(url)
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
-    let status = response.status().as_u16();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Couldn't reach the server: {}", e.without_url()))?;
+    let (status, body) = send(client(timeout)?.get(url).bearer_auth(token)).await?;
     read_match_states(status, &body)
 }
 
@@ -1375,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn sends_the_region() {
+    fn sends_the_region_and_the_hosts_afk_rounds() {
         use tauri::async_runtime::block_on as run;
         let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
         let (seen, request) = std::sync::mpsc::channel();
@@ -1394,6 +1359,7 @@ mod tests {
             UploadInfo {
                 file_name: "Log-a.txt",
                 region: Some("na"),
+                host_afk: Some("482913507226:3,4,5"),
                 ..UploadInfo::default()
             },
             b"x".to_vec(),
@@ -1403,35 +1369,6 @@ mod tests {
         assert!(matches!(outcome, UploadOutcome::Stored(a) if a.region.as_deref() == Some("na")));
         let request = request.recv().unwrap().to_ascii_lowercase();
         assert!(request.contains("\r\nx-region: na\r\n"), "{request}");
-        assert!(!request.contains("x-host-afk"), "{request}");
-    }
-
-    #[test]
-    fn sends_the_hosts_afk_rounds() {
-        use tauri::async_runtime::block_on as run;
-        let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
-        let (seen, request) = std::sync::mpsc::channel();
-        let body = r#"{"result":"stored","matches":[]}"#;
-        let url = test_server_seeing(
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-            "x",
-            seen,
-        );
-        run(upload(
-            &url,
-            "t",
-            UploadInfo {
-                file_name: "Log-a.txt",
-                host_afk: Some("482913507226:3,4,5"),
-                ..UploadInfo::default()
-            },
-            b"x".to_vec(),
-            timeout,
-        ));
-        let request = request.recv().unwrap().to_ascii_lowercase();
         assert!(
             request.contains("\r\nx-host-afk: 482913507226:3,4,5\r\n"),
             "{request}"

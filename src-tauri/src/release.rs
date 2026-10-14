@@ -6,29 +6,9 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::{config, server};
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-struct GithubAsset {
-    id: u64,
-    name: String,
-    updated_at: String,
-    browser_download_url: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    assets: Vec<GithubAsset>,
-}
+use crate::{config, github, server};
 
 /// The release the ranked code is built from.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,18 +41,7 @@ pub fn asset_name(tag: &str) -> String {
 /// The newest published ranked release in a `GET /repos/{repo}/releases` answer (newest first),
 /// and its Workshop code asset.
 pub fn pick(status: u16, body: &str) -> Result<Release, String> {
-    match status {
-        200 => {}
-        // Without a token GitHub allows 60 requests an hour, then answers 403 or 429.
-        403 | 429 => {
-            return Err("GitHub is limiting requests from this PC. Try again in a while".into())
-        }
-        404 => return Err(format!("GitHub has no repo {}", config::RELEASE_REPO)),
-        _ => return Err(format!("GitHub answered {status} when asked for releases")),
-    }
-    let releases: Vec<GithubRelease> = serde_json::from_str(body)
-        .map_err(|_| "GitHub's list of releases wasn't what the host tool expected")?;
-    let release = releases
+    let release = github::read_releases(status, body, config::RELEASE_REPO)?
         .into_iter()
         .find(|r| !r.draft && !r.prerelease && r.tag_name.ends_with(config::RELEASE_TAG_SUFFIX))
         .ok_or(format!(
@@ -88,9 +57,7 @@ pub fn pick(status: u16, body: &str) -> Result<Release, String> {
 pub fn pick_tagged(status: u16, body: &str, tag: &str) -> Result<Release, String> {
     match status {
         200 => {}
-        403 | 429 => {
-            return Err("GitHub is limiting requests from this PC. Try again in a while".into())
-        }
+        _ if github::rate_limited(status) => return Err(github::RATE_LIMITED.into()),
         404 => {
             return Err(format!(
                 "{} has no release {tag}. Check the ranked code release under Advanced, or leave it empty for the latest",
@@ -99,7 +66,7 @@ pub fn pick_tagged(status: u16, body: &str, tag: &str) -> Result<Release, String
         }
         _ => return Err(format!("GitHub answered {status} when asked for release {tag}")),
     }
-    let release: GithubRelease = serde_json::from_str(body).map_err(|_| {
+    let release: github::Release = serde_json::from_str(body).map_err(|_| {
         format!("GitHub's answer about release {tag} wasn't what the host tool expected")
     })?;
     if release.tag_name != tag {
@@ -112,7 +79,7 @@ pub fn pick_tagged(status: u16, body: &str, tag: &str) -> Result<Release, String
 }
 
 /// `release` and its Workshop code asset, which must be there exactly once.
-fn code_asset(release: GithubRelease) -> Result<Release, String> {
+fn code_asset(release: github::Release) -> Result<Release, String> {
     let name = asset_name(&release.tag_name);
     let mut assets = release.assets.into_iter().filter(|a| a.name == name);
     let asset = assets.next().ok_or(format!(
@@ -215,44 +182,17 @@ impl ReleaseCache {
     }
 }
 
-fn unreachable(e: reqwest::Error) -> String {
-    format!("Couldn't reach GitHub: {}", e.without_url())
-}
-
 /// The release tagged `pin` on GitHub, else the latest ranked one.
 async fn find(pin: Option<&str>, timeout: Duration) -> Result<Release, String> {
-    let releases = format!(
-        "{}/repos/{}/releases",
-        config::GITHUB_API_URL,
-        config::RELEASE_REPO
-    );
     let url = match pin {
-        Some(tag) => {
-            let mut url = url::Url::parse(&releases).map_err(|e| e.to_string())?;
-            url.path_segments_mut()
-                .map_err(|()| "GitHub's API URL can't take a path".to_string())?
-                .extend(["tags", tag]);
-            url
-        }
-        None => url::Url::parse_with_params(
-            &releases,
-            [("per_page", config::RELEASES_SEARCHED.to_string())],
-        )
-        .map_err(|e| e.to_string())?,
+        Some(tag) => github::tagged_url(config::RELEASE_REPO, tag)?,
+        None => github::releases_url(config::RELEASE_REPO, config::RELEASES_SEARCHED)?,
     };
     log::info!(
         "Asking GitHub for release {}",
         pin.unwrap_or("(latest ranked)")
     );
-    let response = server::client(timeout)?
-        .get(url)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(unreachable)?;
-    let status = response.status().as_u16();
-    log::debug!("GitHub answered {status}");
-    let body = response.text().await.map_err(unreachable)?;
+    let (status, body) = github::get(url, timeout).await?;
     match pin {
         Some(tag) => pick_tagged(status, &body, tag),
         None => pick(status, &body),
@@ -264,7 +204,7 @@ async fn download(release: Release, timeout: Duration) -> Result<String, String>
         .get(&release.asset_url)
         .send()
         .await
-        .map_err(unreachable)?;
+        .map_err(github::unreachable)?;
     let status = response.status();
     if !status.is_success() {
         return Err(format!(
@@ -273,7 +213,7 @@ async fn download(release: Release, timeout: Duration) -> Result<String, String>
             release.tag
         ));
     }
-    response.text().await.map_err(unreachable)
+    response.text().await.map_err(github::unreachable)
 }
 
 #[cfg(test)]

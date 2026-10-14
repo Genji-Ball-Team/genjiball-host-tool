@@ -4,6 +4,7 @@ mod credentials;
 mod debug;
 mod diagnostics;
 mod dpapi;
+mod github;
 mod history;
 mod live_lobby;
 mod lobby;

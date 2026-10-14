@@ -7,11 +7,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::{config, server, Store};
+use crate::{config, github, Store};
 
 /// What the window shows about updates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -165,33 +165,10 @@ async fn look(
     updater.check().await.map_err(|e| e.to_string())
 }
 
-#[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
-#[derive(Deserialize)]
-struct GithubRelease {
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    assets: Vec<GithubAsset>,
-}
-
 /// The `config::UPDATE_MANIFEST` of the newest published release in a
 /// `GET /repos/{repo}/releases` answer (newest first), pre-release or not.
 fn pick_manifest(status: u16, body: &str) -> Result<String, String> {
-    match status {
-        200 => {}
-        403 | 429 => {
-            return Err("GitHub is limiting requests from this PC. Try again in a while".into())
-        }
-        _ => return Err(format!("GitHub answered {status} when asked for releases")),
-    }
-    let releases: Vec<GithubRelease> = serde_json::from_str(body)
-        .map_err(|_| "GitHub's list of releases wasn't what the host tool expected")?;
-    releases
+    github::read_releases(status, body, config::APP_REPO)?
         .into_iter()
         .filter(|r| !r.draft)
         .find_map(|r| {
@@ -205,24 +182,8 @@ fn pick_manifest(status: u16, body: &str) -> Result<String, String> {
 
 /// The newest release's `config::UPDATE_MANIFEST` URL, asked of GitHub.
 async fn newest_manifest(timeout: Duration) -> Result<String, String> {
-    let url = url::Url::parse_with_params(
-        &format!(
-            "{}/repos/{}/releases",
-            config::GITHUB_API_URL,
-            config::APP_REPO
-        ),
-        [("per_page", config::UPDATE_RELEASES_SEARCHED.to_string())],
-    )
-    .map_err(|e| e.to_string())?;
-    let unreachable = |e: reqwest::Error| format!("Couldn't reach GitHub: {}", e.without_url());
-    let response = server::client(timeout)?
-        .get(url)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(unreachable)?;
-    let status = response.status().as_u16();
-    let body = response.text().await.map_err(unreachable)?;
+    let url = github::releases_url(config::APP_REPO, config::UPDATE_RELEASES_SEARCHED)?;
+    let (status, body) = github::get(url, timeout).await?;
     pick_manifest(status, &body)
 }
 

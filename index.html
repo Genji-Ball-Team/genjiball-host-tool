@@ -62,7 +62,7 @@
               <h1>Set up the host tool</h1>
               <p class="lede">Three things, then it uploads your ranked matches by itself.</p>
               <ol class="steps">
-                <li id="setup-token">
+                <li>
                   <div><b>Host token</b><span class="muted">From an admin. Kept on this PC, encrypted.</span></div>
                   <button type="button" id="setup-token-add">Add token</button>
                 </li>
@@ -70,7 +70,7 @@
                   <div><b>Workshop log folder</b><span class="muted" id="setup-folder-state"></span></div>
                   <button type="button" class="quiet" id="setup-folder-choose">Choose folder</button>
                 </li>
-                <li id="setup-logs">
+                <li>
                   <div><b>Log files on in the game</b><span class="muted">Overwatch options → Gameplay → General → Enable Workshop Inspector Log File.</span></div>
                 </li>
               </ol>
@@ -262,7 +262,7 @@
                   <select id="region"></select>
                   <span class="status" id="region-status" role="status"></span>
                 </div>
-                <details class="hint" id="region-note">
+                <details class="hint">
                   <summary>The region you host in now. <span class="more">More</span></summary>
                   <p>Ranked keeps EU and NA apart: switch it before you host in the other one. Your matches upload as it, the live lobby is listed in it, and the ranked code gets its rank tags. Your home region is the one an admin set for you.</p>
                 </details>
@@ -326,7 +326,7 @@
                 <p id="overlay-state" role="status" hidden></p>
               </div>
 
-              <div class="group" id="overlay-options">
+              <div class="group">
                 <h2>Widgets</h2>
                 <div class="widget-groups" id="overlay-widgets"></div>
               </div>
@@ -413,7 +413,7 @@
             <div class="pane" id="pane-advanced" hidden>
               <p class="note">The defaults suit most hosts. Change these when an admin asks, or to look into a problem.</p>
 
-              <div class="group" id="timing">
+              <div class="group">
                 <h2>Timing</h2>
                 <form id="advanced-form" novalidate>
                   <div id="tunables"></div>
@@ -426,7 +426,7 @@
                 <p class="note">Leave a value empty for its default.</p>
               </div>
 
-              <div class="group" id="release">
+              <div class="group">
                 <h2>Ranked code release</h2>
                 <form id="release-form">
                   <label for="release-tag">Genji Ball release</label>

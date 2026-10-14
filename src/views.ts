@@ -4,6 +4,8 @@
  * (#35) the same way.
  */
 
+import { el } from "./dom";
+
 export const VIEWS = ["home", "match", "uploads", "tourneys", "settings"] as const;
 export type View = (typeof VIEWS)[number];
 
@@ -43,12 +45,6 @@ function store(key: string, value: string): void {
 let current: View | null = null;
 let currentPane: Pane | null = null;
 const listeners: ((view: View) => void)[] = [];
-
-function el(id: string): HTMLElement {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`#${id} is missing from index.html`);
-  return found;
-}
 
 /** Shows `shown`'s panel only, and marks its button. */
 function mark<T extends string>(names: readonly T[], shown: T, panel: (name: T) => string, nav: (name: T) => string): void {

@@ -4,6 +4,7 @@
  * lobby and the last upload. A first start (no token yet) shows a short setup instead.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { el, node, type Tone } from "./dom";
 import { ago, headline, matchInProgress, problems, type Fix, type HomeInput } from "./home-model";
 import { setTitlebarState } from "./titlebar";
 import { markView, onViewChange } from "./views";
@@ -13,8 +14,6 @@ interface LiveFile {
   file: string;
   writtenAt: string;
 }
-
-type Tone = "good" | "bad" | "muted";
 
 /** What Home shows, from the rest of the window. */
 export interface HomeState extends HomeInput {
@@ -39,19 +38,6 @@ let liveFile: LiveFile | null = null;
 let liveFileError: string | null = null;
 /** The last upload shown, so a new one is marked once (`undefined` before the first). */
 let shownUpload: string | undefined;
-
-function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`#${id} is missing from index.html`);
-  return found as T;
-}
-
-function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = "", className = ""): HTMLElementTagNameMap[K] {
-  const found = document.createElement(tag);
-  if (text) found.textContent = text;
-  if (className) found.className = className;
-  return found;
-}
 
 function liveLog(state: HomeState): string {
   if (!state.logFolder) return "No Documents folder found";

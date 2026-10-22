@@ -4,7 +4,7 @@
  * worked out in `uploads-model.ts`.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { el } from "./dom";
+import { el, node } from "./dom";
 import { flash } from "./home-view";
 import { watchLog, type LogWatch } from "./match-view";
 import { tourneyLabel } from "./tourneys-view";
@@ -56,22 +56,16 @@ function renderUploadRegion(status: UploadStatus): void {
     line.textContent = "Uploading as your home region.";
     return;
   }
-  const strong = document.createElement("strong");
-  strong.textContent = context().regionLabel(status.region);
-  line.replaceChildren("Uploading as ", strong, status.chosenRegion ? "." : " (your home region).");
+  line.replaceChildren("Uploading as ", node("strong", context().regionLabel(status.region)), status.chosenRegion ? "." : " (your home region).");
 }
+
 function span(text: string, className: string): HTMLSpanElement {
-  const found = document.createElement("span");
-  found.className = className;
-  found.textContent = text;
-  return found;
+  return node("span", text, className);
 }
 
 function button(text: string, action: () => Promise<void>): HTMLButtonElement {
-  const found = document.createElement("button");
+  const found = node("button", text, "quiet");
   found.type = "button";
-  found.className = "quiet";
-  found.textContent = text;
   found.addEventListener("click", () => {
     el("uploads-error").hidden = true;
     void context().busy(action, showUploadsError);
@@ -80,7 +74,7 @@ function button(text: string, action: () => Promise<void>): HTMLButtonElement {
 }
 
 function historyItem(entry: HistoryEntry): HTMLLIElement {
-  const item = document.createElement("li");
+  const item = node("li");
   const regions = entry.answer ? answerRegions(entry.answer) : "";
   const at = entry.at ? new Date(entry.at).toLocaleString() : "Not uploaded yet";
   item.append(span(entry.file, "path"), span(regions ? `${regions} · ${at}` : at, "muted"));
@@ -96,8 +90,7 @@ function historyItem(entry: HistoryEntry): HTMLLIElement {
   // A file uploaded before that grew since: what the server said to the shorter copy.
   if (entry.queued && answer) item.append(span(`Last upload: ${answer.text}`, "muted"));
 
-  const actions = document.createElement("div");
-  actions.className = "row";
+  const actions = node("div", "", "row");
   if (entry.queued?.kind === "failed") {
     actions.append(button("Retry now", () => invoke<void>("retry_upload", { file: entry.file })));
   }
@@ -118,10 +111,8 @@ const shownMatches = new Map<string, { box: HTMLElement; watch: LogWatch }>();
 /** "Show match": the file's matches as the server will read them, under its line. */
 function matchToggle(entry: HistoryEntry, item: HTMLLIElement): HTMLButtonElement {
   const open = shownMatches.has(entry.file);
-  const toggle = document.createElement("button");
+  const toggle = node("button", open ? "Hide match" : "Show match", "quiet");
   toggle.type = "button";
-  toggle.className = "quiet";
-  toggle.textContent = open ? "Hide match" : "Show match";
   toggle.setAttribute("aria-expanded", String(open));
   toggle.addEventListener("click", () => {
     const shown = shownMatches.get(entry.file);
@@ -129,7 +120,7 @@ function matchToggle(entry: HistoryEntry, item: HTMLLIElement): HTMLButtonElemen
       shown.watch.stop();
       shownMatches.delete(entry.file);
     } else {
-      const box = document.createElement("div");
+      const box = node("div");
       shownMatches.set(entry.file, { box, watch: watchLog(box, { kind: "file", file: entry.file }, () => context().matchViewPollSecs) });
     }
     const next = historyItem(entry);

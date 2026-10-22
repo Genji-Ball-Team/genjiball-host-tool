@@ -4,7 +4,7 @@
  * lobby and the last upload. A first start (no token yet) shows a short setup instead.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { el, node, type Tone } from "./dom";
+import { el, errorText, node, type Tone } from "./dom";
 import { ago, headline, matchInProgress, problems, type Fix, type HomeInput } from "./home-model";
 import { setTitlebarState } from "./titlebar";
 import { markView, onViewChange } from "./views";
@@ -113,14 +113,14 @@ export function flash(target: HTMLElement, elapsed = 0): void {
   target.classList.add("fresh");
 }
 
-/**
- * Reads the live log's name every `pollSecs` while the window shows, whatever the view: Home shows
- * it, and the title bar (on every view) pulses while it grows.
- */
 let timer: ReturnType<typeof setTimeout> | undefined;
 /** Counts restarts: a read from before the last one is dropped and reads no more, so one loop runs. */
 let run = 0;
 
+/**
+ * Reads the live log's name every `pollSecs` while the window shows, whatever the view: Home shows
+ * it, and the title bar (on every view) pulses while it grows.
+ */
 async function pollLiveFile(current: number): Promise<void> {
   if (!get) return;
   const state = get();
@@ -130,7 +130,7 @@ async function pollLiveFile(current: number): Promise<void> {
     try {
       found = await invoke<LiveFile | null>("get_live_file");
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = errorText(err);
     }
     if (current !== run) return;
     liveFile = found;

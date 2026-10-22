@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { el } from "./dom";
+import { el, node } from "./dom";
 import { toast } from "./toast";
 
 /**
@@ -131,15 +131,12 @@ function widgetGroups(container: HTMLElement, on: string[], stream: boolean): vo
   container.replaceChildren();
   const groups = [...new Set(view!.widgets.map((w) => w.group))];
   for (const group of groups) {
-    const box = document.createElement("fieldset");
-    const legend = document.createElement("legend");
-    legend.textContent = group;
-    box.append(legend);
+    const box = node("fieldset");
+    box.append(node("legend", group));
     for (const widget of view!.widgets.filter((w) => w.group === group)) {
-      const label = document.createElement("label");
-      label.className = "check";
+      const label = node("label", "", "check");
       label.title = widget.help;
-      const input = document.createElement("input");
+      const input = node("input");
       input.type = "checkbox";
       input.checked = on.includes(widget.key);
       input.addEventListener("change", () => {
@@ -150,11 +147,7 @@ function widgetGroups(container: HTMLElement, on: string[], stream: boolean): vo
           return stream ? { streamWidgets: map } : { widgets: map };
         });
       });
-      const text = document.createElement("span");
-      text.textContent = widget.label;
-      const help = document.createElement("small");
-      help.textContent = widget.help;
-      label.append(input, text, help);
+      label.append(input, node("span", widget.label), node("small", widget.help));
       box.append(label);
     }
     container.append(box);
@@ -170,12 +163,10 @@ function hotkeyInputs(): void {
   const container = el("overlay-hotkeys");
   container.replaceChildren();
   for (const hotkey of view!.hotkeys) {
-    const label = document.createElement("label");
-    label.textContent = hotkey.label;
-    const input = document.createElement("input");
+    const label = node("label", hotkey.label);
+    const input = node("input", "", "hotkey");
     input.type = "text";
     input.readOnly = true;
-    input.className = "hotkey";
     input.value = hotkey.keys ?? "";
     input.placeholder = "None";
     input.setAttribute("aria-label", `${hotkey.label}: press the keys`);
@@ -192,10 +183,8 @@ function hotkeyInputs(): void {
       input.value = keys;
       void save((current) => ({ hotkeys: hotkeysWith(current, hotkey.action, keys) }), keys ? `${hotkey.label}: ${keys}` : `${hotkey.label}: none`);
     });
-    const reset = document.createElement("button");
+    const reset = node("button", "Default", "quiet");
     reset.type = "button";
-    reset.className = "quiet";
-    reset.textContent = "Default";
     // Kept in the grid when hidden, so the rows stay lined up.
     reset.style.visibility = hotkey.keys === hotkey.default ? "hidden" : "";
     reset.addEventListener("click", () => {

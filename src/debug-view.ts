@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { el, type Tone } from "./dom";
+import { el, errorText, node, type Tone } from "./dom";
 import { watchLog, type LogWatch } from "./match-view";
 
 /**
@@ -75,13 +75,6 @@ export function prettyBody(body: string): string {
   }
 }
 
-function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, className = ""): HTMLElementTagNameMap[K] {
-  const found = document.createElement(tag);
-  found.textContent = text;
-  if (className) found.className = className;
-  return found;
-}
-
 function describeQueued(queued: Queued): string {
   switch (queued.state.kind) {
     case "playing":
@@ -99,7 +92,7 @@ const shownMatches = new Map<string, { box: HTMLElement; watch: LogWatch }>();
 const attemptKey = (attempt: Attempt) => `${attempt.at}|${attempt.serverUrl}|${attempt.file}`;
 
 function attemptItem(attempt: Attempt, pollSecs: () => number): HTMLLIElement {
-  const item = document.createElement("li");
+  const item = node("li");
   const kb = (attempt.bytes / 1024).toFixed(1);
   item.append(node("span", attempt.file, "path"), node("span", `${new Date(attempt.at).toLocaleTimeString()} · ${kb} KB`, "muted"));
   const outcome = describeOutcome(attempt.outcome);
@@ -120,15 +113,14 @@ function attemptItem(attempt: Attempt, pollSecs: () => number): HTMLLIElement {
       open.watch.stop();
       shownMatches.delete(key);
     } else {
-      const box = document.createElement("div");
+      const box = node("div");
       shownMatches.set(key, { box, watch: watchLog(box, { kind: "file", file: attempt.file }, pollSecs) });
     }
     const next = attemptItem(attempt, pollSecs);
     item.replaceWith(next);
     next.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
   });
-  const actions = document.createElement("div");
-  actions.className = "row";
+  const actions = node("div", "", "row");
   actions.append(toggle);
   item.append(actions);
   if (shown) item.append(shown.box);
@@ -136,7 +128,7 @@ function attemptItem(attempt: Attempt, pollSecs: () => number): HTMLLIElement {
 }
 
 function eventItem(line: string): HTMLLIElement {
-  const item = document.createElement("li");
+  const item = node("li");
   const { time, event, fields } = eventParts(line);
   item.append(node("span", time, "muted"));
   if (event) item.append(node("b", event), node("span", fields.join(" | ")));
@@ -184,7 +176,7 @@ export function watchDebug(pollSecs: () => number): { stop(): void } {
         drawn = "";
         const error = el("debug-error");
         error.hidden = false;
-        error.textContent = err instanceof Error ? err.message : String(err);
+        error.textContent = errorText(err);
       }
     }
     if (!stopped) timer = setTimeout(() => void tick(), pollSecs() * 1000);

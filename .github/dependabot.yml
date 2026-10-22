@@ -1,0 +1,26 @@
+# Monthly version updates: minor and patch bumps in one PR per ecosystem, majors on their own.
+# The Tauri npm packages (@tauri-apps/*) and crates (tauri, tauri-plugin-*) must stay on matching
+# versions, but Dependabot can't group across ecosystems: merge the npm and cargo PRs together.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm:
+        update-types: [minor, patch]
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

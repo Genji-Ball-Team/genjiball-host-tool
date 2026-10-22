@@ -335,6 +335,16 @@ impl Settings {
         Duration::from_secs(self.get(tunable))
     }
 
+    /// How long a request to the server or GitHub may take.
+    pub fn request_timeout(&self) -> Duration {
+        self.secs(&config::REQUEST_TIMEOUT_SECS)
+    }
+
+    /// The Workshop log folder in use, if it's there.
+    pub fn existing_log_folder(&self) -> Option<crate::log_folder::LogFolder> {
+        crate::log_folder::existing(self.log_folder.as_deref())
+    }
+
     /// The log level the host picked, or the default.
     pub fn log_level(&self) -> &str {
         self.log_level

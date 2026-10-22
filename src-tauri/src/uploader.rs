@@ -513,7 +513,7 @@ impl Run {
         let settings = store.get();
         let server_url = settings.server_url().to_string();
         self.tracker.timing = Timing::new(&settings);
-        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let timeout = settings.request_timeout();
         let refresh_every = settings.secs(&config::STATUS_REFRESH_SECS);
         let chosen_region = settings.region.clone();
         let mut status = UploadStatus {
@@ -561,7 +561,7 @@ impl Run {
             return finish(self, None, status);
         }
 
-        let Some(folder) = log_folder::existing(settings.log_folder.as_deref()) else {
+        let Some(folder) = settings.existing_log_folder() else {
             status.problem = Some(Problem::NoFolder);
             return finish(self, None, status);
         };

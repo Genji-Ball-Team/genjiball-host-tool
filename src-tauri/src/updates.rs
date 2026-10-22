@@ -107,7 +107,7 @@ pub async fn check(app: &AppHandle) -> UpdateStatus {
     let found = loop {
         let switches = updates.switches.load(Ordering::Acquire);
         let settings = app.state::<Store>().get();
-        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let timeout = settings.request_timeout();
         let prerelease = settings.update_channel() == "prerelease";
         // The timeout wraps the check rather than going on the updater: there it would also cut
         // the download of the installer short.

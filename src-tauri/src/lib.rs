@@ -374,7 +374,7 @@ async fn check_saved_token(
         .ok_or("No host token saved for this server")?;
     // The listed matches' status too: "Check again" after an admin accepted one.
     uploader.refresh();
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let timeout = settings.request_timeout();
     let check = server::check_token(&server_url, &token, timeout).await;
     log::info!("Token check for {server_url}: {}", check.summary());
     if matches!(check, TokenCheck::Ok { .. }) {
@@ -401,7 +401,7 @@ async fn save_token(
     }
     let settings = store.get();
     let server_url = settings.server_url().to_string();
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let timeout = settings.request_timeout();
     let check = server::check_token(&server_url, token, timeout).await;
     log::info!("New token for {server_url}: {}", check.summary());
     if !check.is_rejected() {
@@ -445,7 +445,7 @@ fn get_upload_status(uploader: State<Uploader>) -> UploadStatus {
 #[tauri::command]
 fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader>) -> Page {
     let settings = store.get();
-    let folder = log_folder::existing(settings.log_folder.as_deref());
+    let folder = settings.existing_log_folder();
     uploader.history(
         settings.server_url(),
         folder.as_ref().map(|f| f.path.as_path()),
@@ -458,7 +458,7 @@ fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader
 #[tauri::command]
 fn set_afk(on: bool, store: State<Store>, uploader: State<Uploader>) -> Result<AfkStatus, String> {
     let settings = store.get();
-    let started = match log_folder::existing(settings.log_folder.as_deref()) {
+    let started = match settings.existing_log_folder() {
         Some(folder) => live_round_starts(&folder.path)?,
         None => Vec::new(),
     };
@@ -488,7 +488,9 @@ fn live_round_starts(folder: &Path) -> Result<Vec<log_scan::RoundStart>, String>
 
 /// The log folder in use, if it's there.
 fn current_log_folder(store: &Store) -> Result<PathBuf, String> {
-    log_folder::existing(store.get().log_folder.as_deref())
+    store
+        .get()
+        .existing_log_folder()
         .map(|f| f.path)
         .ok_or_else(|| "The Workshop log folder isn't there yet".to_string())
 }
@@ -714,7 +716,7 @@ struct DebugInfo {
 #[tauri::command]
 fn get_debug(store: State<Store>, uploader: State<Uploader>) -> DebugInfo {
     let settings = store.get();
-    let folder = log_folder::existing(settings.log_folder.as_deref());
+    let folder = settings.existing_log_folder();
     let folder = folder.as_ref().map(|f| f.path.as_path());
     let (events, events_error) =
         match folder.map(|f| debug::live_events(f, config::DEBUG_EVENTS_SHOWN)) {
@@ -813,7 +815,7 @@ async fn export_diagnostics(
     let settings = store.get();
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let log_dir = app.path().app_log_dir().ok();
-    let workshop = log_folder::existing(settings.log_folder.as_deref());
+    let workshop = settings.existing_log_folder();
     // Blanked out wherever they turn up. Tokens never go in these files; this makes sure.
     let mut secrets = Vec::new();
     for server_url in [settings.server_url(), config::DEFAULT_SERVER_URL] {
@@ -945,7 +947,7 @@ async fn ranked_code(store: &Store, releases: &ReleaseCache) -> Result<RankedCod
     let settings = store.get();
     let server_url = settings.server_url().to_string();
     let keep = settings.secs(&config::RELEASE_CACHE_SECS);
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let timeout = settings.request_timeout();
     let region = match &settings.region {
         Some(region) => Some(region.clone()),
         None => home_region(store, &server_url, timeout).await?,
@@ -998,7 +1000,7 @@ async fn build_code(
 ) -> Result<BuiltCode, String> {
     let server_url = settings.server_url();
     let keep = settings.secs(&config::RELEASE_CACHE_SECS);
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let timeout = settings.request_timeout();
     let (release, base) = releases
         .get(settings.release_tag.as_deref(), keep, timeout)
         .await?;
@@ -1117,7 +1119,7 @@ async fn tourney_code(
 ) -> Result<TourneyCode, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let timeout = settings.request_timeout();
     let token = store
         .tokens
         .get(&server_url)?
@@ -1248,7 +1250,7 @@ async fn change_screenshot(
 ) -> Result<TourneysStatus, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
-    let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+    let timeout = settings.request_timeout();
     let token = store
         .tokens
         .get(&server_url)?

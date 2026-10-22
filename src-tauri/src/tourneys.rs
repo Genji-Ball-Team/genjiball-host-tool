@@ -125,7 +125,7 @@ impl Run {
         let settings = store.get();
         let server_url = settings.server_url().to_string();
         let every = settings.secs(&config::TOURNEY_POLL_SECS);
-        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let timeout = settings.request_timeout();
         let mut status = TourneysStatus {
             server_url: server_url.clone(),
             ..TourneysStatus::default()

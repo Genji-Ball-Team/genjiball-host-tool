@@ -93,6 +93,13 @@ impl Store {
         }
     }
 
+    /// The token saved for `server_url`, or why there is none.
+    fn saved_token(&self, server_url: &str) -> Result<String, String> {
+        self.tokens
+            .get(server_url)?
+            .ok_or_else(|| "No host token saved for this server".to_string())
+    }
+
     /// `load_error`, after reading the file again: a file fixed by hand counts as soon as it's saved.
     fn load_error(&self) -> Option<String> {
         let mut settings = self.settings.lock().unwrap();
@@ -368,10 +375,7 @@ async fn check_saved_token(
 ) -> Result<TokenCheck, String> {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
-    let token = store
-        .tokens
-        .get(&server_url)?
-        .ok_or("No host token saved for this server")?;
+    let token = store.saved_token(&server_url)?;
     // The listed matches' status too: "Check again" after an admin accepted one.
     uploader.refresh();
     let timeout = settings.request_timeout();
@@ -1120,10 +1124,7 @@ async fn tourney_code(
     let settings = store.get();
     let server_url = settings.server_url().to_string();
     let timeout = settings.request_timeout();
-    let token = store
-        .tokens
-        .get(&server_url)?
-        .ok_or("No host token saved for this server")?;
+    let token = store.saved_token(&server_url)?;
     // Asked now: the code values are only there while the window is open, and an admin may have
     // changed the lobby since the list was read.
     let list = server::host_tourneys(&server_url, &token, timeout)
@@ -1251,10 +1252,7 @@ async fn change_screenshot(
     let settings = store.get();
     let server_url = settings.server_url().to_string();
     let timeout = settings.request_timeout();
-    let token = store
-        .tokens
-        .get(&server_url)?
-        .ok_or("No host token saved for this server")?;
+    let token = store.saved_token(&server_url)?;
     let what = match &image {
         Some((bytes, kind)) => format!("Uploading a {kind} of {} bytes", bytes.len()),
         None => "Deleting".into(),

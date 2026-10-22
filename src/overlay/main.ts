@@ -47,6 +47,7 @@ let sizeSave: number | undefined;
 
 const layoutNow = (): Layout => pending?.layout ?? feed?.layout ?? {};
 const sizesNow = (): Sizes => pending?.sizes ?? feed?.sizes ?? {};
+const sizeRangeNow = (): [number, number, number] => feed?.sizeRange ?? [0.5, 2.5, 0.1];
 const canEdit = () => Boolean(feed?.editing && source.saveLayout);
 
 /** Reads the feed: the timer, change events, saves and menu actions all go through here, never two at once. */
@@ -191,7 +192,7 @@ async function save(layout: Layout, sizes: Sizes): Promise<void> {
 
 /** A size kept in range, on whole percents. */
 function clampSize(value: number): number {
-  const [min, max] = feed?.sizeRange ?? [0.5, 2.5, 0.1];
+  const [min, max] = sizeRangeNow();
   return Math.round(Math.min(max, Math.max(min, value)) * 100) / 100;
 }
 
@@ -270,7 +271,7 @@ function grip(key: string): HTMLElement {
 function wheel(e: WheelEvent, key: string): void {
   if (!canEdit() || !e.ctrlKey) return;
   e.preventDefault();
-  const step = feed?.sizeRange[2] ?? 0.1;
+  const [, , step] = sizeRangeNow();
   resize(key, (sizesNow()[key] ?? 1) + (e.deltaY < 0 ? step : -step), true);
 }
 
@@ -291,7 +292,7 @@ function openMenu(e: MouseEvent): void {
   const items: HTMLElement[] = [];
   if (key) {
     const current = sizesNow()[key] ?? 1;
-    const [min, max, step] = feed?.sizeRange ?? [0.5, 2.5, 0.1];
+    const [min, max, step] = sizeRangeNow();
     items.push(
       h("p", "menu-title", widgetLabels[key] ?? key, h("span", "soft", ` ${Math.round(current * 100)}%`)),
       item("Bigger", () => resize(key, current + step), current >= max),

@@ -40,6 +40,12 @@ export const docks: Record<string, "left" | "right" | "top"> = {
   matchSummary: "top",
 };
 
+/** A widget's content and the tone it's drawn in. */
+interface Drawn {
+  tone: Tone;
+  body: HTMLElement;
+}
+
 type Child = Node | string | null | false | undefined;
 
 /** An element with a class and children. */
@@ -58,7 +64,7 @@ function signed(change: number): string {
 }
 
 /** The widget's content, `null` when it has nothing to say now (then it's hidden). */
-export function draw(key: string, model: OverlayModel): { tone: Tone; body: HTMLElement } | null {
+export function draw(key: string, model: OverlayModel): Drawn | null {
   switch (key) {
     case "logging":
       return status(model.logging);
@@ -91,18 +97,18 @@ export function draw(key: string, model: OverlayModel): { tone: Tone; body: HTML
   }
 }
 
-function status(line: StatusLine): { tone: Tone; body: HTMLElement } {
+function status(line: StatusLine): Drawn {
   return { tone: line.tone, body: h("div", "status", h("span", "dot"), h("div", null, h("p", "title", line.title), line.detail && h("p", "detail", line.detail))) };
 }
 
-function afk(keys: string | null): { tone: Tone; body: HTMLElement } {
+function afk(keys: string | null): Drawn {
   return {
     tone: "bad",
     body: h("div", "afk", h("p", "title", "AFK: your rating is frozen"), h("p", "detail", keys ? `Rounds that start don't count for you. ${keys} turns it off` : "Rounds that start don't count for you")),
   };
 }
 
-function logCopies(count: number): { tone: Tone; body: HTMLElement } {
+function logCopies(count: number): Drawn {
   const text = count === 1 ? "This match is in one log file" : `This match is split over ${count} log files`;
   return { tone: count === 1 ? "good" : "idle", body: h("div", "status", h("span", "dot"), h("div", null, h("p", "title", text), count > 1 && h("p", "detail", "The server keeps the longest copy"))) };
 }
@@ -114,7 +120,7 @@ function tierChip(tier: { label: string; color: [number, number, number] } | nul
   return chip;
 }
 
-function roster(r: NonNullable<OverlayModel["roster"]>): { tone: Tone; body: HTMLElement } {
+function roster(r: NonNullable<OverlayModel["roster"]>): Drawn {
   const rows = r.players.map((p) => {
     const rating =
       p.rating !== null ? h("span", "num", whole(p.rating)) : p.state === "unknown" ? h("span", "new", "New") : h("span", "num faint", "…");
@@ -140,7 +146,7 @@ function roster(r: NonNullable<OverlayModel["roster"]>): { tone: Tone; body: HTM
   return { tone: r.doubled ? "warn" : "idle", body: h("div", "roster", head, h("ol", null, ...rows), ...notes) };
 }
 
-function eliminations(e: NonNullable<OverlayModel["eliminations"]>): { tone: Tone; body: HTMLElement } {
+function eliminations(e: NonNullable<OverlayModel["eliminations"]>): Drawn {
   const rows = e.out.map((o, i) => h("li", null, h("span", "num faint", `${i + 1}`), h("span", "name", o.name), h("span", "by", o.by ? `by ${o.by}` : "fell")));
   return {
     tone: "idle",
@@ -169,7 +175,7 @@ const seenKills = new Set<string>();
 function killFeed(kills: Kill[]): HTMLElement {
   const rows = kills.map((k) => {
     const chain = k.chain.length > 1 ? k.chain.slice(0, -1).map((name) => h("span", "via", name)) : [];
-    const row = h(
+    return h(
       "li",
       seenKills.has(k.key) ? null : "fresh",
       ...chain,
@@ -177,13 +183,12 @@ function killFeed(kills: Kill[]): HTMLElement {
       h("span", "victim", k.victim),
       k.speed !== null && h("span", "speed num", whole(k.speed)),
     );
-    return row;
   });
   for (const k of kills) seenKills.add(k.key);
   return h("ol", "feed", ...rows);
 }
 
-function roundResult(r: NonNullable<OverlayModel["roundResult"]>): { tone: Tone; body: HTMLElement } {
+function roundResult(r: NonNullable<OverlayModel["roundResult"]>): Drawn {
   if (r.result !== "WIN") {
     const why = r.result === "NONE" ? "Everyone went out: the round starts again" : "The round was stopped";
     return { tone: "warn", body: h("div", "result", h("header", null, h("h2", null, `Round ${r.number}`)), h("p", "soft", why)) };
@@ -201,7 +206,7 @@ function roundResult(r: NonNullable<OverlayModel["roundResult"]>): { tone: Tone;
   };
 }
 
-function summary(s: NonNullable<OverlayModel["matchSummary"]>): { tone: Tone; body: HTMLElement } {
+function summary(s: NonNullable<OverlayModel["matchSummary"]>): Drawn {
   const anyRating = s.rows.some((p) => p.ratingAfter !== null);
   const rows = s.rows.map((p) => {
     const change =
@@ -238,7 +243,7 @@ function summary(s: NonNullable<OverlayModel["matchSummary"]>): { tone: Tone; bo
   };
 }
 
-function session(s: NonNullable<OverlayModel["session"]>): { tone: Tone; body: HTMLElement } {
+function session(s: NonNullable<OverlayModel["session"]>): Drawn {
   const stat = (value: string, label: string) => h("div", "stat", h("span", "num big", value), h("span", "soft", label));
   const change =
     s.hostChange !== null && h("div", "stat", h("span", `num big change ${s.hostChange >= 0 ? "up" : "down"}`, signed(s.hostChange)), h("span", "soft", "your rating"));
@@ -253,7 +258,7 @@ function session(s: NonNullable<OverlayModel["session"]>): { tone: Tone; body: H
   };
 }
 
-function tourney(t: NonNullable<OverlayModel["tourney"]>): { tone: Tone; body: HTMLElement } {
+function tourney(t: NonNullable<OverlayModel["tourney"]>): Drawn {
   const progress = t.limit !== null ? `Round ${t.round} of ${t.limit}` : `Round ${t.round}`;
   const bar = h("div", "bar");
   if (t.limit) bar.style.setProperty("--done", `${Math.min(1, t.round / t.limit)}`);

@@ -155,6 +155,9 @@ export function overlayModel(feed: Feed, log: ReadLog, now: number): OverlayMode
   };
 }
 
+/** Player names match without regard to case, as on the server. */
+const nameKey = (name: string) => name.toLowerCase();
+
 function names(match: ParsedMatch | null): (id: number | null) => string | null {
   const byId = new Map(match?.players.map((p) => [p.id, p.name]));
   return (id) => (id === null ? null : (byId.get(id) ?? `#${id}`));
@@ -245,11 +248,10 @@ function rankedCode(feed: Feed, now: number): StatusLine {
 }
 
 function roster(lobby: ParsedMatch["players"], ratings: PlayerRating[]): Roster {
-  const key = (name: string) => name.toLowerCase();
   const counts = new Map<string, number>();
-  for (const p of lobby) counts.set(key(p.name), (counts.get(key(p.name)) ?? 0) + 1);
+  for (const p of lobby) counts.set(nameKey(p.name), (counts.get(nameKey(p.name)) ?? 0) + 1);
   const players: RosterPlayer[] = lobby.map((p) => {
-    const rating = ratings.find((r) => key(r.name) === key(p.name));
+    const rating = ratings.find((r) => nameKey(r.name) === nameKey(p.name));
     const standing = rating?.standing ?? null;
     return {
       name: p.name,
@@ -258,7 +260,7 @@ function roster(lobby: ParsedMatch["players"], ratings: PlayerRating[]): Roster 
       rating: standing?.rating ?? null,
       rank: standing?.rank ?? null,
       tier: standing?.tier ?? null,
-      doubled: (counts.get(key(p.name)) ?? 0) > 1,
+      doubled: (counts.get(nameKey(p.name)) ?? 0) > 1,
     };
   });
   // Best first; unrated last, in join order.
@@ -304,9 +306,8 @@ function roundResult(round: ParsedRound | undefined, nameOf: (id: number | null)
 }
 
 function summary(match: ParsedMatch, view: MatchView, result: MatchResult | null, nameOf: (id: number | null) => string | null): MatchSummary {
-  const key = (name: string) => name.toLowerCase();
   const rows = view.players.map((p) => {
-    const rated = result?.players.find((r) => key(r.name) === key(p.name));
+    const rated = result?.players.find((r) => nameKey(r.name) === nameKey(p.name));
     return { ...placing(p), ratingBefore: rated?.ratingBefore ?? null, ratingAfter: rated?.ratingAfter ?? null };
   });
   const top = match.deflects.reduce<(typeof match.deflects)[number] | null>((best, d) => (!best || d.speed > best.speed ? d : best), null);
@@ -322,12 +323,11 @@ function session(feed: Feed, match: ParsedMatch | null): Session | null {
   const { matches, results } = feed.session;
   if (matches === 0 && results.length === 0) return null;
   const host = match?.players.find((p) => p.host)?.name ?? null;
-  const key = (name: string) => name.toLowerCase();
-  const players = new Set(results.flatMap((r) => r.players.map((p) => key(p.name))));
+  const players = new Set(results.flatMap((r) => r.players.map((p) => nameKey(p.name))));
   let hostChange: number | null = null;
   if (host) {
     for (const r of results) {
-      const me = r.players.find((p) => key(p.name) === key(host));
+      const me = r.players.find((p) => nameKey(p.name) === nameKey(host));
       if (me?.ratingBefore != null && me.ratingAfter != null) hostChange = (hostChange ?? 0) + me.ratingAfter - me.ratingBefore;
     }
   }

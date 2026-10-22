@@ -15,7 +15,7 @@ use tokio::sync::Notify;
 use crate::lobby::{self, Heartbeat, Live, LogFile, Schedule, Step, Watch};
 use crate::server::{self, ListedLobby, LobbyOutcome};
 use crate::settings::Settings;
-use crate::{config, log_folder, watcher, Store};
+use crate::{config, watcher, Store};
 
 /// The event the window listens to for `LobbyStatus`.
 pub const STATUS_EVENT: &str = "lobby-status";
@@ -161,7 +161,7 @@ impl Run {
         let settings_error = store.load_error();
         let settings = store.get();
         let server_url = settings.server_url().to_string();
-        let timeout = settings.secs(&config::REQUEST_TIMEOUT_SECS);
+        let timeout = settings.request_timeout();
         let mut status = LobbyStatus {
             server_url: server_url.clone(),
             on: settings.live_lobby_on(),
@@ -249,7 +249,8 @@ impl Run {
                 return Err(Some(LobbyProblem::TokenRejected { revoked: *revoked }));
             }
         }
-        let folder = log_folder::existing(settings.log_folder.as_deref())
+        let folder = settings
+            .existing_log_folder()
             .ok_or(Some(LobbyProblem::NoFolder))?;
         let newest = watcher::newest_log(&folder.path).map_err(|e| {
             Some(LobbyProblem::FolderUnreadable {

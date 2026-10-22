@@ -24,7 +24,7 @@ use crate::ratings::{Job, PlayerRating, Ratings};
 use crate::server::{self, MatchResult};
 use crate::tourneys::Tourneys;
 use crate::uploader::{Problem, Uploader};
-use crate::{config, log_folder, log_scan, Store};
+use crate::{config, log_scan, Store};
 
 /// What the overlay keeps while the tool runs.
 pub struct OverlayState {
@@ -169,7 +169,7 @@ pub fn feed(app: &AppHandle, request: &FeedRequest, stream: bool) -> Feed {
     let settings = store.get();
     let server_url = settings.server_url().to_string();
     let widgets = settings.overlay.widgets_on(stream);
-    let folder = log_folder::existing(settings.log_folder.as_deref());
+    let folder = settings.existing_log_folder();
 
     let (log, log_written_at, log_error) = match &folder {
         None => (
@@ -314,10 +314,7 @@ fn run_jobs(app: &AppHandle, scope: (String, Option<String>), jobs: Vec<Job>) {
         let app = app.clone();
         let scope = scope.clone();
         tauri::async_runtime::spawn(async move {
-            let timeout = app
-                .state::<Store>()
-                .get()
-                .secs(&config::REQUEST_TIMEOUT_SECS);
+            let timeout = app.state::<Store>().get().request_timeout();
             let (server_url, region) = (&scope.0, scope.1.as_deref());
             let state = app.state::<OverlayState>();
             let ratings = &state.ratings;

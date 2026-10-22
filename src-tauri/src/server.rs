@@ -493,6 +493,16 @@ fn unreachable(e: reqwest::Error) -> String {
     format!("Couldn't reach the server: {}", e.without_url())
 }
 
+/// An answer's body. One that can't be read is empty when `status` is among `enough`: the
+/// status alone says all there is to say.
+async fn body_of(response: reqwest::Response, enough: &[u16]) -> Result<String, reqwest::Error> {
+    let status = response.status().as_u16();
+    match response.text().await {
+        Err(_) if enough.contains(&status) => Ok(String::new()),
+        body => body,
+    }
+}
+
 /// An answer's `Retry-After`, as sent.
 fn retry_after(response: &reqwest::Response) -> Option<String> {
     response
@@ -622,11 +632,8 @@ pub async fn host_tourneys(
         .map_err(failed)?;
     let status = response.status().as_u16();
     log::debug!("{server_url} answered {status} to the tourney list");
-    match response.text().await {
-        Ok(body) => read_host_tourneys(status, &body),
-        Err(_) if matches!(status, 401 | 403) => read_host_tourneys(status, ""),
-        Err(e) => Err(failed(e)),
-    }
+    let body = body_of(response, &[401, 403]).await.map_err(failed)?;
+    read_host_tourneys(status, &body)
 }
 
 #[derive(Deserialize)]
@@ -895,17 +902,14 @@ pub async fn upload(
         info.file_name
     );
     let retry_after = retry_after(&response);
-    let (outcome, body) = match response.text().await {
-        Ok(body) => (read_upload(status, retry_after.as_deref(), &body), body),
-        // The status alone says the token or the file won't do: the body only explains it. Not a
-        // `422`: only its body tells a refused file from `no_region`, which is never recorded.
-        Err(_) if matches!(status, 401 | 403 | 413) => {
-            (read_upload(status, None, ""), String::new())
-        }
+    // The status alone says the token or the file won't do: the body only explains it. Not a
+    // `422`: only its body tells a refused file from `no_region`, which is never recorded.
+    let body = match body_of(response, &[401, 403, 413]).await {
+        Ok(body) => body,
         Err(e) => return retry(e),
     };
     Uploaded {
-        outcome,
+        outcome: read_upload(status, retry_after.as_deref(), &body),
         answer: Some(RawAnswer::new(status, &body)),
     }
 }
@@ -1035,12 +1039,9 @@ async fn lobby_request(request: reqwest::RequestBuilder, closing: bool) -> Lobby
     };
     let status = response.status().as_u16();
     let retry_after = retry_after(&response);
-    match response.text().await {
+    // The status alone says the token is turned down, or to wait.
+    match body_of(response, &[401, 403, 429]).await {
         Ok(body) => read_lobby(status, retry_after.as_deref(), &body, closing),
-        // The status alone says the token is turned down, or to wait.
-        Err(_) if matches!(status, 401 | 403 | 429) => {
-            read_lobby(status, retry_after.as_deref(), "", closing)
-        }
         Err(e) => failed(e),
     }
 }
@@ -1075,10 +1076,9 @@ pub async fn check_token(server_url: &str, token: &str, timeout: Duration) -> To
     };
     let status = response.status().as_u16();
     log::debug!("{server_url} answered {status} to a token check");
-    match response.text().await {
+    // The status alone says the token is turned down.
+    match body_of(response, &[401, 403]).await {
         Ok(body) => read_token_check(status, &body),
-        // The status alone says the token is turned down.
-        Err(_) if matches!(status, 401 | 403) => read_token_check(status, ""),
         Err(e) => failed(e),
     }
 }

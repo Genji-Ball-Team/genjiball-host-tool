@@ -3,6 +3,11 @@
 /** A status line's colour. */
 export type Tone = "good" | "bad" | "muted";
 
+/** An error as text: commands fail with strings, the browser with `Error`s. */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** The element with this id, which index.html must have. */
 export function el<T extends Element = HTMLElement>(id: string): T {
   const found = document.getElementById(id);

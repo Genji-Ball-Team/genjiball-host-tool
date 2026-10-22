@@ -4,6 +4,7 @@
  * around, and the app's own shortcuts: Ctrl+1 to Ctrl+5 switch views, Ctrl+Shift+C copies the
  * ranked code. Text selection and overscroll are turned off in the CSS.
  */
+import { errorText } from "./dom";
 import { VIEWS, type View } from "./views";
 
 /** The keys of a key press that matter here. */
@@ -54,7 +55,7 @@ export async function copyBuilt(code: string, keep: () => void = () => {}): Prom
     await navigator.clipboard.writeText(code);
   } catch (err) {
     keep();
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = errorText(err);
     throw new Error(`Built the code but couldn't copy it (${reason}). Click again to copy.`, { cause: err });
   }
 }

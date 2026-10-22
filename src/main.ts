@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { watchDebug } from "./debug-view";
 import { copyBuilt, setupDesktop } from "./desktop";
-import { el, fillSelect, node, setLine, type Tone } from "./dom";
+import { el, errorText, fillSelect, node, setLine, type Tone } from "./dom";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import type { Fix } from "./home-model";
@@ -589,7 +589,7 @@ async function busy(action: () => Promise<void>, showError: (message: string) =>
     await action();
   } catch (err) {
     // Commands fail with strings, the browser with `Error`s.
-    showError(err instanceof Error ? err.message : String(err));
+    showError(errorText(err));
   } finally {
     running -= 1;
     if (!running) setButtonsDisabled(false);

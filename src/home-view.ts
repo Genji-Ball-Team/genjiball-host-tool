@@ -4,7 +4,7 @@
  * lobby and the last upload. A first start (no token yet) shows a short setup instead.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { el, node, type Tone } from "./dom";
+import { el, errorText, node, type Tone } from "./dom";
 import { ago, headline, matchInProgress, problems, type Fix, type HomeInput } from "./home-model";
 import { setTitlebarState } from "./titlebar";
 import { markView, onViewChange } from "./views";
@@ -130,7 +130,7 @@ async function pollLiveFile(current: number): Promise<void> {
     try {
       found = await invoke<LiveFile | null>("get_live_file");
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = errorText(err);
     }
     if (current !== run) return;
     liveFile = found;

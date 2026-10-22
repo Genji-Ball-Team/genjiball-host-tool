@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { el, node, type Tone } from "./dom";
+import { el, errorText, node, type Tone } from "./dom";
 import { watchLog, type LogWatch } from "./match-view";
 
 /**
@@ -176,7 +176,7 @@ export function watchDebug(pollSecs: () => number): { stop(): void } {
         drawn = "";
         const error = el("debug-error");
         error.hidden = false;
-        error.textContent = err instanceof Error ? err.message : String(err);
+        error.textContent = errorText(err);
       }
     }
     if (!stopped) timer = setTimeout(() => void tick(), pollSecs() * 1000);

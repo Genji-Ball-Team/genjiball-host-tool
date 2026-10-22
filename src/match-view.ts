@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { node } from "./dom";
+import { errorText, node } from "./dom";
 import { readLog, type LogView, type MatchView, type PlayerView, type Reason, type RoundView } from "./match-model";
 
 /**
@@ -58,7 +58,7 @@ export function watchLog(box: HTMLElement, source: LogSource, pollSecs: () => nu
       } catch (err) {
         if (stopped) return;
         known = null;
-        box.replaceChildren(node("p", err instanceof Error ? err.message : String(err), "bad"));
+        box.replaceChildren(node("p", errorText(err), "bad"));
       }
     }
     if (!stopped) timer = setTimeout(() => void tick(), pollSecs() * 1000);

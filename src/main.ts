@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { watchDebug } from "./debug-view";
 import { copyBuilt, setupDesktop } from "./desktop";
-import { el, fillSelect, setLine, type Tone } from "./dom";
+import { el, fillSelect, node, setLine, type Tone } from "./dom";
 import { watchLog, type LogWatch } from "./match-view";
 import type { TourneysStatus } from "./tourney-model";
 import type { Fix } from "./home-model";
@@ -192,10 +192,9 @@ function renderDataCenters(): void {
   if (!box.childElementCount) {
     box.replaceChildren(
       ...state.dataCenters.map((d) => {
-        const label = document.createElement("label");
+        const label = node("label", regionLabel(d.region));
         label.htmlFor = `data-center-${d.region}`;
-        label.textContent = regionLabel(d.region);
-        const select = document.createElement("select");
+        const select = node("select");
         select.id = `data-center-${d.region}`;
         fillSelect(
           select,
@@ -219,8 +218,7 @@ function renderDataCenters(): void {
             },
           );
         });
-        const row = document.createElement("div");
-        row.className = "row";
+        const row = node("div", "", "row");
         row.append(label, select);
         return row;
       }),
@@ -270,6 +268,13 @@ function showCheck(check: TokenCheck): void {
   }
 }
 
+/** What a folder setting says about its folder: none found, not there yet, or where it came from. */
+function folderNote(folder: LogFolder | null, none: string, missing: string): string {
+  if (!folder) return none;
+  if (!folder.exists) return missing;
+  return folder.source === "detected" ? "Found automatically." : "Chosen by you.";
+}
+
 function render(): void {
   el("version").textContent = `v${state.version}`;
   const settingsError = el("settings-error");
@@ -296,24 +301,20 @@ function render(): void {
 
   const folder = state.logFolder;
   el("log-folder").textContent = folder?.path ?? "No Documents folder found";
-  el("log-folder-note").textContent = !folder
-    ? "Choose the folder Overwatch writes Workshop logs to."
-    : !folder.exists
-      ? "This folder isn't there yet. Overwatch creates it the first time the Workshop writes a log, once log files are on in the game's settings."
-      : folder.source === "detected"
-        ? "Found automatically."
-        : "Chosen by you.";
+  el("log-folder-note").textContent = folderNote(
+    folder,
+    "Choose the folder Overwatch writes Workshop logs to.",
+    "This folder isn't there yet. Overwatch creates it the first time the Workshop writes a log, once log files are on in the game's settings.",
+  );
   el("log-folder-reset").hidden = folder?.source !== "custom";
 
   const shots = state.screenshotFolder;
   el("screenshot-folder").textContent = shots?.path ?? "No Documents folder found";
-  el("screenshot-folder-note").textContent = !shots
-    ? "Choose the folder Overwatch saves screenshots to."
-    : !shots.exists
-      ? "This folder isn't there yet. Overwatch creates it with your first screenshot; if yours go elsewhere, choose that folder."
-      : shots.source === "detected"
-        ? "Found automatically."
-        : "Chosen by you.";
+  el("screenshot-folder-note").textContent = folderNote(
+    shots,
+    "Choose the folder Overwatch saves screenshots to.",
+    "This folder isn't there yet. Overwatch creates it with your first screenshot; if yours go elsewhere, choose that folder.",
+  );
   el("screenshot-folder-reset").hidden = shots?.source !== "custom";
   if (shots?.source === "custom" || (shots && !shots.exists)) el<HTMLDetailsElement>("screenshot-settings").open = true;
   tourneyContextChanged();
@@ -365,6 +366,10 @@ function renderLobbySettings(): void {
   if (document.activeElement !== name) name.value = state.lobbyName ?? "";
 }
 
+function tunableText(t: AdvancedSetting): string {
+  return t.value === null ? "" : String(t.value);
+}
+
 function tunableInput(key: string): HTMLInputElement {
   return el<HTMLInputElement>(`tunable-${key}`);
 }
@@ -375,35 +380,26 @@ function renderAdvanced(): void {
   if (!list.childElementCount) {
     list.replaceChildren(
       ...state.advanced.map((t) => {
-        const item = document.createElement("div");
-        item.className = "tunable";
-        const label = document.createElement("label");
+        const item = node("div", "", "tunable");
+        const label = node("label", t.label);
         label.htmlFor = `tunable-${t.key}`;
-        label.textContent = t.label;
-        const input = document.createElement("input");
+        const input = node("input");
         input.id = `tunable-${t.key}`;
         input.type = "number";
         input.min = String(t.min);
         input.max = String(t.max);
         input.step = "1";
         input.placeholder = String(t.default);
-        const unit = document.createElement("span");
-        unit.className = "muted";
-        unit.textContent = `seconds (default ${t.default})`;
-        const row = document.createElement("div");
-        row.className = "row";
-        row.append(input, unit);
-        const help = document.createElement("p");
-        help.className = "note";
-        help.textContent = t.help;
-        item.append(label, row, help);
+        const row = node("div", "", "row");
+        row.append(input, node("span", `seconds (default ${t.default})`, "muted"));
+        item.append(label, row, node("p", t.help, "note"));
         return item;
       }),
     );
   }
   for (const t of state.advanced) {
     const input = tunableInput(t.key);
-    if (document.activeElement !== input) input.value = t.value === null ? "" : String(t.value);
+    if (document.activeElement !== input) input.value = tunableText(t);
   }
 }
 
@@ -689,7 +685,7 @@ async function saveAdvanced(values: Record<string, number>): Promise<void> {
   setLine("advanced-state", "", "good");
   const next = await invoke<AppState>("set_advanced", { values });
   // Shown as saved, not as typed: a value at its default empties its field.
-  for (const t of next.advanced) tunableInput(t.key).value = t.value === null ? "" : String(t.value);
+  for (const t of next.advanced) tunableInput(t.key).value = tunableText(t);
   await show(next);
   toast("Timing saved");
 }

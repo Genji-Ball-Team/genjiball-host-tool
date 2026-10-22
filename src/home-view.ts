@@ -113,14 +113,14 @@ export function flash(target: HTMLElement, elapsed = 0): void {
   target.classList.add("fresh");
 }
 
-/**
- * Reads the live log's name every `pollSecs` while the window shows, whatever the view: Home shows
- * it, and the title bar (on every view) pulses while it grows.
- */
 let timer: ReturnType<typeof setTimeout> | undefined;
 /** Counts restarts: a read from before the last one is dropped and reads no more, so one loop runs. */
 let run = 0;
 
+/**
+ * Reads the live log's name every `pollSecs` while the window shows, whatever the view: Home shows
+ * it, and the title bar (on every view) pulses while it grows.
+ */
 async function pollLiveFile(current: number): Promise<void> {
   if (!get) return;
   const state = get();

@@ -8,7 +8,7 @@ How ranked works end to end:
 2. This tool watches the log folder and uploads the matches.
 3. The [ranked server](https://github.com/Genji-Ball-Team/genjiball-ranked) parses the log, rates each round and shows the results on the website.
 
-**Status:** early. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, shows the current match and each uploaded one the way the site will (and why one won't count), lets the host go AFK without their rating changing, builds the ranked code, and for tourneys lists the lobbies the host is assigned to, builds each lobby's tourney code and uploads the verify screenshot of its final standings (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
+**Status:** in use by hosts. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, shows the current match and each uploaded one the way the site will (and why one won't count), lets the host go AFK without their rating changing, builds the ranked code, lists the host's lobby on the site while a match is played, and for tourneys lists the lobbies the host is assigned to, builds each lobby's tourney code and uploads the verify screenshot of its final standings. An experimental overlay shows the match over the game (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
 
 - **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
 
@@ -18,7 +18,7 @@ Download the `.exe` installer from the [Releases page](https://github.com/Genji-
 
 Windows SmartScreen will warn that it doesn't know the app, because the installer isn't code-signed. Click "More info", then "Run anyway".
 
-From v0.2.0 on the app updates itself: it looks for a new version when it starts and every few hours, and a banner offers "Install and restart". There's also a "Check for updates" button. v0.1.0 has no updater, so if you have it, install v0.2.0 by hand once.
+The app updates itself: it looks for a new version when it starts and every few hours, and a notification offers "Install and restart". Settings → Updates has a "Check for updates" button, a switch for the automatic checks and the pre-release channel. v0.1.0 has no updater: install a newer version by hand once.
 
 Then follow the [hosting guide](docs/hosting.md).
 
@@ -47,7 +47,8 @@ npm run build   # build the installer
 | Command | Use |
 |---|---|
 | `npm run dev` | Run the app with hot reload |
-| `npm run check` | Typecheck, lint and test (TypeScript and Rust). What CI runs |
+| `npm run check` | Typecheck, lint, the frontend's tests, the parser check (needs the network), `cargo fmt --check`, clippy and `cargo test`. What CI runs |
+| `npm run sync:parser` | Copy the server's log parser into `src/parser/` (see AGENTS.md) |
 | `npm run build` | Build the Windows installer into `src-tauri/target/release/bundle/nsis/` |
 | `npm run icons` | Regenerate the app icons from `app-icon.svg` |
 
@@ -60,18 +61,21 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src/` | The window: TypeScript and CSS, built with Vite |
 | `src-tauri/` | The Rust side: file watching, uploads, settings. Tauri config in `tauri.conf.json` |
 | `src-tauri/src/config.rs` | Every tunable and its default |
-| `src-tauri/src/settings.rs`, `credentials.rs` | The settings file, and the host token (Credential Manager, or a DPAPI-encrypted file) |
+| `src-tauri/src/settings.rs`, `credentials.rs`, `dpapi.rs` | The settings file, and the host token (Credential Manager, or a DPAPI-encrypted file) |
 | `src-tauri/src/server.rs` | Requests to the ranked server |
 | `src-tauri/src/updates.rs` | The self-update: checks GitHub releases, installs a signed update |
 | `src-tauri/src/watcher.rs`, `log_scan.rs` | Which log files to upload, and when |
-| `src-tauri/src/uploader.rs`, `uploads.rs` | The upload loop, and the record of what was uploaded (`uploads.json`) |
+| `src-tauri/src/uploader.rs`, `uploads.rs`, `history.rs` | The upload loop, the record of what was uploaded (`uploads.json`) and the history the window lists |
+| `src-tauri/src/match_log.rs`, `src/match-*.ts`, `src/parser/` | The match view: a log's complete lines, parsed with the server's own parser (a copy; never edit it) |
 | `src-tauri/src/afk.rs` | Host AFK: the rounds that start while it's on, per match (`afk.json`), sent as `X-Host-Afk` |
 | `src-tauri/src/lobby.rs`, `live_lobby.rs` | The live lobby: lists the host's lobby on the site while a ranked match is played |
-| `src-tauri/src/release.rs`, `ranked_code.rs` | The ranked code: the GenjiBall-CE release it's built on, and the rank tags filled in |
+| `src-tauri/src/release.rs`, `github.rs`, `ranked_code.rs` | The ranked code: the GenjiBall-CE release it's built on, and the rank tags and data center filled in |
 | `src-tauri/src/tourney.rs`, `tourneys.rs`, `src/tourneys-view.ts` | Tourneys: the host's assigned lobbies and their notifications, the tourney code's rule, the region a tourney log is uploaded as, and the verify screenshot |
 | `src-tauri/src/logging.rs`, `diagnostics.rs` | The tool's own log, and the diagnostics export for bug reports |
 | `src-tauri/src/debug.rs`, `src/debug-view.ts` | The debug panel: the latest uploads and dry runs, and the newest log's last events |
 | `src-tauri/src/overlay.rs`, `overlay_window.rs`, `ratings.rs`, `stream.rs`, `src/overlay/`, `src/overlay-settings.ts` | The overlay (experimental): its window over the game, hotkeys, what it shows, the lobby's ratings, and the stream page for OBS |
+| `src-tauri/src/log_folder.rs`, `snap.rs` | The Workshop log and screenshots folders, and Windows' snap layouts for the custom title bar |
+| `test/` | The frontend's tests (Vitest) |
 | `src-tauri/capabilities/` | What each window is allowed to call |
 
 ## Contributing

@@ -11,7 +11,7 @@ For hosts of Genji Ball Ranked. You run the host tool next to Overwatch; it uplo
 5. **Turn on the Workshop log file in Overwatch.** Overwatch only writes the log the tool reads if **Enable Workshop Inspector Log File** is on (Options, Gameplay, General). Without it, nothing is uploaded.
 6. **Check the log folder** under **Settings → Game**. The tool looks in `Documents\Overwatch\Workshop` and says "Found automatically". If it says the folder isn't there yet, that's normal until Overwatch has written its first log. If your Documents folder is somewhere else, or the logs go elsewhere, click "Choose folder..." and pick it.
 
-The tool updates itself: when a new version is out, a notification in the corner offers "Install and restart" ("Later" hides it until the next version; **Settings → Updates** has "Check for updates"). If you have v0.1.0, which can't, download the newest installer by hand once. Under **Settings → Updates** you can stop it looking by itself, or switch to the **Pre-release** channel if an admin asks you to try a test version.
+The tool updates itself: when a new version is out, a notification in the corner offers "Install and restart" ("Later" hides it until the next version; **Settings → Updates** has "Check for updates"). Under **Settings → Updates** you can stop it looking by itself, or switch to the **Pre-release** channel if an admin asks you to try a test version.
 
 ## The window
 
@@ -107,6 +107,8 @@ At the top of the Uploads view. Home lists the same problems, each with a button
 | Paused: the server doesn't know this token | Check you pasted all of it, or ask an admin for a new one |
 | Paused: this token was revoked | Ask an admin for a new one |
 | Paused: you have no home region yet | Pick your region |
+| Paused until the settings file is fixed | The tool couldn't read `settings.json`, or it holds a value the tool won't take. Change a setting in the window, or fix or delete the file |
+| Can't read the log folder: ... | Check the folder exists and your Windows account can open it, or choose another |
 | Waiting for the Workshop log folder | Choose the log folder, or turn on the log file in Overwatch and play a game |
 
 If something else is wrong, ask in the [Discord](https://discord.gg/sv9VVjh5pT).

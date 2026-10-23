@@ -9,7 +9,7 @@
 - [ ] New tunables are in `src-tauri/src/config.rs`, not hard-coded
 - [ ] Log handling follows GenjiBall-CE `docs/ranked-log.md`, and uploads follow genjiball-ranked `docs/api.md`
 - [ ] The host token never reaches a plain file, a log or a diagnostics export
-- [ ] README / AGENTS.md updated if commands, config or setup changed
+- [ ] README, AGENTS.md and `docs/hosting.md` updated if commands, config, setup or what a host sees changed
 
 ## How did you test it?
 

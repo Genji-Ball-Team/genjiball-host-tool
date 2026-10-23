@@ -71,6 +71,11 @@ const eventTypes = new Set([
 
 const roundResults = new Set<string>(["WIN", "NONE", "ABORT"]);
 
+/** A build id is a short token of letters, digits, `.`, `_` and `-` (the game writes 8 hex digits). Anything else is dropped. */
+function buildId(field: string | undefined): string | null {
+  return field !== undefined && /^[\w.-]{1,32}$/.test(field) ? field : null;
+}
+
 /** Removes the Workshop's `[hh:mm:ss] ` prefix. */
 export function stripPrefix(line: string): string {
   return line.replace(/^\[\d+:\d{2}:\d{2}\] ?/, "").trimEnd();
@@ -102,6 +107,7 @@ class MatchParser {
     this.match = {
       format: format ?? 0,
       gameVersion: fields[3] ?? "",
+      build: buildId(fields[5]),
       matchKey: fields[4] ?? "",
       startLine: lineNumber,
       lineCount: 1,

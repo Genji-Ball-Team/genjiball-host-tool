@@ -13,6 +13,11 @@ export interface ParseResult {
 export interface ParsedMatch {
   format: number;
   gameVersion: string;
+  /**
+   * The build id of the game code that wrote the log (`GBR`'s last field, spec "Build id"), kept as text.
+   * `null` when the log has none (written before the field existed) or the field isn't a plain token.
+   */
+  build: string | null;
   /** 12 digits, kept as text. Same host + same key = the same match, possibly in several files. */
   matchKey: string;
   /** 1-based line of the `GBR` line in the file. */

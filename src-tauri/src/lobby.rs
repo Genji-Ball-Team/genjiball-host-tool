@@ -6,9 +6,9 @@
 //! (the one the game writes), while that log keeps growing (`QUIET_SECS`): once it stops, the host
 //! closed the lobby, moved to spectator without a new file yet, or the game closed or crashed. A
 //! match with an `UNRANKED` line won't count (GenjiBall-CE `docs/ranked-log.md`), so it isn't
-//! listed. The players are the ids that have a `JOIN` and no `LEAVE` since.
+//! listed. The players are the ids that have a `JOIN` and no `LEAVE` since, with the name of their
+//! `JOIN`, in the order they joined.
 
-use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -25,8 +25,9 @@ pub enum Live {
     Idle,
     /// A match is being played, but the game marked it `UNRANKED`: it won't count.
     Unranked,
-    /// A ranked match is being played, with this many players in it now.
-    Playing { players: u32 },
+    /// A ranked match is being played, with these players in it now (`names`, in the order they
+    /// joined; `players` is how many).
+    Playing { players: u32, names: Vec<String> },
 }
 
 /// The match the complete lines of `text` end in (`log_scan::complete_lines`), regardless of
@@ -36,7 +37,8 @@ pub fn read(text: &str) -> Live {
     struct Match<'a> {
         started: bool,
         unranked: bool,
-        players: BTreeSet<&'a str>,
+        /// Each player's id and name, in the order they joined.
+        players: Vec<(&'a str, &'a str)>,
     }
     let mut current: Option<Match> = None;
     for line in log_scan::complete_text(text).lines().map(log_scan::event) {
@@ -44,15 +46,22 @@ pub fn read(text: &str) -> Live {
         let kind = fields.next().unwrap_or_default();
         // `TYPE|time|...`: the fields after the time.
         let id = fields.nth(1).filter(|id| !id.is_empty());
+        // `JOIN|time|id|name|host`.
+        let name = fields.next().unwrap_or_default();
         match (kind, current.as_mut()) {
             ("GBR", _) => current = Some(Match::default()),
             ("MATCH_END", _) => current = None,
             ("MATCH_START", Some(m)) => m.started = true,
             ("UNRANKED", Some(m)) => m.unranked = true,
-            ("JOIN", Some(m)) => m.players.extend(id),
+            ("JOIN", Some(m)) => {
+                if let Some(id) = id {
+                    m.players.retain(|(joined, _)| *joined != id);
+                    m.players.push((id, name));
+                }
+            }
             ("LEAVE", Some(m)) => {
                 if let Some(id) = id {
-                    m.players.remove(id);
+                    m.players.retain(|(joined, _)| *joined != id);
                 }
             }
             _ => {}
@@ -60,12 +69,35 @@ pub fn read(text: &str) -> Live {
     }
     match current {
         Some(m) if m.started && m.unranked => Live::Unranked,
-        Some(m) if m.started => Live::Playing {
-            players: u32::try_from(m.players.len())
-                .unwrap_or(u32::MAX)
-                .min(config::LOBBY_PLAYERS_MAX),
-        },
+        Some(m) if m.started => {
+            let names: Vec<String> = m
+                .players
+                .iter()
+                .take(config::LOBBY_PLAYERS_MAX as usize)
+                .map(|(id, name)| player_name(id, name))
+                .collect();
+            Live::Playing {
+                players: u32::try_from(names.len()).unwrap_or(u32::MAX),
+                names,
+            }
+        }
         _ => Live::Idle,
+    }
+}
+
+/// A player's name as a heartbeat lists it: cut to what the server takes, and their id should the
+/// log have none (the server takes no empty name).
+fn player_name(id: &str, name: &str) -> String {
+    let name: String = name
+        .trim()
+        .chars()
+        .take(config::LOBBY_PLAYER_NAME_MAX_CHARS)
+        .collect();
+    let name = name.trim();
+    if name.is_empty() {
+        format!("Player {id}")
+    } else {
+        name.to_string()
     }
 }
 
@@ -142,6 +174,8 @@ impl Watch {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Heartbeat {
     pub players: u32,
+    /// The players' names, one each, in the order they joined.
+    pub names: Vec<String>,
     pub name: Option<String>,
     pub region: Option<String>,
 }
@@ -277,8 +311,15 @@ mod tests {
         EXAMPLE[..EXAMPLE[..at].rfind('\n').unwrap() + 1].to_string()
     }
 
-    fn playing(players: u32) -> Live {
-        Live::Playing { players }
+    /// The example's players when it starts, and at its end: Tidal (2) left, Nova (6) joined.
+    const START: [&str; 5] = ["Sparrow", "Tidal", "Mochi", "Ghost", "Ghost"];
+    const AT_END: [&str; 5] = ["Sparrow", "Mochi", "Ghost", "Ghost", "Nova"];
+
+    fn playing(names: &[&str]) -> Live {
+        Live::Playing {
+            players: names.len() as u32,
+            names: names.iter().map(|n| n.to_string()).collect(),
+        }
     }
 
     #[test]
@@ -287,30 +328,34 @@ mod tests {
         // `GBR` without `MATCH_START` yet.
         assert_eq!(read(&until("MATCH_START|")), Live::Idle);
         // Started, before the players' `JOIN`s.
-        assert_eq!(read(&until("JOIN|2.38|1|")), playing(0));
+        assert_eq!(read(&until("JOIN|2.38|1|")), playing(&[]));
         // Five joined; Tidal (2) left in round 1; Nova (6) joined after it.
-        assert_eq!(read(&until("ROUND_START|")), playing(5));
-        assert_eq!(read(&until("LEAVE|36.50|2")), playing(5));
-        assert_eq!(read(&until("JOIN|45.02|6|Nova")), playing(4));
-        assert_eq!(read(&until("MATCH_END|")), playing(5));
+        assert_eq!(read(&until("ROUND_START|")), playing(&START));
+        assert_eq!(read(&until("LEAVE|36.50|2")), playing(&START));
+        assert_eq!(
+            read(&until("JOIN|45.02|6|Nova")),
+            playing(&["Sparrow", "Mochi", "Ghost", "Ghost"])
+        );
+        assert_eq!(read(&until("MATCH_END|")), playing(&AT_END));
         assert_eq!(read(EXAMPLE), Live::Idle);
     }
 
     #[test]
     fn counts_ids_not_names() {
-        // Two players named Ghost are two players; a player who leaves and comes back has a new id.
+        // Two players named Ghost are two players; a player who leaves and comes back has a new id,
+        // and is listed where they joined again.
         let text = "GBR|1|1|1.3.3R|1\nMATCH_START|1|workshop-island-night|Default|0|\n\
                     JOIN|1|4|Ghost\nJOIN|1|5|Ghost\nLEAVE|9|4\n[00:00:10] JOIN|10|7|Ghost|1\n\
                     LEAVE|11|99\nLEAVE|12|\n";
-        assert_eq!(read(text), playing(2));
+        assert_eq!(read(text), playing(&["Ghost", "Ghost"]));
     }
 
     #[test]
     fn only_complete_lines_count() {
         let started =
             "GBR|1|1|1.3.3R|1\nMATCH_START|1|workshop-island-night|Default|0|\nJOIN|1|1|A\n";
-        assert_eq!(read(&format!("{started}JOIN|2|2|B")), playing(1));
-        assert_eq!(read(&format!("{started}MATCH_END|")), playing(1));
+        assert_eq!(read(&format!("{started}JOIN|2|2|B")), playing(&["A"]));
+        assert_eq!(read(&format!("{started}MATCH_END|")), playing(&["A"]));
         assert_eq!(read(&format!("{started}MATCH_END|9|TIME\r\n")), Live::Idle);
     }
 
@@ -320,13 +365,13 @@ mod tests {
         let text = format!(
             "{EXAMPLE}[00:02:00] GBR|120|1|1.3.3R|999\n[00:02:00] {match_start}\n[00:02:00] JOIN|120|1|Sparrow\n"
         );
-        assert_eq!(read(&text), playing(1));
+        assert_eq!(read(&text), playing(&["Sparrow"]));
         // A `GBR` that wasn't ended starts a new match too (the old one was cut off).
         let cut = format!(
             "{}GBR|120|1|1.3.3R|999\n{match_start}\n",
             until("MATCH_END|")
         );
-        assert_eq!(read(&cut), playing(0));
+        assert_eq!(read(&cut), playing(&[]));
     }
 
     #[test]
@@ -337,7 +382,7 @@ mod tests {
         let next = format!(
             "{text}MATCH_END|9|TIME\nGBR|1|1|1.3.3R|2\nMATCH_START|1|workshop-island-night|Default|0|\n"
         );
-        assert_eq!(read(&next), playing(0));
+        assert_eq!(read(&next), playing(&[]));
         // Lines of other modes, or before any match, don't count.
         assert_eq!(read("UNRANKED|1|MAP\nJOIN|1|1|A\n"), Live::Idle);
     }
@@ -349,7 +394,25 @@ mod tests {
         for id in 1..=20 {
             text.push_str(&format!("JOIN|1|{id}|P{id}\n"));
         }
-        assert_eq!(read(&text), playing(config::LOBBY_PLAYERS_MAX));
+        let first: Vec<String> = (1..=config::LOBBY_PLAYERS_MAX)
+            .map(|id| format!("P{id}"))
+            .collect();
+        let first: Vec<&str> = first.iter().map(String::as_str).collect();
+        assert_eq!(read(&text), playing(&first));
+    }
+
+    #[test]
+    fn lists_names_the_server_takes() {
+        let long = "N".repeat(config::LOBBY_PLAYER_NAME_MAX_CHARS + 5);
+        let text = format!(
+            "GBR|1|1|1.3.3R|1\nMATCH_START|1|workshop-island-night|Default|0|\n\
+             JOIN|1|1| Ñandú |1\nJOIN|1|2|{long}|\nJOIN|1|3||\nJOIN|1|4|  |\n"
+        );
+        let cut = "N".repeat(config::LOBBY_PLAYER_NAME_MAX_CHARS);
+        assert_eq!(
+            read(&text),
+            playing(&["Ñandú", &cut, "Player 3", "Player 4"])
+        );
     }
 
     fn file(name: &str, size: u64, age: u64) -> Option<LogFile<'_>> {
@@ -369,13 +432,13 @@ mod tests {
         let read = || Some(text.clone());
         assert_eq!(
             watch.look(file("Log-a.txt", size, 0), now, QUIET, read),
-            playing(5)
+            playing(&AT_END)
         );
         // Not read again while it doesn't grow, and played until it's been quiet for `QUIET`.
         let later = now + QUIET - Duration::from_secs(1);
         assert_eq!(
             watch.look(file("Log-a.txt", size, 59), later, QUIET, || unreachable!()),
-            playing(5)
+            playing(&AT_END)
         );
         assert_eq!(
             watch.look(
@@ -396,7 +459,7 @@ mod tests {
                 QUIET,
                 || Some(grown.clone())
             ),
-            playing(5)
+            playing(&AT_END)
         );
     }
 
@@ -415,7 +478,7 @@ mod tests {
         let new = file("Log-b.txt", text.len() as u64, 0);
         assert_eq!(
             watch.look(new, now + QUIET, QUIET, || Some(text.clone())),
-            playing(5)
+            playing(&AT_END)
         );
         // No log at all.
         assert_eq!(
@@ -438,18 +501,19 @@ mod tests {
             watch.look(file("Log-a.txt", size, 0), now, QUIET, || Some(
                 text.clone()
             )),
-            playing(5)
+            playing(&AT_END)
         );
         // Grown but locked: what it held before stands.
         assert_eq!(
             watch.look(file("Log-a.txt", size + 9, 0), now, QUIET, || None),
-            playing(5)
+            playing(&AT_END)
         );
     }
 
     fn beat(players: u32) -> Heartbeat {
         Heartbeat {
             players,
+            names: (1..=players).map(|id| format!("P{id}")).collect(),
             name: Some("Kenzo's ranked".into()),
             region: Some("eu".into()),
         }
@@ -492,7 +556,22 @@ mod tests {
             schedule.step(Some(&beat(7)), now + MIN_GAP),
             Step::Heartbeat
         );
-        // So does a new name or region.
+        // So does a new name, a player swapped for another, or a new region.
+        let swapped = Heartbeat {
+            names: vec![
+                "P1".into(),
+                "P2".into(),
+                "P3".into(),
+                "P4".into(),
+                "P5".into(),
+                "Nova".into(),
+            ],
+            ..beat(6)
+        };
+        assert_eq!(
+            schedule.step(Some(&swapped), now + MIN_GAP),
+            Step::Heartbeat
+        );
         let renamed = Heartbeat {
             name: None,
             ..beat(6)

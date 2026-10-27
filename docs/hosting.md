@@ -48,7 +48,7 @@ In the upload list, a tourney match says "Tourney match" with its lobby.
 
 ## Your lobby on the site
 
-While you host a ranked match, the tool lists your lobby on genjiball.us, under your region, with how many players are in it, so players can find it. The **Live lobby** switch on Home turns it off or on, and says whether it's listed right now. Give it a name (optional, shown next to your host name) under **Settings → Lobby**.
+While you host a ranked match, the tool lists your lobby on genjiball.us, under your region, with the players in it (their in-game names), so players can find it. It's also shown in the Discord server. While your **AFK** is on, you're left off the list. The **Live lobby** switch on Home turns it off or on, and says whether it's listed right now. Give it a name (optional, shown next to your host name) under **Settings → Lobby**.
 
 It's taken off the list when the match ends, when the log stops growing (you closed the lobby or Overwatch closed), and when you quit the tool. If the tool can't tell the server (you went offline, say), the site drops it by itself after a few minutes. A match the game marks UNRANKED isn't listed.
 

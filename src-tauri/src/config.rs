@@ -254,6 +254,10 @@ pub const LOBBY_NAME_MAX_CHARS: usize = 64;
 /// The most players a heartbeat may say (genjiball-ranked `lobbyPlayersMax`).
 pub const LOBBY_PLAYERS_MAX: u32 = 12;
 
+/// The longest player name a heartbeat may list, in characters (genjiball-ranked
+/// `lobbyPlayerNameMaxLength`). Longer ones are cut, so one odd name never loses the heartbeat.
+pub const LOBBY_PLAYER_NAME_MAX_CHARS: usize = 32;
+
 /// How long quitting the tool waits for the server to take a listed lobby off the list. Past it
 /// the tool quits anyway, and the lobby drops off after `LOBBY_TTL_SECS`.
 pub const LOBBY_CLOSE_ON_QUIT_SECS: u64 = 3;

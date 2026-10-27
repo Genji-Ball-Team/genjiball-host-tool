@@ -993,13 +993,14 @@ pub fn read_lobby(
     }
 }
 
-/// Says the host's lobby is open: `PUT /api/host/lobby` with its players and name (`None`: no
-/// name, which clears one sent before), as `region` (`None`: the host's home region).
+/// Says the host's lobby is open: `PUT /api/host/lobby` with its players' names (and so how many)
+/// and name (`None`: no name, which clears one sent before), as `region` (`None`: the host's home
+/// region).
 pub async fn lobby_heartbeat(
     server_url: &str,
     token: &str,
     region: Option<&str>,
-    players: u32,
+    names: &[String],
     name: Option<&str>,
     timeout: Duration,
 ) -> LobbyOutcome {
@@ -1010,7 +1011,7 @@ pub async fn lobby_heartbeat(
     let mut request = client
         .put(format!("{server_url}/api/host/lobby"))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "name": name, "players": players }));
+        .json(&serde_json::json!({ "name": name, "names": names, "players": names.len() }));
     if let Some(region) = region {
         request = request.header("X-Region", region);
     }
@@ -1781,7 +1782,7 @@ mod tests {
         let timeout = Duration::from_secs(config::REQUEST_TIMEOUT_SECS.default);
         let (seen, request) = std::sync::mpsc::channel();
         let answer = r#"{"lobby":{"region":"na","name":"Late night","players":7},"heartbeatSeconds":60,"ttlSeconds":180}"#;
-        let sent = r#"{"name":"Late night","players":7}"#;
+        let sent = r#"{"name":"Late night","names":["A","B","C","D","E","F","G"],"players":7}"#;
         let url = test_server_seeing(
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}",
@@ -1794,7 +1795,7 @@ mod tests {
             &url,
             "t",
             Some("na"),
-            7,
+            &["A", "B", "C", "D", "E", "F", "G"].map(String::from),
             Some("Late night"),
             timeout,
         ));
@@ -1807,7 +1808,7 @@ mod tests {
         assert!(head.ends_with(sent), "{head}");
 
         // The home region: no `X-Region`; no name: `null`, which clears one sent before.
-        let unnamed = r#"{"name":null,"players":0}"#;
+        let unnamed = r#"{"name":null,"names":[],"players":0}"#;
         let url = test_server_seeing(
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}",
@@ -1816,7 +1817,7 @@ mod tests {
             unnamed,
             seen.clone(),
         );
-        run(lobby_heartbeat(&url, "t", None, 0, None, timeout));
+        run(lobby_heartbeat(&url, "t", None, &[], None, timeout));
         let head = request.recv().unwrap();
         assert!(!head.to_ascii_lowercase().contains("x-region"), "{head}");
         assert!(head.ends_with(unnamed), "{head}");

@@ -125,7 +125,7 @@ interface LobbyStatus {
   serverUrl: string;
   on: boolean;
   /** What's being played in the live log. */
-  live: { kind: "idle" } | { kind: "unranked" } | { kind: "playing"; players: number };
+  live: { kind: "idle" } | { kind: "unranked" } | { kind: "playing"; players: number; names: string[] };
   /** The lobby as the site lists it, `null` when it isn't listed. Mirrors `ListedLobby` in src-tauri/src/server.rs. */
   listed: { region: string; name: string | null; players: number } | null;
   problem: LobbyProblem | null;

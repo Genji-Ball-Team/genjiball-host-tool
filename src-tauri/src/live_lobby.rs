@@ -204,7 +204,7 @@ impl Run {
                         &target.server_url,
                         &target.token,
                         beat.region.as_deref(),
-                        beat.players,
+                        &beat.names,
                         beat.name.as_deref(),
                         timeout,
                     )
@@ -287,11 +287,12 @@ impl Run {
                     .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             },
         );
-        match status.live {
-            Live::Playing { players } => Ok((
+        match status.live.clone() {
+            Live::Playing { players, names } => Ok((
                 target,
                 Heartbeat {
                     players,
+                    names,
                     name: settings.lobby_name.clone(),
                     region: settings.region.clone(),
                 },
@@ -392,6 +393,7 @@ mod tests {
     fn beat() -> Heartbeat {
         Heartbeat {
             players: 6,
+            names: (1..=6).map(|id| format!("P{id}")).collect(),
             name: None,
             region: None,
         }
@@ -530,11 +532,14 @@ mod tests {
             sent,
             Heartbeat {
                 players: 5,
+                names: ["Sparrow", "Mochi", "Ghost", "Ghost", "Nova"]
+                    .map(String::from)
+                    .to_vec(),
                 name: Some("Late night".into()),
                 region: Some("na".into()),
             }
         );
-        assert_eq!(status.live, Live::Playing { players: 5 });
+        assert!(matches!(status.live, Live::Playing { players: 5, .. }));
 
         // The match ends.
         std::fs::write(dir.path().join("Log-2026-10-02-20-15-33.txt"), example).unwrap();
@@ -550,7 +555,10 @@ mod tests {
         let status = LobbyStatus {
             server_url: "https://genjiball.us".into(),
             on: true,
-            live: Live::Playing { players: 6 },
+            live: Live::Playing {
+                players: 2,
+                names: vec!["Sparrow".into(), "Tidal".into()],
+            },
             listed: Some(ListedLobby {
                 region: "eu".into(),
                 name: None,
@@ -563,7 +571,7 @@ mod tests {
             serde_json::json!({
                 "serverUrl": "https://genjiball.us",
                 "on": true,
-                "live": { "kind": "playing", "players": 6 },
+                "live": { "kind": "playing", "players": 2, "names": ["Sparrow", "Tidal"] },
                 "listed": { "region": "eu", "name": null, "players": 6 },
                 "problem": { "kind": "tokenRejected", "revoked": false },
             })

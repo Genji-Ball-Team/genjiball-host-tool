@@ -26,8 +26,14 @@ pub enum Live {
     /// A match is being played, but the game marked it `UNRANKED`: it won't count.
     Unranked,
     /// A ranked match is being played, with these players in it now (`names`, in the order they
-    /// joined; `players` is how many).
-    Playing { players: u32, names: Vec<String> },
+    /// joined; `players` is how many). `host`: where the lobby host is in `names`, if they're in a
+    /// slot, so a host who is AFK can be left off the list (`listed`).
+    Playing {
+        players: u32,
+        names: Vec<String>,
+        #[serde(skip)]
+        host: Option<usize>,
+    },
 }
 
 /// The match the complete lines of `text` end in (`log_scan::complete_lines`), regardless of
@@ -37,8 +43,8 @@ pub fn read(text: &str) -> Live {
     struct Match<'a> {
         started: bool,
         unranked: bool,
-        /// Each player's id and name, in the order they joined.
-        players: Vec<(&'a str, &'a str)>,
+        /// Each player's id, name and whether they're the lobby host, in the order they joined.
+        players: Vec<(&'a str, &'a str, bool)>,
     }
     let mut current: Option<Match> = None;
     for line in log_scan::complete_text(text).lines().map(log_scan::event) {
@@ -48,6 +54,7 @@ pub fn read(text: &str) -> Live {
         let id = fields.nth(1).filter(|id| !id.is_empty());
         // `JOIN|time|id|name|host`.
         let name = fields.next().unwrap_or_default();
+        let host = fields.next() == Some("1");
         match (kind, current.as_mut()) {
             ("GBR", _) => current = Some(Match::default()),
             ("MATCH_END", _) => current = None,
@@ -55,13 +62,13 @@ pub fn read(text: &str) -> Live {
             ("UNRANKED", Some(m)) => m.unranked = true,
             ("JOIN", Some(m)) => {
                 if let Some(id) = id {
-                    m.players.retain(|(joined, _)| *joined != id);
-                    m.players.push((id, name));
+                    m.players.retain(|(joined, ..)| *joined != id);
+                    m.players.push((id, name, host));
                 }
             }
             ("LEAVE", Some(m)) => {
                 if let Some(id) = id {
-                    m.players.retain(|(joined, _)| *joined != id);
+                    m.players.retain(|(joined, ..)| *joined != id);
                 }
             }
             _ => {}
@@ -70,19 +77,30 @@ pub fn read(text: &str) -> Live {
     match current {
         Some(m) if m.started && m.unranked => Live::Unranked,
         Some(m) if m.started => {
-            let names: Vec<String> = m
-                .players
+            let shown = &m.players[..m.players.len().min(config::LOBBY_PLAYERS_MAX as usize)];
+            let names: Vec<String> = shown
                 .iter()
-                .take(config::LOBBY_PLAYERS_MAX as usize)
-                .map(|(id, name)| player_name(id, name))
+                .map(|(id, name, _)| player_name(id, name))
                 .collect();
             Live::Playing {
                 players: u32::try_from(names.len()).unwrap_or(u32::MAX),
                 names,
+                host: shown.iter().position(|(.., host)| *host),
             }
         }
         _ => Live::Idle,
     }
+}
+
+/// The players a heartbeat lists: everyone in a slot, but the host while they have AFK on (they
+/// stay in their slot, but aren't playing).
+pub fn listed(names: &[String], host: Option<usize>, afk: bool) -> Vec<String> {
+    names
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !(afk && Some(*i) == host))
+        .map(|(_, name)| name.clone())
+        .collect()
 }
 
 /// A player's name as a heartbeat lists it: cut to what the server takes, and their id should the
@@ -315,10 +333,16 @@ mod tests {
     const START: [&str; 5] = ["Sparrow", "Tidal", "Mochi", "Ghost", "Ghost"];
     const AT_END: [&str; 5] = ["Sparrow", "Mochi", "Ghost", "Ghost", "Nova"];
 
+    /// The lobby with `names`, the first of them the host, as in the example (Sparrow).
     fn playing(names: &[&str]) -> Live {
+        hosted(names, (!names.is_empty()).then_some(0))
+    }
+
+    fn hosted(names: &[&str], host: Option<usize>) -> Live {
         Live::Playing {
             players: names.len() as u32,
             names: names.iter().map(|n| n.to_string()).collect(),
+            host,
         }
     }
 
@@ -347,15 +371,16 @@ mod tests {
         let text = "GBR|1|1|1.3.3R|1\nMATCH_START|1|workshop-island-night|Default|0|\n\
                     JOIN|1|4|Ghost\nJOIN|1|5|Ghost\nLEAVE|9|4\n[00:00:10] JOIN|10|7|Ghost|1\n\
                     LEAVE|11|99\nLEAVE|12|\n";
-        assert_eq!(read(text), playing(&["Ghost", "Ghost"]));
+        // Ghost 7 is the host.
+        assert_eq!(read(text), hosted(&["Ghost", "Ghost"], Some(1)));
     }
 
     #[test]
     fn only_complete_lines_count() {
         let started =
             "GBR|1|1|1.3.3R|1\nMATCH_START|1|workshop-island-night|Default|0|\nJOIN|1|1|A\n";
-        assert_eq!(read(&format!("{started}JOIN|2|2|B")), playing(&["A"]));
-        assert_eq!(read(&format!("{started}MATCH_END|")), playing(&["A"]));
+        assert_eq!(read(&format!("{started}JOIN|2|2|B")), hosted(&["A"], None));
+        assert_eq!(read(&format!("{started}MATCH_END|")), hosted(&["A"], None));
         assert_eq!(read(&format!("{started}MATCH_END|9|TIME\r\n")), Live::Idle);
     }
 
@@ -363,7 +388,7 @@ mod tests {
     fn the_next_match_starts_afresh() {
         let match_start = "MATCH_START|1|workshop-island-night|Default|0|";
         let text = format!(
-            "{EXAMPLE}[00:02:00] GBR|120|1|1.3.3R|999\n[00:02:00] {match_start}\n[00:02:00] JOIN|120|1|Sparrow\n"
+            "{EXAMPLE}[00:02:00] GBR|120|1|1.3.3R|999\n[00:02:00] {match_start}\n[00:02:00] JOIN|120|1|Sparrow|1\n"
         );
         assert_eq!(read(&text), playing(&["Sparrow"]));
         // A `GBR` that wasn't ended starts a new match too (the old one was cut off).
@@ -398,7 +423,7 @@ mod tests {
             .map(|id| format!("P{id}"))
             .collect();
         let first: Vec<&str> = first.iter().map(String::as_str).collect();
-        assert_eq!(read(&text), playing(&first));
+        assert_eq!(read(&text), hosted(&first, None));
     }
 
     #[test]
@@ -412,6 +437,21 @@ mod tests {
         assert_eq!(
             read(&text),
             playing(&["Ñandú", &cut, "Player 3", "Player 4"])
+        );
+    }
+
+    #[test]
+    fn leaves_an_afk_host_off_the_list() {
+        let names: Vec<String> = START.map(String::from).to_vec();
+        assert_eq!(listed(&names, Some(0), false), names);
+        assert_eq!(listed(&names, Some(0), true), names[1..]);
+        // No host in a slot (spectating): nobody to leave off.
+        assert_eq!(listed(&names, None, true), names);
+        // The host left and came back: a new id at the end, still the host.
+        let text = format!("{}LEAVE|60|1\nJOIN|61|7|Sparrow|1\n", until("MATCH_END|"));
+        assert_eq!(
+            read(&text),
+            hosted(&["Mochi", "Ghost", "Ghost", "Nova", "Sparrow"], Some(4))
         );
     }
 

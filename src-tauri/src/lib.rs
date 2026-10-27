@@ -460,19 +460,32 @@ fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader
 /// Turns host AFK on or off: from then on, rounds that start aren't rated for the host (`afk.rs`).
 /// The live log is read now, so a round already started (even one not read yet) still counts.
 #[tauri::command]
-fn set_afk(on: bool, store: State<Store>, uploader: State<Uploader>) -> Result<AfkStatus, String> {
+fn set_afk(
+    on: bool,
+    store: State<Store>,
+    uploader: State<Uploader>,
+    lobby: State<LiveLobby>,
+) -> Result<AfkStatus, String> {
     let settings = store.get();
     let started = match settings.existing_log_folder() {
         Some(folder) => live_round_starts(&folder.path)?,
         None => Vec::new(),
     };
-    Ok(uploader.set_afk(on, &started))
+    let status = uploader.set_afk(on, &started);
+    // An AFK host is left off the live lobby's players.
+    lobby.afk_changed();
+    Ok(status)
 }
 
 /// Turns AFK the other way: the overlay's AFK hotkey.
 pub(crate) fn toggle_afk(app: &tauri::AppHandle) -> Result<AfkStatus, String> {
     let on = !app.state::<Uploader>().afk().on;
-    let status = set_afk(on, app.state::<Store>(), app.state::<Uploader>())?;
+    let status = set_afk(
+        on,
+        app.state::<Store>(),
+        app.state::<Uploader>(),
+        app.state::<LiveLobby>(),
+    )?;
     log::info!("AFK {} with its hotkey", if on { "on" } else { "off" });
     Ok(status)
 }

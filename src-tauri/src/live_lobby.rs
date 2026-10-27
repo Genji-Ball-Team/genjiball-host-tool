@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 use crate::lobby::{self, Heartbeat, Live, LogFile, Schedule, Step, Watch};
 use crate::server::{self, ListedLobby, LobbyOutcome};
 use crate::settings::Settings;
+use crate::uploader::Uploader;
 use crate::{config, watcher, Store};
 
 /// The event the window listens to for `LobbyStatus`.
@@ -83,6 +84,11 @@ impl LiveLobby {
     /// A setting or the token changed: the next poll starts now, with them.
     pub fn changed(&self) {
         self.changed.store(true, Ordering::Relaxed);
+        self.wake.notify_one();
+    }
+
+    /// The host turned AFK on or off: the next poll starts now, so the list follows.
+    pub fn afk_changed(&self) {
         self.wake.notify_one();
     }
 }
@@ -176,7 +182,8 @@ impl Run {
         };
         let wanted = token.and_then(|token| {
             let token = token.ok_or(Some(LobbyProblem::NoToken))?;
-            self.wanted(&settings, Target { server_url, token }, &mut status)
+            let afk = app.state::<Uploader>().afk().on;
+            self.wanted(&settings, afk, Target { server_url, token }, &mut status)
         });
         let (want, target) = match wanted {
             Ok((target, beat)) => (Some(beat), Some(target)),
@@ -234,10 +241,12 @@ impl Run {
     }
 
     /// The heartbeat to send to `target` now, or why there's none (`None`: there's just no ranked
-    /// match being played, or the host switched it off). Reads the live log into `status`.
+    /// match being played, or the host switched it off). Reads the live log into `status`. `afk`:
+    /// the host has AFK on, so they're left off the players.
     fn wanted(
         &mut self,
         settings: &Settings,
+        afk: bool,
         target: Target,
         status: &mut LobbyStatus,
     ) -> Result<(Target, Heartbeat), Option<LobbyProblem>> {
@@ -288,15 +297,18 @@ impl Run {
             },
         );
         match status.live.clone() {
-            Live::Playing { players, names } => Ok((
-                target,
-                Heartbeat {
-                    players,
-                    names,
-                    name: settings.lobby_name.clone(),
-                    region: settings.region.clone(),
-                },
-            )),
+            Live::Playing { names, host, .. } => {
+                let names = lobby::listed(&names, host, afk);
+                Ok((
+                    target,
+                    Heartbeat {
+                        players: u32::try_from(names.len()).unwrap_or(u32::MAX),
+                        names,
+                        name: settings.lobby_name.clone(),
+                        region: settings.region.clone(),
+                    },
+                ))
+            }
             Live::Idle | Live::Unranked => Err(None),
         }
     }
@@ -463,7 +475,7 @@ mod tests {
         assert!(matches!(&run.rejected, Some((t, true)) if *t == target("t")));
         let mut status = LobbyStatus::default();
         assert_eq!(
-            run.wanted(&Settings::default(), target("t"), &mut status)
+            run.wanted(&Settings::default(), false, target("t"), &mut status)
                 .err(),
             Some(Some(LobbyProblem::TokenRejected { revoked: true }))
         );
@@ -505,7 +517,7 @@ mod tests {
         settings.set_live_lobby(false);
         let mut status = LobbyStatus::default();
         assert_eq!(
-            run.wanted(&settings, target("t"), &mut status).err(),
+            run.wanted(&settings, false, target("t"), &mut status).err(),
             Some(None)
         );
         assert_eq!(status.live, Live::Idle);
@@ -526,7 +538,9 @@ mod tests {
         };
         let mut run = Run::default();
         let mut status = LobbyStatus::default();
-        let (to, sent) = run.wanted(&settings, target("t"), &mut status).unwrap();
+        let (to, sent) = run
+            .wanted(&settings, false, target("t"), &mut status)
+            .unwrap();
         assert!(to == target("t"));
         assert_eq!(
             sent,
@@ -540,11 +554,17 @@ mod tests {
             }
         );
         assert!(matches!(status.live, Live::Playing { players: 5, .. }));
+        // The host (Sparrow) has AFK on: left off the players.
+        let (_, afk) = run
+            .wanted(&settings, true, target("t"), &mut status)
+            .unwrap();
+        assert_eq!(afk.players, 4);
+        assert_eq!(afk.names, ["Mochi", "Ghost", "Ghost", "Nova"]);
 
         // The match ends.
         std::fs::write(dir.path().join("Log-2026-10-02-20-15-33.txt"), example).unwrap();
         assert_eq!(
-            run.wanted(&settings, target("t"), &mut status).err(),
+            run.wanted(&settings, false, target("t"), &mut status).err(),
             Some(None)
         );
         assert_eq!(status.live, Live::Idle);
@@ -558,6 +578,7 @@ mod tests {
             live: Live::Playing {
                 players: 2,
                 names: vec!["Sparrow".into(), "Tidal".into()],
+                host: Some(0),
             },
             listed: Some(ListedLobby {
                 region: "eu".into(),

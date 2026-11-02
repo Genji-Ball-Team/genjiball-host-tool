@@ -2,7 +2,7 @@
 //! at a time, keeps `uploads.json` up to date and tells the window. Runs for as long as the app
 //! does, window open or not.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -121,6 +121,9 @@ struct LobbyKeys {
     servers: HashMap<String, HashMap<String, (i64, String)>>,
     /// When a server was last asked for them, by an upload that needed a lobby's region.
     looked_up: HashMap<String, Instant>,
+    /// The servers the last such ask failed on, until a list comes from them: an upload that
+    /// needs a lobby's region waits rather than going as the tool's region.
+    lookup_failed: HashSet<String>,
 }
 
 impl Uploader {
@@ -154,6 +157,7 @@ impl Uploader {
     /// server listed them (`GET /api/host/tourneys`).
     pub fn learn_lobbies(&self, server_url: &str, lobbies: &[TourneyLobby]) {
         let mut known = self.lobbies.lock().unwrap();
+        known.lookup_failed.remove(server_url);
         let keys = known.servers.entry(server_url.to_string()).or_default();
         for lobby in lobbies {
             if let Some(code) = &lobby.code {
@@ -213,6 +217,21 @@ impl Uploader {
                 true
             }
         }
+    }
+
+    /// Notes that asking `server_url` for the host's lobbies failed.
+    fn lookup_failed(&self, server_url: &str) {
+        let mut known = self.lobbies.lock().unwrap();
+        known.lookup_failed.insert(server_url.to_string());
+    }
+
+    /// Whether the last ask for the host's lobbies on `server_url` failed, with no list since.
+    fn lookup_pending(&self, server_url: &str) -> bool {
+        self.lobbies
+            .lock()
+            .unwrap()
+            .lookup_failed
+            .contains(server_url)
     }
 
     /// Whether a tourney match's end was uploaded since this was last asked.
@@ -877,7 +896,8 @@ impl Run {
 
     /// The region the file `name` (read as `scan`) is uploaded as (`tourney::upload_region`): a log
     /// of tourney matches goes as their lobby's region, asking the server for the host's lobbies
-    /// first if one isn't known yet; anything else as `target`'s.
+    /// first if one isn't known yet; anything else as `target`'s. An error when that ask failed:
+    /// the file waits, since once recorded it's never sent again as the right region.
     async fn file_region(
         &self,
         uploader: &Uploader,
@@ -885,11 +905,11 @@ impl Run {
         name: &str,
         scan: &Scan,
         timeout: Duration,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, String> {
         let server_url = target.server_url;
         let keys = scan.lobby_keys();
         if keys.is_empty() {
-            return target.region.map(str::to_string);
+            return Ok(target.region.map(str::to_string));
         }
         let unknown = keys
             .iter()
@@ -897,8 +917,15 @@ impl Run {
         if unknown && uploader.may_look_up(server_url, Instant::now()) {
             match server::host_tourneys(server_url, target.token, timeout).await {
                 Ok(list) => uploader.learn_lobbies(server_url, &list.lobbies),
-                Err(e) => log::warn!("Couldn't ask {server_url} for your tourney lobbies: {e:?}"),
+                Err(e) => {
+                    log::warn!("Couldn't ask {server_url} for your tourney lobbies: {e:?}");
+                    uploader.lookup_failed(server_url);
+                }
             }
+        }
+        // Only a file of tourney matches goes as their lobby's region (`upload_region`).
+        if unknown && scan.only_tourneys() && uploader.lookup_pending(server_url) {
+            return Err("Waiting to learn the tourney lobby's region from the server".into());
         }
         let region = tourney::upload_region(
             scan,
@@ -923,7 +950,7 @@ impl Run {
                 ),
             }
         }
-        region
+        Ok(region)
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it
@@ -959,6 +986,16 @@ impl Run {
         if !uploader.is_current(target.generation) {
             return Ok(false);
         }
+        let region = match region {
+            Ok(region) => region,
+            Err(message) => {
+                log::warn!("{}: {message}. Trying again later", due.name);
+                self.tracker
+                    .failed(&due.name, Instant::now(), None, message.clone());
+                self.retrying = Some(message);
+                return Ok(false);
+            }
+        };
         let region = region.as_deref();
         let info = prepared.info(&due.name, region);
         let note = |outcome| {
@@ -1324,6 +1361,40 @@ mod tests {
             .unwrap()
             .get(&server, &file.name)
             .is_none());
+    }
+
+    #[test]
+    fn a_tourney_match_waits_while_its_lobbys_region_cant_be_looked_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        // The lookup fails: the file isn't uploaded as the tool's region, it waits.
+        let server = server::test_server(
+            "HTTP/1.1 500 Internal Server Error
+Content-Length: 0
+
+"
+            .into(),
+            "",
+            || {},
+        );
+        let file = due(dir.path(), TOURNEY_LOG);
+        assert_eq!(
+            block_on(run.send(&uploader, target(&server), &file, TIMEOUT)),
+            Ok(false)
+        );
+        assert!(uploader.recent().is_empty());
+        assert!(run.retrying.as_deref().unwrap().contains("region"));
+        assert!(uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(&server, &file.name)
+            .is_none());
+        // Still waiting while the next lookup isn't due, until a list comes (the tourney loop's).
+        assert!(uploader.lookup_pending(&server));
+        uploader.learn_lobbies(&server, &[]);
+        assert!(!uploader.lookup_pending(&server));
     }
 
     /// The request an upload of `text` (in `file`, rewritten first) sends, as `run` and `uploader`.

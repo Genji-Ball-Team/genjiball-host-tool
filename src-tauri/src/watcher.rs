@@ -187,7 +187,7 @@ impl Tracker {
                 before => {
                     // A file still being written may be locked for a moment: try on the next poll,
                     // keeping what's known of it (a failed upload's backoff).
-                    let Ok(bytes) = fs::read(&path) else {
+                    let Ok((bytes, _)) = read_capped(&path) else {
                         if let Some(mut t) = before {
                             t.due = false;
                             poll.waiting += usize::from(t.waiting);
@@ -205,7 +205,12 @@ impl Tracker {
                         size,
                         modified,
                         changed_at,
-                        complete: complete.len() as u64,
+                        // Too large: what an upload records (`Prepared::size`) is its whole size.
+                        complete: if size > config::MAX_UPLOAD_BYTES {
+                            size
+                        } else {
+                            complete.len() as u64
+                        },
                         scan: log_scan::scan(&String::from_utf8_lossy(complete)),
                         failures,
                         retry_at,
@@ -316,6 +321,18 @@ impl Tracker {
         queue.sort_by(|a, b| a.file.cmp(&b.file));
         queue
     }
+}
+
+/// The file at `path`, read up to `MAX_UPLOAD_BYTES` (all of it a server would take), and its
+/// whole size: a file over the limit is never read into memory whole.
+pub fn read_capped(path: &Path) -> io::Result<(Vec<u8>, u64)> {
+    use std::io::Read;
+    let file = fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut bytes = Vec::with_capacity(len.min(config::MAX_UPLOAD_BYTES) as usize);
+    file.take(config::MAX_UPLOAD_BYTES)
+        .read_to_end(&mut bytes)?;
+    Ok((bytes, len))
 }
 
 /// The newest log file in `folder` (by name: Overwatch names them by when they start), the one
@@ -926,6 +943,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(poll, Poll::default());
+    }
+
+    #[test]
+    fn reads_a_file_only_up_to_the_upload_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = format!("{EXAMPLE}{}", "x".repeat(config::MAX_UPLOAD_BYTES as usize));
+        write(dir.path(), NAME, &big, Duration::ZERO);
+        let (bytes, len) = read_capped(&dir.path().join(NAME)).unwrap();
+        assert_eq!(bytes.len() as u64, config::MAX_UPLOAD_BYTES);
+        assert_eq!(len, big.len() as u64);
+        assert!(bytes.starts_with(EXAMPLE.as_bytes()));
+        write(dir.path(), NAME, EXAMPLE, Duration::ZERO);
+        let (bytes, len) = read_capped(&dir.path().join(NAME)).unwrap();
+        assert_eq!(
+            (bytes.as_slice(), len),
+            (EXAMPLE.as_bytes(), EXAMPLE.len() as u64)
+        );
     }
 
     #[test]

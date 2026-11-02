@@ -433,6 +433,9 @@ struct Run {
 
 /// A file as an upload sends it, besides its bytes: what's read from them.
 struct Prepared {
+    /// What an upload sends, in bytes: the file's whole size when it's over
+    /// `MAX_UPLOAD_BYTES`, since then only the start of it is read and nothing is sent.
+    size: u64,
     scan: Scan,
     host_afk: Option<String>,
     started_at: Option<String>,
@@ -795,11 +798,17 @@ impl Run {
     }
 
     /// `due` as an upload sends it: only its complete lines (the game may be halfway through
-    /// writing the next one), and what's read from them. An error when it can't be read.
+    /// writing the next one), and what's read from them. An error when it can't be read. A file
+    /// over `MAX_UPLOAD_BYTES` is read only up to the limit (`watcher::read_capped`).
     fn prepare(&self, uploader: &Uploader, due: &Due) -> Result<(Vec<u8>, Prepared), String> {
-        let mut bytes =
-            fs::read(&due.path).map_err(|e| format!("Couldn't read {}: {e}", due.name))?;
+        let (mut bytes, len) = watcher::read_capped(&due.path)
+            .map_err(|e| format!("Couldn't read {}: {e}", due.name))?;
         bytes.truncate(log_scan::complete_lines(&bytes).len());
+        let size = if len > config::MAX_UPLOAD_BYTES {
+            len
+        } else {
+            bytes.len() as u64
+        };
         let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
         // The live log may have grown since the poll read it: a round that started meanwhile is
         // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
@@ -808,6 +817,7 @@ impl Run {
         }
         let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
         let prepared = Prepared {
+            size,
             scan,
             host_afk,
             started_at: started_at(due),
@@ -827,14 +837,14 @@ impl Run {
     ) -> usize {
         let mut done = 0;
         for due in due {
-            let (bytes, prepared) = match self.prepare(uploader, due) {
+            let (_, prepared) = match self.prepare(uploader, due) {
                 Ok(prepared) => prepared,
                 Err(message) => {
                     log::warn!("Dry run: {message}");
                     continue;
                 }
             };
-            let size = bytes.len() as u64;
+            let size = prepared.size;
             log::info!(
                 "Dry run: would upload {} ({size} bytes) to {server_url}",
                 due.name
@@ -976,11 +986,15 @@ impl Run {
                 return Ok(false);
             }
         };
-        let size = bytes.len() as u64;
+        let size = prepared.size;
         let scan = &prepared.scan;
-        let region = self
-            .file_region(uploader, target, &due.name, scan, timeout)
-            .await;
+        // A file too large to send needs no lobby lookup.
+        let region = if size > config::MAX_UPLOAD_BYTES {
+            Ok(target.region.map(str::to_string))
+        } else {
+            self.file_region(uploader, target, &due.name, scan, timeout)
+                .await
+        };
         // Asking for the lobbies takes a while: a server, token or region picked meanwhile isn't
         // this poll's to upload with. Not a failed upload, so no backoff.
         if !uploader.is_current(target.generation) {
@@ -1395,6 +1409,34 @@ Content-Length: 0
         assert!(uploader.lookup_pending(&server));
         uploader.learn_lobbies(&server, &[]);
         assert!(!uploader.lookup_pending(&server));
+    }
+
+    #[test]
+    fn a_file_over_the_limit_is_refused_without_being_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        // A tourney log too: no lobby lookup, no upload, so no server is needed.
+        let big = format!(
+            "{TOURNEY_LOG}{}
+",
+            "x".repeat(config::MAX_UPLOAD_BYTES as usize)
+        );
+        let file = due(dir.path(), &big);
+        assert_eq!(
+            block_on(run.send(&uploader, target(SERVER), &file, TIMEOUT)),
+            Ok(true)
+        );
+        let sent = uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(SERVER, &file.name)
+            .cloned()
+            .unwrap();
+        // Its whole size, so the watcher leaves it alone from then on.
+        assert_eq!(sent.size, big.len() as u64);
+        assert!(matches!(sent.answer, Answer::Refused { ref error, .. } if error == "too_large"));
     }
 
     /// The request an upload of `text` (in `file`, rewritten first) sends, as `run` and `uploader`.

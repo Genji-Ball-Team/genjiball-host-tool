@@ -73,7 +73,7 @@ export interface ParsedPlayer {
   joinTime: number;
   /** `time` of the `LEAVE`, or `null` if they stayed to the end. */
   leaveTime: number | null;
-  /** `JOIN` `host` is `1`: the lobby host (a host who rejoins has a new id, also marked). Always false in logs without the field. */
+  /** `JOIN` `host` is `1`: the lobby host (a host who rejoins has a new id, not always marked: see `hostPlayerIds`). Always false in logs without the field. */
   host: boolean;
 }
 

@@ -537,6 +537,7 @@ impl Run {
         self.tracker.timing = Timing::new(&settings);
         let timeout = settings.request_timeout();
         let refresh_every = settings.secs(&config::STATUS_REFRESH_SECS);
+        let idle_every = settings.secs(&config::STATUS_IDLE_REFRESH_SECS);
         let chosen_region = settings.region.clone();
         let mut status = UploadStatus {
             server_url: server_url.clone(),
@@ -718,15 +719,18 @@ impl Run {
             app.state::<Tourneys>().refresh();
         }
         if status.problem.is_none() && uploader.is_current(generation) {
+            let since =
+                Utc::now() - chrono::Duration::seconds(config::STATUS_ACTIVE_FOR_SECS as i64);
+            let waits = uploader.record.lock().unwrap().awaits_status(
+                &server_url,
+                &since.to_rfc3339_opts(SecondsFormat::Secs, true),
+            );
+            let shown = app.get_webview_window("main").is_some_and(|w| {
+                w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false)
+            });
+            let every = refresh_interval(shown, waits, refresh_every, idle_every);
             if let Err(problem) = self
-                .refresh(
-                    &uploader,
-                    generation,
-                    &server_url,
-                    &token,
-                    refresh_every,
-                    timeout,
-                )
+                .refresh(&uploader, generation, &server_url, &token, every, timeout)
                 .await
             {
                 status.problem = Some(problem);
@@ -1158,6 +1162,16 @@ fn started_at(due: &Due) -> Option<String> {
         let created = fs::metadata(&due.path).ok()?.created().ok()?;
         Some(DateTime::<Local>::from(created).to_rfc3339_opts(SecondsFormat::Secs, false))
     })
+}
+
+/// How often the status refresh asks: every `active` while the window shows or a recent upload
+/// waits on its status (`Record::awaits_status`), else every `idle`.
+fn refresh_interval(shown: bool, waits: bool, active: Duration, idle: Duration) -> Duration {
+    if shown || waits {
+        active
+    } else {
+        idle.max(active)
+    }
 }
 
 #[cfg(test)]
@@ -1595,6 +1609,17 @@ Content-Length: 0
         assert!(uploader.tourney_ended(&server, 7, None));
         assert!(uploader.tourney_ended(&server, 8, Some("073518264903")));
         assert!(!uploader.tourney_ended(&server, 8, None));
+    }
+
+    #[test]
+    fn the_status_refresh_slows_down_while_nothing_waits_on_it() {
+        let active = Duration::from_secs(config::STATUS_REFRESH_SECS.default);
+        let idle = Duration::from_secs(config::STATUS_IDLE_REFRESH_SECS.default);
+        assert_eq!(refresh_interval(true, false, active, idle), active);
+        assert_eq!(refresh_interval(false, true, active, idle), active);
+        assert_eq!(refresh_interval(false, false, active, idle), idle);
+        // Never faster idle than active.
+        assert_eq!(refresh_interval(false, false, idle, active), idle);
     }
 
     #[test]

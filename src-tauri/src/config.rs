@@ -189,6 +189,22 @@ pub const STATUS_REFRESH_SECS: Tunable = Tunable {
     max: 3600,
 };
 
+/// How often the status refresh asks while nothing waits on it: the window is hidden, and no
+/// upload of the last `STATUS_ACTIVE_FOR_SECS` waits on its review or its id on the site. An
+/// upload and "Check again" still ask at once.
+pub const STATUS_IDLE_REFRESH_SECS: Tunable = Tunable {
+    key: "statusIdleRefreshSecs",
+    label: "Idle status refresh",
+    help: "How often the server is asked again while the window is hidden and no recent match waits on a review or its link.",
+    default: 900,
+    min: 60,
+    max: 21600,
+};
+
+/// How long after its upload a match in review, or without its id on the site yet, keeps the
+/// status refresh at `STATUS_REFRESH_SECS` with the window hidden.
+pub const STATUS_ACTIVE_FOR_SECS: u64 = 24 * 60 * 60;
+
 /// The server answers at most this many match keys at once (`hostMatchKeysMax` in genjiball-ranked):
 /// the newest this many matches get their status refreshed.
 pub const MAX_STATUS_KEYS: usize = 50;
@@ -643,7 +659,7 @@ pub const STREAM_REQUEST_MAX_BYTES: usize = 8 * 1024;
 pub const STREAM_READ_TIMEOUT_SECS: u64 = 5;
 
 /// Every `Tunable`, in the order the window lists them.
-pub const TUNABLES: [&Tunable; 10] = [
+pub const TUNABLES: [&Tunable; 11] = [
     &POLL_INTERVAL_SECS,
     &QUIET_SECS,
     &MATCH_VIEW_POLL_SECS,
@@ -651,6 +667,7 @@ pub const TUNABLES: [&Tunable; 10] = [
     &RETRY_FIRST_SECS,
     &RETRY_MAX_SECS,
     &STATUS_REFRESH_SECS,
+    &STATUS_IDLE_REFRESH_SECS,
     &TOURNEY_POLL_SECS,
     &RELEASE_CACHE_SECS,
     &UPDATE_CHECK_SECS,

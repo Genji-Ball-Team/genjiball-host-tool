@@ -62,4 +62,18 @@ describe("Home's live log", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(invoke).toHaveBeenCalledTimes(4);
   });
+
+  it("waits, without the sidebar's red dot, while the folder holds no log", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = /<body>([\s\S]*)<\/body>/.exec(readFileSync("index.html", "utf8"))?.[1] ?? "";
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+    setupViews();
+    setupHome(state, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById("home-status")?.dataset.tone).toBe("neutral");
+    expect(document.getElementById("home-log")?.textContent).toBe("No log in the folder yet");
+    expect(document.getElementById("home-problems")?.textContent).toContain("Workshop Inspector Log File");
+    expect(document.getElementById("nav-home-dot")?.hidden).toBe(true);
+  });
 });

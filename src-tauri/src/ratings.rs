@@ -71,6 +71,11 @@ struct Inner {
     running: HashSet<Job>,
 }
 
+/// Long enough for `/api/players?search=`: the server refuses shorter names.
+fn searchable(name: &str) -> bool {
+    name.trim().chars().count() >= config::PLAYER_SEARCH_MIN_CHARS
+}
+
 /// Names map to players ignoring case, as on the server.
 fn key(name: &str) -> String {
     name.to_lowercase()
@@ -85,11 +90,25 @@ impl Ratings {
             .iter()
             .map(|name| {
                 let k = key(name);
-                let on_board = inner.board.as_ref().and_then(|(_, b)| b.get(&k));
-                let searched = inner.searched.get(&k).map(|(_, s)| s);
+                let on_board = inner
+                    .board
+                    .as_ref()
+                    .and_then(|(at, b)| b.get(&k).map(|s| (*at, s)));
+                let searched = inner.searched.get(&k).map(|(at, s)| (*at, s));
                 let (state, standing) = match (on_board, searched) {
-                    (Some(s), _) | (None, Some(Some(s))) => (RatingState::Found, Some(s.clone())),
-                    (None, Some(None)) => (RatingState::Unknown, None),
+                    // Both known: the newer one, so a failed leaderboard refresh doesn't hide a newer search.
+                    (Some((board_at, _)), Some((at, Some(s)))) if at > board_at => {
+                        (RatingState::Found, Some(s.clone()))
+                    }
+                    (Some((_, s)), _) | (None, Some((_, Some(s)))) => {
+                        (RatingState::Found, Some(s.clone()))
+                    }
+                    (None, Some((_, None))) => (RatingState::Unknown, None),
+                    // Off the leaderboard and too short to search (the server refuses it): it won't
+                    // be known, so not left pending.
+                    (None, None) if inner.board.is_some() && !searchable(name) => {
+                        (RatingState::Unknown, None)
+                    }
                     (None, None) => (RatingState::Pending, None),
                 };
                 PlayerRating {
@@ -132,16 +151,15 @@ impl Ratings {
                     };
                     fresh(*at, keep)
                 });
-                let searchable = name.trim().chars().count() >= config::PLAYER_SEARCH_MIN_CHARS;
-                if !board.contains_key(&k) && !searched && searchable {
+                if !board.contains_key(&k) && !searched && searchable(name) {
                     jobs.push(Job::Search(k));
                 }
             }
         }
         for &id in matches {
             let due = match inner.matches.get(&id) {
-                // Rated: it won't change.
-                Some((_, Some(m))) if m.rated() => false,
+                // Rated: it only changes when an admin voids or recomputes it, so read again now and then.
+                Some((at, Some(m))) if m.rated() => !fresh(*at, config::RANKS_CACHE_SECS),
                 Some((at, _)) => !fresh(*at, config::MATCH_RATINGS_RETRY_SECS),
                 None => true,
             };
@@ -272,7 +290,8 @@ mod tests {
         let players = ratings.players(&scope(), &lobby);
         assert_eq!(players[0].state, RatingState::Found);
         assert_eq!(players[1].standing.as_ref().unwrap().rating, Some(1400.0));
-        assert_eq!(players[2].state, RatingState::Pending);
+        // Off the leaderboard and too short to search: new, not pending forever.
+        assert_eq!(players[2].state, RatingState::Unknown);
         assert!(ratings.jobs(&scope(), &lobby, &[], now).is_empty());
 
         // The cache runs out.
@@ -388,8 +407,49 @@ mod tests {
             [Job::Match(12)]
         );
         ratings.match_read(&scope(), 12, Some(result(Some(1520.0))), much_later);
-        let forever = much_later + Duration::from_secs(24 * 3600);
-        assert!(ratings.jobs(&scope(), &[], &[12], forever).is_empty());
+        // Rated: only read again once the cache runs out (an admin may void or recompute it).
+        let soon = much_later + Duration::from_secs(config::MATCH_RATINGS_RETRY_SECS + 1);
+        assert!(ratings.jobs(&scope(), &[], &[12], soon).is_empty());
+        let stale = much_later + Duration::from_secs(config::RANKS_CACHE_SECS + 1);
+        assert_eq!(ratings.jobs(&scope(), &[], &[12], stale), [Job::Match(12)]);
+    }
+
+    #[test]
+    fn a_newer_search_wins_over_an_older_leaderboard() {
+        let ratings = Ratings::default();
+        let now = Instant::now();
+        let lobby = names(&["Kenzo"]);
+        ratings.jobs(&scope(), &lobby, &[], now);
+        ratings.searched(
+            &scope(),
+            "kenzo",
+            vec![FoundPlayer {
+                standing: standing("Kenzo", 1400.0),
+                matched_alias: None,
+            }],
+            now,
+        );
+        ratings.board_read(&scope(), vec![standing("Kenzo", 1700.0)], now);
+        let rating = |r: &Ratings| {
+            r.players(&scope(), &lobby)[0]
+                .standing
+                .as_ref()
+                .unwrap()
+                .rating
+        };
+        assert_eq!(rating(&ratings), Some(1700.0));
+        // The leaderboard refresh failed, a later search found them.
+        let later = now + Duration::from_secs(config::RANKS_CACHE_SECS + 1);
+        ratings.searched(
+            &scope(),
+            "kenzo",
+            vec![FoundPlayer {
+                standing: standing("Kenzo", 1750.0),
+                matched_alias: None,
+            }],
+            later,
+        );
+        assert_eq!(rating(&ratings), Some(1750.0));
     }
 
     #[test]

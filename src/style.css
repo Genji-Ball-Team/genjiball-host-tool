@@ -57,6 +57,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .brand-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .titlebar .tag { margin-left: 0; font-size: .7rem; }
 .connection { --tone: var(--good); display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.connection[data-tone="neutral"] { --tone: var(--muted); }
 .connection[data-tone="warn"] { --tone: var(--gold); }
 .connection[data-tone="bad"] { --tone: var(--bad); }
 .connection i { flex: none; width: .45rem; height: .45rem; border-radius: 50%; background: var(--tone); }
@@ -287,6 +288,7 @@ pre.raw {
 #home, #setup { margin-top: 1.25rem; }
 #home > * + * { margin-top: 1rem; }
 .status-card { --tone: var(--good); padding: .9rem 1rem 1rem; border: 1px solid var(--line); border-left: 3px solid var(--tone); border-radius: 4px; background: var(--panel); }
+.status-card[data-tone="neutral"] { --tone: var(--muted); }
 .status-card[data-tone="warn"] { --tone: var(--gold); }
 .status-card[data-tone="bad"] { --tone: var(--bad); }
 .status-line { display: flex; align-items: center; gap: .55rem; margin: 0; font-size: 1.1rem; }

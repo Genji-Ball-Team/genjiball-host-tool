@@ -128,8 +128,15 @@ type FallbackFile = BTreeMap<String, String>;
 
 fn read_file(path: &Path) -> Result<FallbackFile, String> {
     match fs::read_to_string(path) {
-        // A damaged file only loses the tokens in it: they can be entered again.
-        Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
+        // A damaged file is never read as empty: an older native token would win again, and the
+        // next save would write over the other servers' tokens. Everything waits until it's
+        // fixed or deleted.
+        Ok(text) => serde_json::from_str(&text).map_err(|e| {
+            format!(
+                "{} is damaged ({e}). Delete it and enter the host token again",
+                path.display()
+            )
+        }),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(FallbackFile::new()),
         Err(e) => Err(format!("Couldn't read {}: {e}", path.display())),
     }
@@ -237,11 +244,34 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_fallback_file_reads_as_empty() {
+    fn a_damaged_fallback_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tokens.json");
         fs::write(&path, "{ nope").unwrap();
-        assert!(read_file(&path).unwrap().is_empty());
+        assert!(read_file(&path).unwrap_err().contains("is damaged"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_damaged_fallback_file_is_neither_skipped_nor_written_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://genjiball.us";
+        let store = FakeStore::default();
+        store.set(url, "old-native-token").unwrap();
+        let tokens = Tokens {
+            store: FakeStore {
+                full: true,
+                ..store
+            },
+            fallback: dir.path().join("tokens.json"),
+        };
+        fs::write(&tokens.fallback, "{ nope").unwrap();
+        // The older native token doesn't come back.
+        assert!(tokens.get(url).is_err());
+        // Saving into the fallback file doesn't replace it, dropping other servers' tokens.
+        assert!(tokens.set(url, "new-token").is_err());
+        assert!(tokens.delete(url).is_err());
+        assert_eq!(fs::read_to_string(&tokens.fallback).unwrap(), "{ nope");
     }
 
     #[cfg(windows)]

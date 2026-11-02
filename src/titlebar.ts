@@ -16,7 +16,7 @@ const MAXIMIZE_ICON = "M1.5 1.5h7v7h-7z";
 const RESTORE_ICON = "M1.5 3.5h5v5h-5zM3.5 3.5v-2h5v5h-2";
 
 /** The connection state next to the title: what Home's status card says, in a word or two. */
-export function setTitlebarState(text: string, tone: "good" | "warn" | "bad", playing = false): void {
+export function setTitlebarState(text: string, tone: "good" | "neutral" | "warn" | "bad", playing = false): void {
   const state = el("titlebar-state");
   state.hidden = !text;
   state.dataset.tone = tone;

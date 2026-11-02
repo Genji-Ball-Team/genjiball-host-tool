@@ -166,6 +166,21 @@ impl Record {
         keys
     }
 
+    /// Whether an upload to `server_url` at `since` or later (RFC 3339, UTC) has a match the status
+    /// refresh still waits on: in review, or on the site without its id yet.
+    pub fn awaits_status(&self, server_url: &str, since: &str) -> bool {
+        self.uploads(server_url)
+            .into_iter()
+            .take_while(|(_, sent)| sent.at.as_str() >= since)
+            .filter_map(|(_, sent)| match &sent.answer {
+                Answer::Answered(answer) => Some(answer),
+                _ => None,
+            })
+            .flat_map(|answer| &answer.matches)
+            .filter(|m| m.match_key.is_some())
+            .any(|m| m.status == "review" || (server::is_public(&m.status) && m.match_id.is_none()))
+    }
+
     /// Puts the server's status now on every upload of those matches. The revision goes up when
     /// one changed.
     pub fn update_states(&mut self, server_url: &str, states: &[MatchState]) {
@@ -494,6 +509,29 @@ mod tests {
             record.recent_match_keys("https://other", 50),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn knows_when_a_recent_match_waits_on_its_status() {
+        let server = "https://genjiball.us";
+        let since = "2026-10-03T10:30:00Z";
+        let with = |at: &str, status: &str, match_id: Option<i64>| {
+            let mut record = Record::default();
+            let mut sent = answered(at, &["1"], status);
+            if let Answer::Answered(answer) = &mut sent.answer {
+                answer.matches[0].match_id = match_id;
+            }
+            record.put(server, "Log-a.txt", sent);
+            record.awaits_status(server, since)
+        };
+        // In review, or on the site without its id yet: still waiting.
+        assert!(with("2026-10-03T11:00:00Z", "review", None));
+        assert!(with("2026-10-03T11:00:00Z", "accepted", None));
+        // Settled, or too old to wait on.
+        assert!(!with("2026-10-03T11:00:00Z", "accepted", Some(4)));
+        assert!(!with("2026-10-03T11:00:00Z", "rejected", None));
+        assert!(!with("2026-10-03T10:00:00Z", "review", None));
+        assert!(!Record::default().awaits_status(server, since));
     }
 
     #[test]

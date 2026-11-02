@@ -15,9 +15,11 @@ export type Fix =
 export interface Problem {
   text: string;
   fix: Fix | null;
+  /** Only a hint: no red dot on the sidebar for it. */
+  hint?: boolean;
 }
 
-export type Tone = "good" | "warn" | "bad";
+export type Tone = "good" | "neutral" | "warn" | "bad";
 
 /** The parts of the upload status Home reads. Mirrors part of `UploadStatus` in src-tauri/src/uploader.rs. */
 export interface UploadSummary {
@@ -40,6 +42,8 @@ export interface HomeInput {
   unreachable: string | null;
   /** Tourney lobbies waiting for the host's verify screenshot. */
   screenshotsDue: number;
+  /** The log folder is there but holds no Workshop log (`get_live_file` found none). */
+  noLog?: boolean;
 }
 
 /** The status line at the top of Home, and its colour. */
@@ -48,6 +52,8 @@ export function headline(input: HomeInput, serverName: string): { text: string; 
   if (input.settingsError) return { text: "Uploads are paused", detail: "The settings file can't be read: see above.", tone: "bad" };
   if (upload?.problem) return { text: "Uploads are paused", detail: "Fix what's listed below and they go on by themselves.", tone: "bad" };
   if (input.dryRun) return { text: "Dry run", detail: "Ranked logs are picked as usual, but nothing is uploaded.", tone: "warn" };
+  // A wrong folder, or log files switched off in the game, mustn't look like all is well.
+  if (input.noLog && !upload?.retrying) return { text: "Waiting for a Workshop log", detail: "", tone: "neutral" };
   if (!upload) return { text: `Uploading to ${serverName}`, detail: "Starting…", tone: "good" };
   const waiting = upload.waiting === 1 ? "1 ranked log to upload." : upload.waiting ? `${upload.waiting} ranked logs to upload.` : "Watching for ranked matches.";
   return { text: `Uploading to ${serverName}`, detail: waiting, tone: upload.retrying ? "warn" : "good" };
@@ -75,6 +81,12 @@ export function problems(input: HomeInput): Problem[] {
     });
   } else if (kind === "folderUnreadable") {
     found.push({ text: `Can't read the log folder: ${input.upload?.problem?.message ?? ""}`, fix: { kind: "pane", pane: "game", label: "Log folder" } });
+  } else if (input.noLog) {
+    found.push({
+      text: "No log in this folder yet. Turn on Workshop Inspector Log File in Overwatch's settings, or check the folder.",
+      fix: { kind: "pane", pane: "game", label: "Log folder" },
+      hint: true,
+    });
   }
 
   if (kind === "noRegion") found.push({ text: "You have no home region yet. Pick the region you host in.", fix: { kind: "pane", pane: "game", label: "Pick region" } });

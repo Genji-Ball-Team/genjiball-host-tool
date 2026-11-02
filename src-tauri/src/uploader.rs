@@ -2,7 +2,7 @@
 //! at a time, keeps `uploads.json` up to date and tells the window. Runs for as long as the app
 //! does, window open or not.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -121,6 +121,9 @@ struct LobbyKeys {
     servers: HashMap<String, HashMap<String, (i64, String)>>,
     /// When a server was last asked for them, by an upload that needed a lobby's region.
     looked_up: HashMap<String, Instant>,
+    /// The servers the last such ask failed on, until a list comes from them: an upload that
+    /// needs a lobby's region waits rather than going as the tool's region.
+    lookup_failed: HashSet<String>,
 }
 
 impl Uploader {
@@ -154,6 +157,7 @@ impl Uploader {
     /// server listed them (`GET /api/host/tourneys`).
     pub fn learn_lobbies(&self, server_url: &str, lobbies: &[TourneyLobby]) {
         let mut known = self.lobbies.lock().unwrap();
+        known.lookup_failed.remove(server_url);
         let keys = known.servers.entry(server_url.to_string()).or_default();
         for lobby in lobbies {
             if let Some(code) = &lobby.code {
@@ -213,6 +217,21 @@ impl Uploader {
                 true
             }
         }
+    }
+
+    /// Notes that asking `server_url` for the host's lobbies failed.
+    fn lookup_failed(&self, server_url: &str) {
+        let mut known = self.lobbies.lock().unwrap();
+        known.lookup_failed.insert(server_url.to_string());
+    }
+
+    /// Whether the last ask for the host's lobbies on `server_url` failed, with no list since.
+    fn lookup_pending(&self, server_url: &str) -> bool {
+        self.lobbies
+            .lock()
+            .unwrap()
+            .lookup_failed
+            .contains(server_url)
     }
 
     /// Whether a tourney match's end was uploaded since this was last asked.
@@ -414,6 +433,9 @@ struct Run {
 
 /// A file as an upload sends it, besides its bytes: what's read from them.
 struct Prepared {
+    /// What an upload sends, in bytes: the file's whole size when it's over
+    /// `MAX_UPLOAD_BYTES`, since then only the start of it is read and nothing is sent.
+    size: u64,
     scan: Scan,
     host_afk: Option<String>,
     started_at: Option<String>,
@@ -515,6 +537,7 @@ impl Run {
         self.tracker.timing = Timing::new(&settings);
         let timeout = settings.request_timeout();
         let refresh_every = settings.secs(&config::STATUS_REFRESH_SECS);
+        let idle_every = settings.secs(&config::STATUS_IDLE_REFRESH_SECS);
         let chosen_region = settings.region.clone();
         let mut status = UploadStatus {
             server_url: server_url.clone(),
@@ -696,15 +719,18 @@ impl Run {
             app.state::<Tourneys>().refresh();
         }
         if status.problem.is_none() && uploader.is_current(generation) {
+            let since =
+                Utc::now() - chrono::Duration::seconds(config::STATUS_ACTIVE_FOR_SECS as i64);
+            let waits = uploader.record.lock().unwrap().awaits_status(
+                &server_url,
+                &since.to_rfc3339_opts(SecondsFormat::Secs, true),
+            );
+            let shown = app.get_webview_window("main").is_some_and(|w| {
+                w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false)
+            });
+            let every = refresh_interval(shown, waits, refresh_every, idle_every);
             if let Err(problem) = self
-                .refresh(
-                    &uploader,
-                    generation,
-                    &server_url,
-                    &token,
-                    refresh_every,
-                    timeout,
-                )
+                .refresh(&uploader, generation, &server_url, &token, every, timeout)
                 .await
             {
                 status.problem = Some(problem);
@@ -776,11 +802,17 @@ impl Run {
     }
 
     /// `due` as an upload sends it: only its complete lines (the game may be halfway through
-    /// writing the next one), and what's read from them. An error when it can't be read.
+    /// writing the next one), and what's read from them. An error when it can't be read. A file
+    /// over `MAX_UPLOAD_BYTES` is read only up to the limit (`watcher::read_capped`).
     fn prepare(&self, uploader: &Uploader, due: &Due) -> Result<(Vec<u8>, Prepared), String> {
-        let mut bytes =
-            fs::read(&due.path).map_err(|e| format!("Couldn't read {}: {e}", due.name))?;
+        let (mut bytes, len) = watcher::read_capped(&due.path)
+            .map_err(|e| format!("Couldn't read {}: {e}", due.name))?;
         bytes.truncate(log_scan::complete_lines(&bytes).len());
+        let size = if len > config::MAX_UPLOAD_BYTES {
+            len
+        } else {
+            bytes.len() as u64
+        };
         let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
         // The live log may have grown since the poll read it: a round that started meanwhile is
         // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
@@ -789,6 +821,7 @@ impl Run {
         }
         let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
         let prepared = Prepared {
+            size,
             scan,
             host_afk,
             started_at: started_at(due),
@@ -808,14 +841,14 @@ impl Run {
     ) -> usize {
         let mut done = 0;
         for due in due {
-            let (bytes, prepared) = match self.prepare(uploader, due) {
+            let (_, prepared) = match self.prepare(uploader, due) {
                 Ok(prepared) => prepared,
                 Err(message) => {
                     log::warn!("Dry run: {message}");
                     continue;
                 }
             };
-            let size = bytes.len() as u64;
+            let size = prepared.size;
             log::info!(
                 "Dry run: would upload {} ({size} bytes) to {server_url}",
                 due.name
@@ -877,7 +910,8 @@ impl Run {
 
     /// The region the file `name` (read as `scan`) is uploaded as (`tourney::upload_region`): a log
     /// of tourney matches goes as their lobby's region, asking the server for the host's lobbies
-    /// first if one isn't known yet; anything else as `target`'s.
+    /// first if one isn't known yet; anything else as `target`'s. An error when that ask failed:
+    /// the file waits, since once recorded it's never sent again as the right region.
     async fn file_region(
         &self,
         uploader: &Uploader,
@@ -885,11 +919,11 @@ impl Run {
         name: &str,
         scan: &Scan,
         timeout: Duration,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, String> {
         let server_url = target.server_url;
         let keys = scan.lobby_keys();
         if keys.is_empty() {
-            return target.region.map(str::to_string);
+            return Ok(target.region.map(str::to_string));
         }
         let unknown = keys
             .iter()
@@ -897,8 +931,15 @@ impl Run {
         if unknown && uploader.may_look_up(server_url, Instant::now()) {
             match server::host_tourneys(server_url, target.token, timeout).await {
                 Ok(list) => uploader.learn_lobbies(server_url, &list.lobbies),
-                Err(e) => log::warn!("Couldn't ask {server_url} for your tourney lobbies: {e:?}"),
+                Err(e) => {
+                    log::warn!("Couldn't ask {server_url} for your tourney lobbies: {e:?}");
+                    uploader.lookup_failed(server_url);
+                }
             }
+        }
+        // Only a file of tourney matches goes as their lobby's region (`upload_region`).
+        if unknown && scan.only_tourneys() && uploader.lookup_pending(server_url) {
+            return Err("Waiting to learn the tourney lobby's region from the server".into());
         }
         let region = tourney::upload_region(
             scan,
@@ -923,7 +964,7 @@ impl Run {
                 ),
             }
         }
-        region
+        Ok(region)
     }
 
     /// Uploads one file and records what came of it: `true` when it's done with, `false` when it
@@ -949,16 +990,30 @@ impl Run {
                 return Ok(false);
             }
         };
-        let size = bytes.len() as u64;
+        let size = prepared.size;
         let scan = &prepared.scan;
-        let region = self
-            .file_region(uploader, target, &due.name, scan, timeout)
-            .await;
+        // A file too large to send needs no lobby lookup.
+        let region = if size > config::MAX_UPLOAD_BYTES {
+            Ok(target.region.map(str::to_string))
+        } else {
+            self.file_region(uploader, target, &due.name, scan, timeout)
+                .await
+        };
         // Asking for the lobbies takes a while: a server, token or region picked meanwhile isn't
         // this poll's to upload with. Not a failed upload, so no backoff.
         if !uploader.is_current(target.generation) {
             return Ok(false);
         }
+        let region = match region {
+            Ok(region) => region,
+            Err(message) => {
+                log::warn!("{}: {message}. Trying again later", due.name);
+                self.tracker
+                    .failed(&due.name, Instant::now(), None, message.clone());
+                self.retrying = Some(message);
+                return Ok(false);
+            }
+        };
         let region = region.as_deref();
         let info = prepared.info(&due.name, region);
         let note = |outcome| {
@@ -1107,6 +1162,16 @@ fn started_at(due: &Due) -> Option<String> {
         let created = fs::metadata(&due.path).ok()?.created().ok()?;
         Some(DateTime::<Local>::from(created).to_rfc3339_opts(SecondsFormat::Secs, false))
     })
+}
+
+/// How often the status refresh asks: every `active` while the window shows or a recent upload
+/// waits on its status (`Record::awaits_status`), else every `idle`.
+fn refresh_interval(shown: bool, waits: bool, active: Duration, idle: Duration) -> Duration {
+    if shown || waits {
+        active
+    } else {
+        idle.max(active)
+    }
 }
 
 #[cfg(test)]
@@ -1326,6 +1391,68 @@ mod tests {
             .is_none());
     }
 
+    #[test]
+    fn a_tourney_match_waits_while_its_lobbys_region_cant_be_looked_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        // The lookup fails: the file isn't uploaded as the tool's region, it waits.
+        let server = server::test_server(
+            "HTTP/1.1 500 Internal Server Error
+Content-Length: 0
+
+"
+            .into(),
+            "",
+            || {},
+        );
+        let file = due(dir.path(), TOURNEY_LOG);
+        assert_eq!(
+            block_on(run.send(&uploader, target(&server), &file, TIMEOUT)),
+            Ok(false)
+        );
+        assert!(uploader.recent().is_empty());
+        assert!(run.retrying.as_deref().unwrap().contains("region"));
+        assert!(uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(&server, &file.name)
+            .is_none());
+        // Still waiting while the next lookup isn't due, until a list comes (the tourney loop's).
+        assert!(uploader.lookup_pending(&server));
+        uploader.learn_lobbies(&server, &[]);
+        assert!(!uploader.lookup_pending(&server));
+    }
+
+    #[test]
+    fn a_file_over_the_limit_is_refused_without_being_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        // A tourney log too: no lobby lookup, no upload, so no server is needed.
+        let big = format!(
+            "{TOURNEY_LOG}{}
+",
+            "x".repeat(config::MAX_UPLOAD_BYTES as usize)
+        );
+        let file = due(dir.path(), &big);
+        assert_eq!(
+            block_on(run.send(&uploader, target(SERVER), &file, TIMEOUT)),
+            Ok(true)
+        );
+        let sent = uploader
+            .record
+            .lock()
+            .unwrap()
+            .get(SERVER, &file.name)
+            .cloned()
+            .unwrap();
+        // Its whole size, so the watcher leaves it alone from then on.
+        assert_eq!(sent.size, big.len() as u64);
+        assert!(matches!(sent.answer, Answer::Refused { ref error, .. } if error == "too_large"));
+    }
+
     /// The request an upload of `text` (in `file`, rewritten first) sends, as `run` and `uploader`.
     fn sent_request(run: &mut Run, uploader: &Uploader, file: &Due, text: &str) -> String {
         fs::write(&file.path, text).unwrap();
@@ -1482,6 +1609,17 @@ mod tests {
         assert!(uploader.tourney_ended(&server, 7, None));
         assert!(uploader.tourney_ended(&server, 8, Some("073518264903")));
         assert!(!uploader.tourney_ended(&server, 8, None));
+    }
+
+    #[test]
+    fn the_status_refresh_slows_down_while_nothing_waits_on_it() {
+        let active = Duration::from_secs(config::STATUS_REFRESH_SECS.default);
+        let idle = Duration::from_secs(config::STATUS_IDLE_REFRESH_SECS.default);
+        assert_eq!(refresh_interval(true, false, active, idle), active);
+        assert_eq!(refresh_interval(false, true, active, idle), active);
+        assert_eq!(refresh_interval(false, false, active, idle), idle);
+        // Never faster idle than active.
+        assert_eq!(refresh_interval(false, false, idle, active), idle);
     }
 
     #[test]

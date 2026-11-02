@@ -47,6 +47,22 @@ describe("Home's problems", () => {
   });
 });
 
+describe("Home without a log", () => {
+  it("waits, rather than looking healthy, and points at the folder setting", () => {
+    const empty = { ...fine, noLog: true };
+    expect(headline(empty, "genjiball.us")).toEqual({ text: "Waiting for a Workshop log", detail: "", tone: "neutral" });
+    expect(problems(empty)).toEqual([
+      {
+        text: "No log in this folder yet. Turn on Workshop Inspector Log File in Overwatch's settings, or check the folder.",
+        fix: { kind: "pane", pane: "game", label: "Log folder" },
+        hint: true,
+      },
+    ]);
+    // Paused uploads still say so first.
+    expect(headline({ ...empty, upload: { problem: { kind: "noRegion" }, waiting: 0, retrying: null } }, "genjiball.us").tone).toBe("bad");
+  });
+});
+
 describe("ago", () => {
   it("says how long ago, shortly", () => {
     const now = Date.parse("2026-10-06T12:00:00Z");

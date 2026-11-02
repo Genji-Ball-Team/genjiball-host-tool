@@ -36,6 +36,8 @@ let get: (() => HomeState) | null = null;
 let fix: (fix: Fix) => void;
 let liveFile: LiveFile | null = null;
 let liveFileError: string | null = null;
+/** Whether `liveFile` was read for the folder in use (`null` before is "not read yet", not "none"). */
+let liveFileRead = false;
 /** The last upload shown, so a new one is marked once (`undefined` before the first). */
 let shownUpload: string | undefined;
 
@@ -43,17 +45,17 @@ function liveLog(state: HomeState): string {
   if (!state.logFolder) return "No Documents folder found";
   if (!state.logFolder.exists) return "Folder not found";
   if (liveFileError) return liveFileError;
-  if (!liveFile) return "Folder found, no log yet";
+  if (!liveFile) return liveFileRead ? "No log in the folder yet" : "Folder found";
   return `${liveFile.file}, written ${ago(liveFile.writtenAt, Date.now())}`;
 }
 
 export function renderHome(): void {
   if (!get) return;
-  const state = get();
+  const state: HomeState = { ...get(), noLog: liveFileRead && !liveFile && !liveFileError };
   el("setup").hidden = state.hasToken;
   el("home").hidden = !state.hasToken;
   const found = problems(state);
-  markView("home", state.hasToken && found.length > 0);
+  markView("home", state.hasToken && found.some((p) => !p.hint));
   if (!state.hasToken) {
     setTitlebarState("Not set up", "warn");
     const folder = state.logFolder;
@@ -65,7 +67,7 @@ export function renderHome(): void {
   const head = headline(state, state.serverName);
   // A match being played: the status dots pulse.
   const playing = matchInProgress(state.lobbyLive, liveFile?.writtenAt ?? null, state.quietSecs, Date.now());
-  setTitlebarState(head.tone === "bad" ? "Paused" : state.dryRun ? "Dry run" : head.tone === "warn" ? "Retrying" : state.serverName, head.tone, playing);
+  setTitlebarState(head.tone === "bad" ? "Paused" : state.dryRun ? "Dry run" : head.tone === "warn" ? "Retrying" : head.tone === "neutral" ? "No log yet" : state.serverName, head.tone, playing);
   el("home-status").dataset.tone = head.tone;
   el("home-status").classList.toggle("playing", playing);
   el("home-headline").textContent = head.text;
@@ -135,6 +137,7 @@ async function pollLiveFile(current: number): Promise<void> {
     if (current !== run) return;
     liveFile = found;
     liveFileError = error;
+    liveFileRead = true;
     renderHome();
   }
   timer = setTimeout(() => void pollLiveFile(current), state.pollSecs * 1000);
@@ -151,6 +154,7 @@ function readLiveFile(): void {
 export function homeFolderChanged(): void {
   liveFile = null;
   liveFileError = null;
+  liveFileRead = false;
   readLiveFile();
 }
 

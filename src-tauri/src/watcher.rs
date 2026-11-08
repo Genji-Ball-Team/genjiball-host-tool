@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::Serialize;
 
 use crate::config;
-use crate::log_scan::{self, RoundStart, Scan};
+use crate::log_scan::{self, RoundStart, Scan, SitOut};
 use crate::settings::Settings;
 use crate::uploads::SentTourney;
 
@@ -260,6 +260,13 @@ impl Tracker {
             .as_ref()
             .and_then(|name| self.files.get(name))
             .map_or(&[], |t| &t.scan.round_starts)
+    }
+
+    /// The host's sit-out in the live log, as last read (`Scan::sit_out`). `None` when it isn't
+    /// read (see `live_rounds`): what it says then isn't known.
+    pub fn live_sit_out(&self) -> Option<Option<&SitOut>> {
+        let name = self.live.as_ref()?;
+        self.files.get(name).map(|t| t.scan.sit_out.as_ref())
     }
 
     /// The upload of `name` worked, or won't work however often it's tried. Either way it's in the

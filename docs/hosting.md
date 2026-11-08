@@ -60,6 +60,12 @@ If you have to step away but want to keep the lobby going, turn on the **AFK** s
 - AFK stays on across matches, and when you restart the tool, until you switch it off. While it's on, a red edge runs round the window and the title bar says **AFK**.
 - The AFK rounds go up with the match's upload. The tool shows which rounds of the latest match weren't rated for you so far.
 
+### Sitting out in the game
+
+In a ranked lobby you play the first round, then sit out: you stay in your slot, dead, and the lobby plays on without you. **Crouch + Interact** in the game plays again from the next round, and sits out again. The tool reads this from the match log and turns AFK on while you sit out, and off when you play again or the match ends. Home and the overlay say when AFK is on because you sit out. While you sit out, your name is left off the lobby's player list on genjiball.us, as with AFK.
+
+The switch still works by hand: turn AFK on while you play, or off while you sit out, and it stays that way until you next sit out or play again in the game. A tool too old to read the sit-out loses nothing: you're not in the rounds you sit out, so they don't count for you anyway, and you can still switch AFK by hand.
+
 ## The overlay (experimental)
 
 Settings → **Overlay** puts the tool's status, the lobby's ranks and the match over the game, in its own see-through window. It's off until you switch it on.

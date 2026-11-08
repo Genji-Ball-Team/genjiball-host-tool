@@ -33,6 +33,8 @@ export interface UploadStatus {
 /** Mirrors `AfkStatus` in src-tauri/src/afk.rs: what `set_afk` returns. */
 export interface AfkStatus {
   on: boolean;
+  /** On because the host sits out in the game (`SIT_OUT`), not by the switch. */
+  sitOut: boolean;
   /** The match a round was last skipped in for AFK, and those rounds. */
   latest: { matchKey: string; rounds: number[] } | null;
   /** Why `afk.json` couldn't be read or written. */

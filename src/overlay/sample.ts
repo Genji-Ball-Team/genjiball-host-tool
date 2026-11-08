@@ -7,7 +7,7 @@ import type { OverlayModel } from "./model";
 export const sample: OverlayModel = {
   logging: { tone: "good", title: "Recording", detail: "Round 4, 6 players" },
   uploads: { tone: "good", title: "Uploaded and counted", detail: null },
-  afk: { on: true, keys: "Ctrl+Alt+A" },
+  afk: { on: true, sitOut: false, keys: "Ctrl+Alt+A" },
   logCopies: 2,
   rankedCode: { tone: "good", title: "Ranked code copied 25 min ago", detail: null },
   roster: {

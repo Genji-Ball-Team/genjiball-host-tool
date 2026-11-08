@@ -128,6 +128,8 @@ pub struct HostView {
     pub retrying: Option<String>,
     pub dry_run: bool,
     pub afk: bool,
+    /// AFK is on because the host sits out in the game.
+    pub afk_sit_out: bool,
     /// The newest upload, or file waiting to be.
     pub last: Option<Entry>,
 }
@@ -283,6 +285,7 @@ pub fn feed(app: &AppHandle, request: &FeedRequest, stream: bool) -> Feed {
             retrying: status.retrying.clone(),
             dry_run: status.dry_run,
             afk: status.afk.on,
+            afk_sit_out: status.afk.sit_out,
             last: status.history.entries.first().cloned(),
         },
         ratings: overlay.ratings.players(&scope, &names),

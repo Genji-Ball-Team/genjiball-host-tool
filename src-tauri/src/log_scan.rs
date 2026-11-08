@@ -1,11 +1,13 @@
 //! What the watcher needs to know about a Workshop log file (GenjiBall-CE `docs/ranked-log.md` on
 //! `v1.3.3R`): whether it holds a ranked match, how many matches in it have ended, the players'
-//! names for the upload history, and which rounds each match has started (for host AFK, `afk.rs`).
+//! names for the upload history, and which rounds each match has started and whether the host sits
+//! out (for host AFK, `afk.rs`).
 //! The server does the real parsing (the match view, #16, uses its parser in the window).
 
 use std::time::SystemTime;
 
 use chrono::{Local, NaiveDateTime, SecondsFormat, TimeZone};
+use serde::{Deserialize, Serialize};
 
 use crate::config;
 
@@ -24,6 +26,21 @@ pub struct Scan {
     /// The tourney matches (a `TOURNEY` line after their `GBR`, log format 2), in the order they
     /// start. A match without one is a ranked match.
     pub tourneys: Vec<TourneyMatch>,
+    /// The host's sit-out in the file's last match, from its last `SIT_OUT` line. `None` when that
+    /// match has none: the host plays.
+    pub sit_out: Option<SitOut>,
+}
+
+/// The last `SIT_OUT|time|id|on` of a match (GenjiBall-CE `docs/ranked-log.md`, "Host sit-out"):
+/// the host sits out (`on`) or plays from the next round, the round after `after_round`.
+/// `MATCH_END` ends a sit-out: `on` is false from there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SitOut {
+    pub match_key: String,
+    pub on: bool,
+    /// The last round the match had started at the line (`0`: none yet).
+    pub after_round: u32,
 }
 
 /// A tourney match: `TOURNEY|time|lobbyKey|roundLimit` after the `GBR` of `match_key`
@@ -96,6 +113,15 @@ fn round_start(event: &str) -> Option<u32> {
     round.parse().ok()
 }
 
+/// Whether a `SIT_OUT|time|id|on` event starts a sit-out (`1`) or ends one (`0`).
+fn sit_out(event: &str) -> Option<bool> {
+    match event.strip_prefix("SIT_OUT|")?.split('|').nth(2)? {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
 /// The event part of a line: the Workshop's `[hh:mm:ss] ` prefix stripped, if it's there.
 pub fn event(line: &str) -> &str {
     let line = line.trim_end_matches('\r');
@@ -126,6 +152,16 @@ pub fn scan(text: &str) -> Scan {
     read(complete_text(text)).0
 }
 
+/// The last round the match `key` has started in what's read so far (`0`: none).
+fn last_round(found: &Scan, key: Option<&str>) -> u32 {
+    found
+        .round_starts
+        .iter()
+        .rev()
+        .find(|r| Some(r.match_key.as_str()) == key)
+        .map_or(0, |r| r.round)
+}
+
 /// What's in these lines, and the key of the match the last of them is in.
 fn read(text: &str) -> (Scan, Option<&str>) {
     let mut found = Scan::default();
@@ -134,6 +170,7 @@ fn read(text: &str) -> (Scan, Option<&str>) {
         if line.starts_with("GBR|") {
             found.ranked = true;
             current = match_key(line);
+            found.sit_out = None;
             if let Some(key) = current {
                 if !found.match_keys.iter().any(|k| k == key) {
                     found.match_keys.push(key.to_string());
@@ -148,6 +185,11 @@ fn read(text: &str) -> (Scan, Option<&str>) {
             }
         } else if line.starts_with("MATCH_END|") {
             found.match_ends += 1;
+            let last = last_round(&found, current);
+            if let Some(s) = found.sit_out.as_mut().filter(|s| s.on) {
+                s.on = false;
+                s.after_round = last;
+            }
             if ended_by_rounds(line) {
                 if let Some(t) = found
                     .tourneys
@@ -156,6 +198,18 @@ fn read(text: &str) -> (Scan, Option<&str>) {
                     .find(|t| Some(t.match_key.as_str()) == current)
                 {
                     t.ended = true;
+                }
+            }
+        } else if let Some(on) = sit_out(line) {
+            if let Some(key) = current {
+                let after_round = last_round(&found, current);
+                // A second `1` in a row (a spectator copy repeats the log) keeps the first.
+                if !(on && found.sit_out.as_ref().is_some_and(|s| s.on)) {
+                    found.sit_out = Some(SitOut {
+                        match_key: key.to_string(),
+                        on,
+                        after_round,
+                    });
                 }
             }
         } else if let Some(lobby) = lobby_key(line) {
@@ -240,6 +294,7 @@ mod tests {
                 match_keys: vec!["482913507226".into()],
                 round_starts: [1, 2, 3].map(|round| start("482913507226", round)).to_vec(),
                 tourneys: vec![],
+                sit_out: None,
             }
         );
         assert!(!scan(EXAMPLE).only_tourneys());
@@ -309,6 +364,73 @@ mod tests {
         let found = scan("ROUND_START|1|1|1\nGBR|2|1|1.3.3R|\nROUND_START|3|2|1\n");
         assert!(found.match_keys.is_empty());
         assert!(found.round_starts.is_empty());
+    }
+
+    #[test]
+    fn reads_the_host_sit_out_of_the_last_match() {
+        let sat = |on, after_round| {
+            Some(SitOut {
+                match_key: "111".into(),
+                on,
+                after_round,
+            })
+        };
+        let start = "GBR|1|2|1.3.3R|111
+ROUND_START|2|1|0,1
+ROUND_END|3|WIN|1
+";
+        assert_eq!(scan(start).sit_out, None, "plays until a `SIT_OUT`");
+        let out = format!(
+            "{start}SIT_OUT|4|0|1
+ROUND_START|5|2|1,2
+"
+        );
+        assert_eq!(scan(&out).sit_out, sat(true, 1));
+        // Another `1` keeps the round it started after.
+        assert_eq!(
+            scan(&format!(
+                "{out}SIT_OUT|6|0|1
+"
+            ))
+            .sit_out,
+            sat(true, 1)
+        );
+        assert_eq!(
+            scan(&format!(
+                "{out}SIT_OUT|6|0|0
+"
+            ))
+            .sit_out,
+            sat(false, 2)
+        );
+        assert_eq!(
+            scan(&format!(
+                "{out}MATCH_END|6|TIME
+"
+            ))
+            .sit_out,
+            sat(false, 2)
+        );
+        // The next match: the host plays.
+        assert_eq!(
+            scan(&format!(
+                "{out}MATCH_END|6|TIME
+GBR|7|2|1.3.3R|222
+"
+            ))
+            .sit_out,
+            None
+        );
+        // Only complete lines, and only a valid `on`.
+        assert_eq!(scan(&format!("{start}SIT_OUT|4|0|1")).sit_out, None);
+        assert_eq!(
+            scan(&format!(
+                "{start}SIT_OUT|4|0|yes
+"
+            ))
+            .sit_out,
+            None
+        );
     }
 
     #[test]

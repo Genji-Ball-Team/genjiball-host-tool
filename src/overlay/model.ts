@@ -102,7 +102,7 @@ export interface TourneyPanel {
 export interface OverlayModel {
   logging: StatusLine;
   uploads: StatusLine;
-  afk: { on: boolean; keys: string | null };
+  afk: { on: boolean; sitOut: boolean; keys: string | null };
   logCopies: number | null;
   rankedCode: StatusLine;
   roster: Roster | null;
@@ -139,7 +139,7 @@ export function overlayModel(feed: Feed, log: ReadLog, now: number): OverlayMode
   return {
     logging: logging(feed, match, view, now),
     uploads: uploads(feed),
-    afk: { on: feed.host.afk, keys: feed.hotkeys.find((h) => h.action === "afk")?.keys ?? null },
+    afk: { on: feed.host.afk, sitOut: feed.host.afkSitOut, keys: feed.hotkeys.find((h) => h.action === "afk")?.keys ?? null },
     logCopies: feed.logCopies,
     rankedCode: rankedCode(feed, now),
     roster: match && lobby.length > 0 ? roster(lobby, feed.ratings) : null,

@@ -73,7 +73,7 @@ export function draw(key: string, model: OverlayModel): Drawn | null {
     case "rankedCode":
       return status(model.rankedCode);
     case "afk":
-      return model.afk.on ? afk(model.afk.keys) : null;
+      return model.afk.on ? afk(model.afk.sitOut, model.afk.keys) : null;
     case "logCopies":
       return model.logCopies === null || model.logCopies === 0 ? null : logCopies(model.logCopies);
     case "roster":
@@ -101,10 +101,15 @@ function status(line: StatusLine): Drawn {
   return { tone: line.tone, body: h("div", "status", h("span", "dot"), h("div", null, h("p", "title", line.title), line.detail && h("p", "detail", line.detail))) };
 }
 
-function afk(keys: string | null): Drawn {
+function afk(sitOut: boolean, keys: string | null): Drawn {
+  const detail = sitOut
+    ? "You sit out. Crouch + Interact in the game plays from the next round"
+    : keys
+      ? `Rounds that start don't count for you. ${keys} turns it off`
+      : "Rounds that start don't count for you";
   return {
     tone: "bad",
-    body: h("div", "afk", h("p", "title", "AFK: your rating is frozen"), h("p", "detail", keys ? `Rounds that start don't count for you. ${keys} turns it off` : "Rounds that start don't count for you")),
+    body: h("div", "afk", h("p", "title", "AFK: your rating is frozen"), h("p", "detail", detail)),
   };
 }
 

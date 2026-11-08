@@ -428,7 +428,8 @@ function renderAfk(afk: AfkStatus): void {
   const line = el("afk-state");
   const rounds = afk.latest?.rounds ?? [];
   const skipped = rounds.length ? ` Not rated for you so far: round${rounds.length === 1 ? "" : "s"} ${rounds.join(", ")} of the latest match.` : "";
-  line.textContent = afk.on ? `On.${skipped}` : "Off: your rounds are rated.";
+  const on = afk.sitOut ? "On: you sit out in the game (Crouch + Interact plays from the next round)." : "On.";
+  line.textContent = afk.on ? `${on}${skipped}` : "Off: your rounds are rated.";
   line.className = afk.on ? "status bad" : "status muted";
   const error = el("afk-error");
   error.hidden = !afk.error;

@@ -44,6 +44,8 @@ export interface HostView {
   retrying: string | null;
   dryRun: boolean;
   afk: boolean;
+  /** AFK is on because the host sits out in the game. */
+  afkSitOut: boolean;
   /** Mirrors `Entry` in src-tauri/src/history.rs. */
   last: {
     file: string;

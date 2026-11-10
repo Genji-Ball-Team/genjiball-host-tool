@@ -67,7 +67,7 @@ CI builds the installer for every push and PR; download it from the run's "insta
 | `src-tauri/src/watcher.rs`, `log_scan.rs` | Which log files to upload, and when |
 | `src-tauri/src/uploader.rs`, `uploads.rs`, `history.rs` | The upload loop, the record of what was uploaded (`uploads.json`) and the history the window lists |
 | `src-tauri/src/match_log.rs`, `src/match-*.ts`, `src/parser/` | The match view: a log's complete lines, parsed with the server's own parser (a copy; never edit it) |
-| `src-tauri/src/afk.rs` | Host AFK: the rounds that start while it's on, per match (`afk.json`), sent as `X-Host-Afk` |
+| `src-tauri/src/afk.rs` | Host AFK: the rounds that start while it's on, per match (`afk.json`), sent as `X-Host-Afk`; follows the game's host sit-out |
 | `src-tauri/src/lobby.rs`, `live_lobby.rs` | The live lobby: lists the host's lobby on the site while a ranked match is played |
 | `src-tauri/src/release.rs`, `github.rs`, `ranked_code.rs` | The ranked code: the GenjiBall-CE release it's built on, and the rank tags and data center filled in |
 | `src-tauri/src/tourney.rs`, `tourneys.rs`, `src/tourneys-view.ts` | Tourneys: the host's assigned lobbies and their notifications, the tourney code's rule, the region a tourney log is uploaded as, and the verify screenshot |

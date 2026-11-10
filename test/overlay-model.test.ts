@@ -26,7 +26,7 @@ function feed(change: Partial<Feed> = {}): Feed {
     logWrittenAt: secondsAgo(2),
     logError: null,
     quietSecs: 60,
-    host: { problem: null, waiting: 0, retrying: null, dryRun: false, afk: false, last: null },
+    host: { problem: null, waiting: 0, retrying: null, dryRun: false, afk: false, afkSitOut: false, last: null },
     ratings: [],
     region: "eu",
     tourneys: [],
@@ -221,7 +221,8 @@ describe("host status", () => {
   });
 
   it("shows AFK with its hotkey", () => {
-    expect(overlayModel(feed({ host: { ...feed().host, afk: true } }), log, NOW).afk).toEqual({ on: true, keys: "Ctrl+Alt+A" });
+    expect(overlayModel(feed({ host: { ...feed().host, afk: true } }), log, NOW).afk).toEqual({ on: true, sitOut: false, keys: "Ctrl+Alt+A" });
+  expect(overlayModel(feed({ host: { ...feed().host, afk: true, afkSitOut: true } }), log, NOW).afk.sitOut).toBe(true);
   });
 });
 

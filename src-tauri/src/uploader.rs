@@ -17,11 +17,12 @@ use tokio::sync::Notify;
 use crate::afk::{AfkStatus, AfkStore};
 use crate::debug::{Attempt, Outcome, Recent};
 use crate::history::{self, Page, QueueSnapshot};
-use crate::log_scan::{RoundStart, Scan};
+use crate::live_lobby::LiveLobby;
+use crate::log_scan::Scan;
 use crate::server::{self, Host, TokenCheck, TourneyLobby, UploadInfo, UploadOutcome};
 use crate::tourneys::Tourneys;
 use crate::uploads::{self, Answer, Record, Sent, SentTourney};
-use crate::watcher::{self, Due, Queued, Timing, Tracker};
+use crate::watcher::{self, Due, Live, Queued, Timing, Tracker};
 use crate::{config, log_folder, log_scan, tourney, Store};
 
 /// The event the window listens to for `UploadStatus`.
@@ -270,21 +271,28 @@ impl Uploader {
         self.afk.lock().unwrap().status()
     }
 
-    /// The host turned AFK on or off, with `started` the rounds in the live log now (`afk.rs`).
-    pub fn set_afk(&self, on: bool, started: &[RoundStart]) -> AfkStatus {
-        let status = self.afk.lock().unwrap().set(on, started, SystemTime::now());
+    /// The host switched AFK on or off, with `live` the live log read right at the click
+    /// (`AfkStore::set`: followed first, as a poll does, then switched).
+    pub fn set_afk(&self, on: bool, live: Live<'_>) -> AfkStatus {
+        let status = self.afk.lock().unwrap().set(
+            on,
+            live,
+            SystemTime::now(),
+            Duration::from_secs(config::AFK_KEEP_SECS),
+        );
         // The window hears it from the next status too.
         self.wake();
         status
     }
 
-    /// Notes the AFK rounds among `started`, the rounds read from the live log.
-    fn note_afk(&self, started: &[RoundStart]) {
+    /// Follows the lobby host's sit-out in the live log and notes the AFK rounds among its rounds
+    /// (`AfkStore::saw`). `true` when that turned AFK on or off.
+    fn note_afk(&self, live: Live<'_>) -> bool {
         self.afk.lock().unwrap().saw(
-            started,
+            live,
             SystemTime::now(),
             Duration::from_secs(config::AFK_KEEP_SECS),
-        );
+        )
     }
 
     /// Page `page` of the upload history for `server_url`, with the files waiting in `folder` (the
@@ -637,8 +645,13 @@ impl Run {
             let names: Vec<_> = poll.due.iter().map(|d| d.name.as_str()).collect();
             log::info!("Logs to upload: {}", names.join(", "));
         }
-        // Before any upload: a file that grew with a round started while AFK sends it.
-        uploader.note_afk(self.tracker.live_rounds());
+        // Before any upload: a file that grew with a round started while AFK sends it. A sit-out
+        // that turned AFK on or off changes the live lobby's players.
+        if uploader.note_afk(self.tracker.live_log()) {
+            if let Some(lobby) = app.try_state::<LiveLobby>() {
+                lobby.afk_changed();
+            }
+        }
 
         // Nothing goes to the server, so no token is needed. The region is the one picked, else
         // the home region if it's known (else an upload would leave `X-Region` out).
@@ -817,7 +830,7 @@ impl Run {
         // The live log may have grown since the poll read it: a round that started meanwhile is
         // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
         if self.tracker.live() == Some(due.name.as_str()) {
-            uploader.note_afk(&scan.round_starts);
+            uploader.note_afk(Live::Read(&scan));
         }
         let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
         let prepared = Prepared {
@@ -1498,7 +1511,7 @@ Content-Length: 0
                     |_| None,
                 )
                 .unwrap();
-            uploader.note_afk(run.tracker.live_rounds());
+            uploader.note_afk(run.tracker.live_log());
         };
         poll(&mut run);
         // Not AFK: no header.
@@ -1506,8 +1519,8 @@ Content-Length: 0
         assert!(!request.contains("x-host-afk"), "{request}");
 
         // Round 2 had started when the host turned AFK on, but wasn't read yet.
-        let started = log_scan::round_starts(&before_round(3));
-        assert!(uploader.set_afk(true, &started).on);
+        let live = log_scan::live_scan(&before_round(3));
+        assert!(uploader.set_afk(true, Live::Read(&live)).on);
         fs::write(&file.path, before_round(3)).unwrap();
         poll(&mut run);
         let request = sent_request(&mut run, &uploader, &file, &before_round(3));

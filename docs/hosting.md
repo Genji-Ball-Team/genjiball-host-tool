@@ -62,7 +62,7 @@ If you have to step away but want to keep the lobby going, turn on the **AFK** s
 
 ### Sitting out in the game
 
-In a ranked lobby you play the first round, then sit out: you stay in your slot, dead, and the lobby plays on without you. **Crouch + Interact** in the game plays again from the next round, and sits out again. The tool reads this from the match log and turns AFK on while you sit out, and off when you play again or the match ends. Home and the overlay say when AFK is on because you sit out. While you sit out, your name is left off the lobby's player list on genjiball.us, as with AFK.
+In a ranked lobby you play the first round, then sit out: you stay in your slot, dead, and the lobby plays on without you. **Crouch + Interact** in the game plays again from the next round, and sits out again. The tool reads this from the match log and turns AFK on while you sit out. It turns AFK off when you play again, the match ends, you leave the lobby or move to spectator, or the match stops without ending and the tool has uploaded it. Only your own sit-out counts: while you're in spectator, another player can sit out as the game's host, and that doesn't turn your AFK on. Home and the overlay say when AFK is on because you sit out. While you sit out, your name is left off the lobby's player list on genjiball.us, as with AFK.
 
 The switch still works by hand: turn AFK on while you play, or off while you sit out, and it stays that way until you next sit out or play again in the game. A tool too old to read the sit-out loses nothing: you're not in the rounds you sit out, so they don't count for you anyway, and you can still switch AFK by hand.
 

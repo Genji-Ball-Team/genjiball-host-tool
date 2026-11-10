@@ -9,9 +9,16 @@
 //! even if the uploader only reads the file afterwards. Every round past that, in any match of the
 //! live log, counts until AFK is turned off. It stays on across matches and restarts (`afk.json`).
 //!
-//! The game's host sit-out (`SIT_OUT` in the live log, "Host sit-out") turns it on and off too
-//! (`follow`): on when the host starts sitting out, off when they play again or the match ends. The
+//! The lobby host's sit-out in the game (`log_scan::SitOut`, "Host sit-out") turns it on and off
+//! too (`follow`): on when the host starts sitting out, off when the sit-out ends (they play
+//! again, leave, or the match ends) or no match is played in the live log any more (`lost`). The
 //! switch still works by hand, and what happened last wins: a sit-out only acts when it changes.
+//!
+//! A round only counts for a sit-out when the log shows the host sat out for it: past the round
+//! the sit-out started after, and up to where it ended. A sit-out that started and ended between
+//! two reads of the log isn't seen, and when one ended and another started between two reads,
+//! the rounds of the first not read yet don't count: either way the host wasn't in those rounds'
+//! `ROUND_START`, so the server never rated them for the host anyway.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -23,6 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::log_scan::{RoundStart, SitOut};
 use crate::settings;
+use crate::watcher::Live;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -34,7 +42,7 @@ pub struct Afk {
     matches: BTreeMap<String, Rounds>,
     /// It's on because the host sits out in the game, not by the switch.
     sit_out: bool,
-    /// The live log's sit-out as last followed (`None`: the host plays).
+    /// The sit-out going on in the live log as last followed (`None`: the host plays).
     followed: Option<SitOut>,
 }
 
@@ -105,21 +113,36 @@ impl Afk {
         changed
     }
 
-    /// Follows the host's sit-out in the live log (`state`, with `started` its rounds): turns AFK
-    /// on when a sit-out starts, unless it's on already, and off when the sit-out that turned it on
-    /// ends. Only a change acts, so a host who switched it by hand keeps it so until the next one.
-    /// `true` when anything changed.
-    pub fn follow(
-        &mut self,
-        state: Option<&SitOut>,
-        started: &[RoundStart],
-        now: SystemTime,
-    ) -> bool {
-        let sitting = state.filter(|s| s.on);
+    /// Follows the host's sit-outs in the live log (`sit_outs`, `Scan::sit_outs`, with `started`
+    /// its rounds): turns AFK on when a sit-out starts, unless it's on already, and off when the
+    /// sit-out that turned it on ends. Only a change acts, so a host who switched it by hand keeps
+    /// it so until the next one. `true` when anything changed.
+    pub fn follow(&mut self, sit_outs: &[SitOut], started: &[RoundStart], now: SystemTime) -> bool {
+        let sitting = sit_outs.iter().find(|s| s.until.is_none());
         if self.followed.as_ref() == sitting {
             return false;
         }
         let before = std::mem::replace(&mut self.followed, sitting.cloned());
+        if self.on && self.sit_out {
+            // The sit-out that turned AFK on is over: its rounds count up to where the log shows
+            // it ended. Not if the log shows another one in its place (it ended and another
+            // started between two reads), as the host may have played some of the rounds since.
+            let end = before.and_then(|before| {
+                let same = sit_outs.iter().find(|s| {
+                    s.match_key == before.match_key && s.after_round == before.after_round
+                })?;
+                Some((before.match_key, same.until?))
+            });
+            if let Some((key, end)) = end {
+                let sat: Vec<RoundStart> = started
+                    .iter()
+                    .filter(|r| r.match_key == key && r.round <= end)
+                    .cloned()
+                    .collect();
+                self.saw(&sat, now);
+            }
+            self.turn_off(&[], now);
+        }
         if let Some(s) = sitting {
             if !self.on {
                 // The rounds up to the sit-out were played: only the ones after it count.
@@ -131,22 +154,19 @@ impl Afk {
                 self.turn_on(&played);
                 self.sit_out = true;
             }
-        } else if self.on && self.sit_out {
-            // The sit-out's rounds up to its end (`SIT_OUT ... 0` or `MATCH_END`): the host plays
-            // the next one. All of them when the live log is in another match now.
-            if let Some(before) = before {
-                let end = state
-                    .filter(|s| s.match_key == before.match_key)
-                    .map_or(u32::MAX, |s| s.after_round);
-                let sat: Vec<RoundStart> = started
-                    .iter()
-                    .filter(|r| r.match_key == before.match_key && r.round <= end)
-                    .cloned()
-                    .collect();
-                self.saw(&sat, now);
-            }
-            self.turn_off(&[], now);
         }
+        true
+    }
+
+    /// No match is played in the live log any more (`Live::Gone`): AFK that a sit-out turned on
+    /// ends, without noting more rounds (the log was read in full before it was uploaded). AFK
+    /// switched on or off by hand stays as it is. `true` when it ended.
+    pub fn lost(&mut self, now: SystemTime) -> bool {
+        if !(self.on && self.sit_out) {
+            return false;
+        }
+        self.turn_off(&[], now);
+        self.followed = None;
         true
     }
 
@@ -258,19 +278,23 @@ impl AfkStore {
         self.status()
     }
 
-    /// The uploader read the live log: follows its sit-out (`None`: not known, the log wasn't
-    /// read), notes its new AFK rounds and forgets old matches. `true` when AFK went on or off.
-    pub fn saw(
-        &mut self,
-        sit_out: Option<Option<&SitOut>>,
-        started: &[RoundStart],
-        now: SystemTime,
-        keep: Duration,
-    ) -> bool {
+    /// The uploader looked at the live log (`Live`): follows its sit-out, notes its new AFK
+    /// rounds and forgets old matches. A log that couldn't be read this time changes nothing; no
+    /// match played in it any more ends AFK that a sit-out turned on. `true` when AFK went on or
+    /// off.
+    pub fn saw(&mut self, live: Live<'_>, now: SystemTime, keep: Duration) -> bool {
         let was = self.afk.on;
+        let started = match live {
+            Live::Read(scan) => scan.round_starts.as_slice(),
+            Live::Unread | Live::Gone => &[],
+        };
         // Not over a file that couldn't be read: AFK stays off until the host switches it.
-        let followed =
-            !self.unreadable && sit_out.is_some_and(|state| self.afk.follow(state, started, now));
+        let followed = !self.unreadable
+            && match live {
+                Live::Read(scan) => self.afk.follow(&scan.sit_outs, started, now),
+                Live::Unread => false,
+                Live::Gone => self.afk.lost(now),
+            };
         let saw = self.afk.saw(started, now);
         let pruned = self.afk.prune(now, keep);
         self.dirty |= followed || saw || pruned;
@@ -313,6 +337,7 @@ fn load(path: &Path) -> Result<Afk, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log_scan::{self, Scan};
 
     const KEY: &str = "482913507226";
     const DAY: Duration = Duration::from_secs(24 * 3600);
@@ -391,11 +416,20 @@ mod tests {
         );
     }
 
-    fn sat(key: &str, on: bool, after_round: u32) -> SitOut {
+    fn sat(key: &str, after_round: u32, until: Option<u32>) -> SitOut {
         SitOut {
             match_key: key.into(),
-            on,
             after_round,
+            until,
+        }
+    }
+
+    /// A live log read with these rounds and sit-outs.
+    fn log(round_starts: Vec<RoundStart>, sit_outs: Vec<SitOut>) -> Scan {
+        Scan {
+            round_starts,
+            sit_outs,
+            ..Scan::default()
         }
     }
 
@@ -403,34 +437,35 @@ mod tests {
     fn follows_the_host_sit_out() {
         let mut afk = Afk::default();
         // Round 1 played, the sit-out logged after it, round 2 already read with it.
-        let out = sat(KEY, true, 1);
-        assert!(afk.follow(Some(&out), &starts(KEY, [1, 2]), now()));
+        let out = [sat(KEY, 1, None)];
+        assert!(afk.follow(&out, &starts(KEY, [1, 2]), now()));
         assert!(afk.on && afk.sit_out);
         afk.saw(&starts(KEY, [1, 2]), now());
         // The same sit-out read again changes nothing.
-        assert!(!afk.follow(Some(&out), &starts(KEY, [1, 2, 3]), now()));
+        assert!(!afk.follow(&out, &starts(KEY, [1, 2, 3]), now()));
         afk.saw(&starts(KEY, [1, 2, 3]), now());
         // Playing from round 5: round 4 started before the `0`, round 5 is played.
-        assert!(afk.follow(Some(&sat(KEY, false, 4)), &starts(KEY, 1..=5), now()));
+        let ended = [sat(KEY, 1, Some(4))];
+        assert!(afk.follow(&ended, &starts(KEY, 1..=5), now()));
         assert!(!afk.on && !afk.sit_out);
         afk.saw(&starts(KEY, 1..=5), now());
         assert_eq!(
             afk.header(&[KEY.into()]).as_deref(),
             Some("482913507226:2,3,4")
         );
-        // A `0` read again doesn't turn it off a second time, nor does a host who plays.
-        assert!(!afk.follow(Some(&sat(KEY, false, 4)), &starts(KEY, 1..=6), now()));
-        assert!(!afk.follow(None, &starts(KEY, 1..=6), now()));
+        // An end read again doesn't turn it off a second time, nor does a host who plays.
+        assert!(!afk.follow(&ended, &starts(KEY, 1..=6), now()));
+        assert!(!afk.follow(&[], &starts(KEY, 1..=6), now()));
     }
 
     #[test]
     fn a_new_match_ends_the_sit_out() {
         let mut afk = Afk::default();
-        afk.follow(Some(&sat("1", true, 1)), &starts("1", [1]), now());
+        afk.follow(&[sat("1", 1, None)], &starts("1", [1]), now());
         // The match ended and the next one is read at once, with its round 1.
         let mut started = starts("1", [1, 2, 3]);
         started.extend(starts("2", [1]));
-        assert!(afk.follow(None, &started, now()));
+        assert!(afk.follow(&[sat("1", 1, Some(3))], &started, now()));
         assert!(!afk.on);
         afk.saw(&started, now());
         assert_eq!(afk.header(&["1".into()]).as_deref(), Some("1:2,3"));
@@ -438,43 +473,201 @@ mod tests {
     }
 
     #[test]
+    fn a_sit_out_in_place_of_the_one_followed_counts_only_what_the_log_shows() {
+        let mut afk = Afk::default();
+        afk.follow(&[sat(KEY, 1, None)], &starts(KEY, [1, 2]), now());
+        afk.saw(&starts(KEY, [1, 2]), now());
+        // Between two reads: played again from round 4, and sits out again after round 5.
+        let started = starts(KEY, 1..=6);
+        assert!(afk.follow(&[sat(KEY, 5, None)], &started, now()));
+        assert!(afk.on && afk.sit_out);
+        afk.saw(&started, now());
+        // Round 3 was sat out too, but where the first sit-out ended isn't known: 4 and 5 were
+        // played, so none of them counts.
+        assert_eq!(
+            afk.header(&[KEY.into()]).as_deref(),
+            Some("482913507226:2,6")
+        );
+
+        // The same with the second one over too.
+        let mut afk = Afk::default();
+        afk.follow(&[sat(KEY, 1, None)], &starts(KEY, [1, 2]), now());
+        afk.saw(&starts(KEY, [1, 2]), now());
+        assert!(afk.follow(&[sat(KEY, 5, Some(6))], &starts(KEY, 1..=7), now()));
+        assert!(!afk.on);
+        afk.saw(&starts(KEY, 1..=7), now());
+        assert_eq!(afk.header(&[KEY.into()]).as_deref(), Some("482913507226:2"));
+    }
+
+    #[test]
     fn the_switch_still_works_by_hand() {
-        // On by hand: a sit-out ending leaves it on.
+        // On by hand: a sit-out ending, or the log going quiet, leaves it on.
         let mut afk = Afk::default();
         afk.turn_on(&starts(KEY, [1]));
-        assert!(afk.follow(Some(&sat(KEY, true, 1)), &starts(KEY, [1]), now()));
+        assert!(afk.follow(&[sat(KEY, 1, None)], &starts(KEY, [1]), now()));
         assert!(afk.on && !afk.sit_out);
-        afk.follow(Some(&sat(KEY, false, 2)), &starts(KEY, [1, 2]), now());
+        afk.follow(&[sat(KEY, 1, Some(2))], &starts(KEY, [1, 2]), now());
+        assert!(afk.on);
+        assert!(!afk.lost(now()));
         assert!(afk.on);
 
-        // Off by hand while sitting out: it stays off until the next sit-out.
+        // Off by hand while sitting out: it stays off until the next sit-out, even if the log
+        // goes quiet and then on with the same sit-out.
         let mut afk = Afk::default();
-        let out = sat(KEY, true, 1);
-        afk.follow(Some(&out), &starts(KEY, [1]), now());
+        let out = [sat(KEY, 1, None)];
+        afk.follow(&out, &starts(KEY, [1]), now());
         afk.turn_off(&starts(KEY, [1, 2]), now());
         assert!(!afk.sit_out);
-        assert!(!afk.follow(Some(&out), &starts(KEY, [1, 2, 3]), now()));
+        assert!(!afk.follow(&out, &starts(KEY, [1, 2, 3]), now()));
+        assert!(!afk.lost(now()));
+        assert!(!afk.follow(&out, &starts(KEY, [1, 2, 3]), now()));
         assert!(!afk.on);
-        afk.follow(Some(&sat(KEY, false, 3)), &starts(KEY, 1..=3), now());
-        assert!(afk.follow(Some(&sat(KEY, true, 4)), &starts(KEY, 1..=4), now()));
+        afk.follow(&[sat(KEY, 1, Some(3))], &starts(KEY, 1..=3), now());
+        assert!(afk.follow(&[sat(KEY, 4, None)], &starts(KEY, 1..=4), now()));
         assert!(afk.on && afk.sit_out);
     }
 
     #[test]
-    fn a_log_that_wasnt_read_keeps_the_sit_out() {
+    fn a_sit_out_ends_when_no_match_is_played_in_the_live_log() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("afk.json");
         let mut store = AfkStore::open(path.clone());
-        let out = sat(KEY, true, 1);
-        assert!(store.saw(Some(Some(&out)), &starts(KEY, [1]), now(), DAY));
+        let out = log(starts(KEY, [1, 2]), vec![sat(KEY, 1, None)]);
+        assert!(store.saw(Live::Read(&out), now(), DAY));
         assert!(store.status().sit_out);
-        assert!(!store.saw(None, &[], now(), DAY));
-        assert!(store.status().on);
-        // Kept across a restart: the same sit-out isn't followed again.
-        let mut store = AfkStore::open(path);
+        // A poll that couldn't read the log changes nothing, nor does reading it again.
+        assert!(!store.saw(Live::Unread, now(), DAY));
         assert!(store.status().sit_out);
-        assert!(store.saw(Some(None), &starts(KEY, [1, 2]), now(), DAY));
+        assert!(!store.saw(Live::Read(&out), now(), DAY));
+        assert!(store.status().sit_out);
+
+        // Kept across a restart while the log can't be read yet, or still says so.
+        let mut store = AfkStore::open(path.clone());
+        assert!(store.status().sit_out);
+        assert!(!store.saw(Live::Unread, now(), DAY));
+        assert!(!store.saw(Live::Read(&out), now(), DAY));
+        assert!(store.status().sit_out);
+
+        // The match stopped without `MATCH_END`, and the log was uploaded once it went quiet.
+        assert!(store.saw(Live::Gone, now(), DAY));
         assert!(!store.status().on);
+        assert_eq!(
+            store.header(&[KEY.into()]).as_deref(),
+            Some("482913507226:2")
+        );
+        assert!(!store.saw(Live::Gone, now(), DAY));
+        // The match goes on in it after all, the host still sitting out: followed again.
+        let more = log(starts(KEY, [1, 2, 3]), vec![sat(KEY, 1, None)]);
+        assert!(store.saw(Live::Read(&more), now(), DAY));
+        assert!(store.status().sit_out);
+        assert_eq!(
+            store.header(&[KEY.into()]).as_deref(),
+            Some("482913507226:2,3")
+        );
+
+        // A restart with no match played in the live log (no log, or it was uploaded since).
+        let mut store = AfkStore::open(path.clone());
+        assert!(store.status().sit_out);
+        assert!(store.saw(Live::Gone, now(), DAY));
+        assert!(!AfkStore::open(path).status().on);
+
+        // AFK on by hand stays on.
+        let mut store = AfkStore::open(dir.path().join("hand.json"));
+        store.set(true, &[], now());
+        assert!(!store.saw(Live::Gone, now(), DAY));
+        assert!(store.status().on);
+    }
+
+    /// The lobby host (1) sits out after round 1 and moves to spectator after round 3. Ash (2),
+    /// the game's host while they're away, sits out in round 4. The lobby host comes back (5)
+    /// and plays rounds 5 and 6. In the next match they sit out rounds 2 and 3.
+    const TRANSFER: &str = "GBR|1|2|1.3.3R|111
+MATCH_START|1|workshop-island-night|Standard|0|
+JOIN|1|1|Host|1
+JOIN|1|2|Ash|
+JOIN|1|3|Kenzo|
+ROUND_START|2|1|1,2,3
+ROUND_END|3|1|1|WIN
+SIT_OUT|4|1|1
+ROUND_START|5|2|2,3
+ROUND_END|6|2|2|WIN
+ROUND_START|7|3|2,3
+ROUND_END|8|3|3|WIN
+LEAVE|9|1
+JOIN|10|4|Mochi|
+SIT_OUT|11|2|1
+ROUND_START|12|4|3,4
+ROUND_END|13|4|3|WIN
+JOIN|14|5|Host|1
+ROUND_START|15|5|2,3,4,5
+ROUND_END|16|5|5|WIN
+ROUND_START|17|6|2,3,4,5
+ROUND_END|18|6|5|WIN
+MATCH_END|19|TIME
+GBR|20|2|1.3.3R|222
+JOIN|20|1|Host|1
+JOIN|20|2|Ash|
+JOIN|20|3|Kenzo|
+ROUND_START|21|1|1,2,3
+ROUND_END|22|1|1|WIN
+SIT_OUT|23|1|1
+ROUND_START|24|2|2,3
+ROUND_END|25|2|2|WIN
+ROUND_START|26|3|2,3
+ROUND_END|27|3|3|WIN
+SIT_OUT|28|1|0
+ROUND_START|29|4|1,2,3
+ROUND_END|30|4|1|WIN
+MATCH_END|31|TIME
+";
+
+    /// The complete lines of `TRANSFER` up to its `n`th.
+    fn transfer_until(n: usize) -> String {
+        TRANSFER.split_inclusive('\n').take(n).collect()
+    }
+
+    /// The uploader reading the live log with `text` in it.
+    fn read_log(store: &mut AfkStore, text: &str) {
+        let scan = log_scan::scan(text);
+        store.saw(Live::Read(&scan), now(), DAY);
+    }
+
+    #[test]
+    fn notes_only_rounds_the_lobby_host_sat_out() {
+        let keys = ["111".to_string(), "222".to_string()];
+        let lines = TRANSFER.lines().count();
+        // Read after every line (a spectator copy repeats the same lines in a new file).
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = AfkStore::open(dir.path().join("afk.json"));
+        for n in 1..=lines {
+            read_log(&mut store, &transfer_until(n));
+            let line = TRANSFER.lines().nth(n - 1).unwrap();
+            if line == "JOIN|14|5|Host|1" {
+                // Off since the `LEAVE`, and Ash's `SIT_OUT` didn't turn it on.
+                assert!(!store.status().on, "{line}");
+            }
+        }
+        assert!(!store.status().on);
+        assert_eq!(store.header(&keys).as_deref(), Some("111:2,3;222:2,3"));
+
+        // Read only now and then: never a round the host played.
+        for first in 1..=lines {
+            for second in first..=lines {
+                let dir = tempfile::tempdir().unwrap();
+                let mut store = AfkStore::open(dir.path().join("afk.json"));
+                for n in [first, second, lines] {
+                    read_log(&mut store, &transfer_until(n));
+                }
+                assert!(!store.status().on);
+                let header = store.header(&keys).unwrap_or_default();
+                for part in header.split(';').filter(|p| !p.is_empty()) {
+                    let (_, rounds) = part.split_once(':').unwrap();
+                    for round in rounds.split(',') {
+                        assert!(["2", "3"].contains(&round), "{first} {second}: {header}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -513,7 +706,7 @@ mod tests {
         let keep = 30 * DAY;
         let mut store = AfkStore::open(path.clone());
         assert!(store.set(true, &starts(KEY, [1]), now()).on);
-        store.saw(None, &starts(KEY, [1, 2]), now(), keep);
+        store.saw(Live::Read(&log(starts(KEY, [1, 2]), vec![])), now(), keep);
 
         let mut store = AfkStore::open(path.clone());
         assert!(store.status().on);
@@ -522,7 +715,7 @@ mod tests {
             Some("482913507226:2")
         );
         // What was seen when it was turned on is kept too.
-        store.saw(None, &starts(KEY, [1, 2]), now(), keep);
+        store.saw(Live::Read(&log(starts(KEY, [1, 2]), vec![])), now(), keep);
         assert_eq!(
             store.header(&[KEY.into()]).as_deref(),
             Some("482913507226:2")
@@ -547,7 +740,7 @@ mod tests {
         assert!(!status.on);
         assert!(status.error.unwrap().contains("isn't a valid AFK record"));
         // A poll doesn't write over it.
-        store.saw(None, &starts(KEY, [1]), now(), DAY);
+        store.saw(Live::Read(&log(starts(KEY, [1]), vec![])), now(), DAY);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ broken");
         // The host turning it on (or off) does.
         let status = store.set(true, &[], now());

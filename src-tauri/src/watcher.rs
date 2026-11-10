@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::Serialize;
 
 use crate::config;
-use crate::log_scan::{self, RoundStart, Scan, SitOut};
+use crate::log_scan::{self, Scan};
 use crate::settings::Settings;
 use crate::uploads::SentTourney;
 
@@ -113,12 +113,28 @@ impl Default for Timing {
     }
 }
 
+/// The live log (the newest file) as the last poll saw it (`Tracker::live_log`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Live<'a> {
+    /// A ranked log not uploaded as it is: what's in its complete lines.
+    Read(&'a Scan),
+    /// It couldn't be read this poll, and wasn't read before: what's in it isn't known.
+    Unread,
+    /// No ranked match is being played in it: there's no log, it isn't a ranked one, or it's
+    /// uploaded as it is (the match ended, or the log went quiet and was uploaded), or it's one
+    /// the tool doesn't upload (from before uploads started, or too large).
+    Gone,
+}
+
 #[derive(Default)]
 pub struct Tracker {
     folder: PathBuf,
     files: HashMap<String, Tracked>,
     /// The newest log file in the folder at the last poll (`newest_log`): the one being written.
     live: Option<String>,
+    /// The newest log file the last poll couldn't look at or read, with nothing known of it from
+    /// before (it may be locked for a moment while the game writes it).
+    unread: Option<String>,
     /// Set from the settings before each poll.
     pub timing: Timing,
 }
@@ -144,6 +160,12 @@ impl Tracker {
         let mut poll = Poll::default();
         let mut seen = Vec::new();
         self.live = None;
+        let mut unread: Option<String> = None;
+        let mut not_read = |name: &str| {
+            if unread.as_deref().is_none_or(|u| name > u) {
+                unread = Some(name.to_string());
+            }
+        };
         for entry in fs::read_dir(folder)? {
             let Ok(entry) = entry else { continue };
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
@@ -155,6 +177,7 @@ impl Tracker {
             let path = entry.path();
             // From the file itself: a directory listing's sizes can lag behind a file being written.
             let Ok(meta) = fs::metadata(&path) else {
+                not_read(&name);
                 continue;
             };
             if meta.is_file() && self.live.as_ref().is_none_or(|live| name > *live) {
@@ -192,6 +215,8 @@ impl Tracker {
                             t.due = false;
                             poll.waiting += usize::from(t.waiting);
                             seen.push((name, t));
+                        } else {
+                            not_read(&name);
                         }
                         continue;
                     };
@@ -243,6 +268,7 @@ impl Tracker {
             seen.push((name, tracked));
         }
         self.files = seen.into_iter().collect();
+        self.unread = unread;
         // Oldest first, so matches reach the server in the order they were played.
         poll.due.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(poll)
@@ -253,20 +279,22 @@ impl Tracker {
         self.live.as_deref()
     }
 
-    /// The rounds started in the live log, as last read. None when it isn't read: it isn't a
-    /// ranked log, or it hasn't changed since it was uploaded as it is (nor been read since).
-    pub fn live_rounds(&self) -> &[RoundStart] {
-        self.live
+    /// What the last poll knows of the live log: what's in it while a ranked match in it waits to
+    /// be uploaded, whether it couldn't be read this time, or that no match is being played in it.
+    pub fn live_log(&self) -> Live<'_> {
+        // The newest file, or one newer than it, may only be locked for a moment.
+        if self
+            .unread
             .as_ref()
-            .and_then(|name| self.files.get(name))
-            .map_or(&[], |t| &t.scan.round_starts)
-    }
-
-    /// The host's sit-out in the live log, as last read (`Scan::sit_out`). `None` when it isn't
-    /// read (see `live_rounds`): what it says then isn't known.
-    pub fn live_sit_out(&self) -> Option<Option<&SitOut>> {
-        let name = self.live.as_ref()?;
-        self.files.get(name).map(|t| t.scan.sit_out.as_ref())
+            .is_some_and(|u| self.live.as_ref().is_none_or(|live| u >= live))
+        {
+            return Live::Unread;
+        }
+        match self.live.as_ref().and_then(|name| self.files.get(name)) {
+            // Read now, or at an earlier poll and unchanged since (or couldn't be read again).
+            Some(t) if t.waiting => Live::Read(&t.scan),
+            _ => Live::Gone,
+        }
     }
 
     /// The upload of `name` worked, or won't work however often it's tried. Either way it's in the
@@ -1068,10 +1096,13 @@ mod tests {
             .unwrap();
         assert_eq!(tracker.live(), Some(NAME));
         assert_eq!(newest_log(dir.path()).unwrap(), Some(dir.path().join(NAME)));
-        let rounds: Vec<u32> = tracker.live_rounds().iter().map(|s| s.round).collect();
+        let Live::Read(scan) = tracker.live_log() else {
+            panic!("{:?}", tracker.live_log());
+        };
+        let rounds: Vec<u32> = scan.round_starts.iter().map(|s| s.round).collect();
         assert_eq!(rounds, [1, 2, 3]);
 
-        // Uploaded as it is: not read, so no rounds, but still the live log.
+        // Uploaded as it is: no match is played in it any more, but it's still the live log.
         let sent = |name: &str| {
             Some(Sent {
                 size: fs::metadata(dir.path().join(name)).unwrap().len(),
@@ -1082,7 +1113,84 @@ mod tests {
             .poll(dir.path(), now, SystemTime::now(), EPOCH, sent)
             .unwrap();
         assert_eq!(tracker.live(), Some(NAME));
-        assert!(tracker.live_rounds().is_empty());
+        assert_eq!(tracker.live_log(), Live::Gone);
+
+        // Read, then uploaded before the next poll: gone too.
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert!(matches!(tracker.live_log(), Live::Read(_)));
+        tracker.sent(NAME);
+        assert_eq!(tracker.live_log(), Live::Gone);
+
+        // A log that isn't a ranked one, and no log at all.
+        write(
+            dir.path(),
+            "Log-2026-10-02-21-00-00.txt",
+            "say hi\n",
+            Duration::ZERO,
+        );
+        tracker
+            .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(tracker.live_log(), Live::Gone);
+        let empty = tempfile::tempdir().unwrap();
+        tracker
+            .poll(empty.path(), now, SystemTime::now(), EPOCH, never_sent)
+            .unwrap();
+        assert_eq!(tracker.live_log(), Live::Gone);
+    }
+
+    /// A live log another program holds without sharing it (as the game may, for a moment).
+    #[cfg(windows)]
+    #[test]
+    fn a_live_log_that_cant_be_read_isnt_known() {
+        use std::io::Write;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::default();
+        let now = Instant::now();
+        let poll = |tracker: &mut Tracker| {
+            tracker
+                .poll(dir.path(), now, SystemTime::now(), EPOCH, never_sent)
+                .unwrap();
+        };
+        let path = dir.path().join(NAME);
+        let hold = || {
+            fs::File::options()
+                .append(true)
+                .share_mode(0)
+                .open(&path)
+                .unwrap()
+        };
+        // Never read: not known.
+        write(dir.path(), NAME, &playing(), Duration::ZERO);
+        let mut held = hold();
+        poll(&mut tracker);
+        assert_eq!(tracker.live_log(), Live::Unread);
+        drop(held);
+        poll(&mut tracker);
+        assert!(matches!(tracker.live_log(), Live::Read(_)));
+        // Read before, grown but held now: what was read stays.
+        held = hold();
+        held.write_all(b"JOIN|9|9|Late|\n").unwrap();
+        poll(&mut tracker);
+        let Live::Read(scan) = tracker.live_log() else {
+            panic!("{:?}", tracker.live_log());
+        };
+        assert!(!scan.players.iter().any(|p| p == "Late"));
+        // An older log held doesn't hide the live one.
+        drop(held);
+        let older = dir.path().join("Log-2026-10-02-18-00-00.txt");
+        fs::write(&older, EXAMPLE).unwrap();
+        let _older = fs::File::options()
+            .read(true)
+            .share_mode(0)
+            .open(&older)
+            .unwrap();
+        poll(&mut tracker);
+        assert!(matches!(tracker.live_log(), Live::Read(_)));
     }
 
     #[test]

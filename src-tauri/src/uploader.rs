@@ -18,11 +18,11 @@ use crate::afk::{AfkStatus, AfkStore};
 use crate::debug::{Attempt, Outcome, Recent};
 use crate::history::{self, Page, QueueSnapshot};
 use crate::live_lobby::LiveLobby;
-use crate::log_scan::{RoundStart, Scan, SitOut};
+use crate::log_scan::{RoundStart, Scan};
 use crate::server::{self, Host, TokenCheck, TourneyLobby, UploadInfo, UploadOutcome};
 use crate::tourneys::Tourneys;
 use crate::uploads::{self, Answer, Record, Sent, SentTourney};
-use crate::watcher::{self, Due, Queued, Timing, Tracker};
+use crate::watcher::{self, Due, Live, Queued, Timing, Tracker};
 use crate::{config, log_folder, log_scan, tourney, Store};
 
 /// The event the window listens to for `UploadStatus`.
@@ -279,12 +279,11 @@ impl Uploader {
         status
     }
 
-    /// Follows the host's sit-out in the live log (`None`: not read) and notes the AFK rounds
-    /// among `started`, its rounds. `true` when that turned AFK on or off.
-    fn note_afk(&self, sit_out: Option<Option<&SitOut>>, started: &[RoundStart]) -> bool {
+    /// Follows the lobby host's sit-out in the live log and notes the AFK rounds among its rounds
+    /// (`AfkStore::saw`). `true` when that turned AFK on or off.
+    fn note_afk(&self, live: Live<'_>) -> bool {
         self.afk.lock().unwrap().saw(
-            sit_out,
-            started,
+            live,
             SystemTime::now(),
             Duration::from_secs(config::AFK_KEEP_SECS),
         )
@@ -642,7 +641,7 @@ impl Run {
         }
         // Before any upload: a file that grew with a round started while AFK sends it. A sit-out
         // that turned AFK on or off changes the live lobby's players.
-        if uploader.note_afk(self.tracker.live_sit_out(), self.tracker.live_rounds()) {
+        if uploader.note_afk(self.tracker.live_log()) {
             if let Some(lobby) = app.try_state::<LiveLobby>() {
                 lobby.afk_changed();
             }
@@ -825,7 +824,7 @@ impl Run {
         // The live log may have grown since the poll read it: a round that started meanwhile is
         // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again).
         if self.tracker.live() == Some(due.name.as_str()) {
-            uploader.note_afk(Some(scan.sit_out.as_ref()), &scan.round_starts);
+            uploader.note_afk(Live::Read(&scan));
         }
         let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
         let prepared = Prepared {
@@ -1506,7 +1505,7 @@ Content-Length: 0
                     |_| None,
                 )
                 .unwrap();
-            uploader.note_afk(run.tracker.live_sit_out(), run.tracker.live_rounds());
+            uploader.note_afk(run.tracker.live_log());
         };
         poll(&mut run);
         // Not AFK: no header.

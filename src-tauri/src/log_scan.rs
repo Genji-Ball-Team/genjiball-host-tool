@@ -1,6 +1,6 @@
 //! What the watcher needs to know about a Workshop log file (GenjiBall-CE `docs/ranked-log.md` on
 //! `v1.3.3R`): whether it holds a ranked match, how many matches in it have ended, the players'
-//! names for the upload history, and which rounds each match has started and whether the host sits
+//! names for the upload history, and which rounds each match has started and when the host sat
 //! out (for host AFK, `afk.rs`).
 //! The server does the real parsing (the match view, #16, uses its parser in the window).
 
@@ -26,21 +26,25 @@ pub struct Scan {
     /// The tourney matches (a `TOURNEY` line after their `GBR`, log format 2), in the order they
     /// start. A match without one is a ranked match.
     pub tourneys: Vec<TourneyMatch>,
-    /// The host's sit-out in the file's last match, from its last `SIT_OUT` line. `None` when that
-    /// match has none: the host plays.
-    pub sit_out: Option<SitOut>,
+    /// The lobby host's last sit-out in each match that has one, in the order they started. Only
+    /// the file's last match can have one still going on (`SitOut::until` `None`).
+    pub sit_outs: Vec<SitOut>,
 }
 
-/// The last `SIT_OUT|time|id|on` of a match (GenjiBall-CE `docs/ranked-log.md`, "Host sit-out"):
-/// the host sits out (`on`) or plays from the next round, the round after `after_round`.
-/// `MATCH_END` ends a sit-out: `on` is false from there.
+/// The lobby host sitting out (GenjiBall-CE `docs/ranked-log.md`, "Host sit-out"): from a
+/// `SIT_OUT|time|id|1` whose `id` is the lobby host's (a `JOIN` with `host` `1`) to their
+/// `SIT_OUT ... 0` or `LEAVE`, `MATCH_END` or the next match's `GBR`, whichever comes first.
+/// Another player's `SIT_OUT` (the game's host while the lobby host is in spectator) isn't one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SitOut {
     pub match_key: String,
-    pub on: bool,
-    /// The last round the match had started at the line (`0`: none yet).
+    /// The last round the match had started at the `1` (`0`: none yet): the host sits out from
+    /// the round after.
     pub after_round: u32,
+    /// The last round the match had started where it ended: from the round after, the host plays
+    /// (or is gone). `None` while it goes on.
+    pub until: Option<u32>,
 }
 
 /// A tourney match: `TOURNEY|time|lobbyKey|roundLimit` after the `GBR` of `match_key`
@@ -74,6 +78,11 @@ impl Scan {
             }
         }
         keys
+    }
+
+    /// The sit-out still going on at the end of the file, if there is one.
+    pub fn sitting_out(&self) -> Option<&SitOut> {
+        self.sit_outs.iter().find(|s| s.until.is_none())
     }
 }
 
@@ -113,13 +122,26 @@ fn round_start(event: &str) -> Option<u32> {
     round.parse().ok()
 }
 
-/// Whether a `SIT_OUT|time|id|on` event starts a sit-out (`1`) or ends one (`0`).
-fn sit_out(event: &str) -> Option<bool> {
-    match event.strip_prefix("SIT_OUT|")?.split('|').nth(2)? {
-        "1" => Some(true),
-        "0" => Some(false),
+/// A `SIT_OUT|time|id|on` event: the player id, and whether they start sitting out (`1`) or
+/// stop (`0`).
+fn sit_out(event: &str) -> Option<(u32, bool)> {
+    let mut fields = event.strip_prefix("SIT_OUT|")?.split('|').skip(1);
+    let id = fields.next()?.parse().ok()?;
+    match fields.next()? {
+        "1" => Some((id, true)),
+        "0" => Some((id, false)),
         _ => None,
     }
+}
+
+/// The player id of a `LEAVE|time|id` event.
+fn leave(event: &str) -> Option<u32> {
+    event
+        .strip_prefix("LEAVE|")?
+        .split('|')
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 /// The event part of a line: the Workshop's `[hh:mm:ss] ` prefix stripped, if it's there.
@@ -162,15 +184,33 @@ fn last_round(found: &Scan, key: Option<&str>) -> u32 {
         .map_or(0, |r| r.round)
 }
 
+/// Ends the sit-out going on, if there is one, after the last round its match has started.
+fn end_sit_out(found: &mut Scan) {
+    let Some(key) = found.sitting_out().map(|s| s.match_key.clone()) else {
+        return;
+    };
+    let last = last_round(found, Some(&key));
+    if let Some(s) = found.sit_outs.iter_mut().find(|s| s.until.is_none()) {
+        s.until = Some(last);
+    }
+}
+
 /// What's in these lines, and the key of the match the last of them is in.
 fn read(text: &str) -> (Scan, Option<&str>) {
     let mut found = Scan::default();
     let mut current = None;
+    // The ids the current match gave the lobby host (`JOIN` with `host` `1`: a new one each time
+    // they come back), and the one sitting out.
+    let mut hosts: Vec<u32> = Vec::new();
+    let mut sitting: Option<u32> = None;
     for line in text.lines().map(event) {
         if line.starts_with("GBR|") {
             found.ranked = true;
+            // A match that stopped without `MATCH_END`: the host doesn't sit out in the next one.
+            end_sit_out(&mut found);
+            hosts.clear();
+            sitting = None;
             current = match_key(line);
-            found.sit_out = None;
             if let Some(key) = current {
                 if !found.match_keys.iter().any(|k| k == key) {
                     found.match_keys.push(key.to_string());
@@ -185,11 +225,8 @@ fn read(text: &str) -> (Scan, Option<&str>) {
             }
         } else if line.starts_with("MATCH_END|") {
             found.match_ends += 1;
-            let last = last_round(&found, current);
-            if let Some(s) = found.sit_out.as_mut().filter(|s| s.on) {
-                s.on = false;
-                s.after_round = last;
-            }
+            end_sit_out(&mut found);
+            sitting = None;
             if ended_by_rounds(line) {
                 if let Some(t) = found
                     .tourneys
@@ -200,17 +237,31 @@ fn read(text: &str) -> (Scan, Option<&str>) {
                     t.ended = true;
                 }
             }
-        } else if let Some(on) = sit_out(line) {
-            if let Some(key) = current {
-                let after_round = last_round(&found, current);
-                // A second `1` in a row (a spectator copy repeats the log) keeps the first.
-                if !(on && found.sit_out.as_ref().is_some_and(|s| s.on)) {
-                    found.sit_out = Some(SitOut {
-                        match_key: key.to_string(),
-                        on,
-                        after_round,
-                    });
+        } else if let Some((id, on)) = sit_out(line) {
+            // Only the lobby host's: while they're in spectator, the game's host is someone else.
+            if let Some(key) = current.filter(|_| hosts.contains(&id)) {
+                if !on {
+                    end_sit_out(&mut found);
+                    sitting = None;
+                } else {
+                    // A second `1` keeps the round the sit-out started after.
+                    if found.sitting_out().is_none() {
+                        let after_round = last_round(&found, current);
+                        found.sit_outs.retain(|s| s.match_key != key);
+                        found.sit_outs.push(SitOut {
+                            match_key: key.to_string(),
+                            after_round,
+                            until: None,
+                        });
+                    }
+                    sitting = Some(id);
                 }
+            }
+        } else if let Some(id) = leave(line) {
+            // The game logs no `0` for a host who leaves or moves to spectator while sitting out.
+            if sitting == Some(id) {
+                end_sit_out(&mut found);
+                sitting = None;
             }
         } else if let Some(lobby) = lobby_key(line) {
             // The first `TOURNEY` of the match counts: the game logs one, right after `GBR`.
@@ -224,10 +275,15 @@ fn read(text: &str) -> (Scan, Option<&str>) {
                 }
             }
         } else if let Some(fields) = line.strip_prefix("JOIN|") {
-            // `JOIN|time|id|name`, and maybe fields a newer game appends.
-            let name = fields.split('|').nth(2).unwrap_or_default();
+            // `JOIN|time|id|name|host`, and maybe fields a newer game appends.
+            let mut fields = fields.split('|').skip(1);
+            let id = fields.next().and_then(|id| id.parse::<u32>().ok());
+            let name = fields.next().unwrap_or_default();
             if !name.is_empty() && !found.players.iter().any(|p| p == name) {
                 found.players.push(name.to_string());
+            }
+            if let (Some(id), Some("1")) = (id, fields.next()) {
+                hosts.push(id);
             }
         }
     }
@@ -294,7 +350,7 @@ mod tests {
                 match_keys: vec!["482913507226".into()],
                 round_starts: [1, 2, 3].map(|round| start("482913507226", round)).to_vec(),
                 tourneys: vec![],
-                sit_out: None,
+                sit_outs: vec![],
             }
         );
         assert!(!scan(EXAMPLE).only_tourneys());
@@ -366,71 +422,104 @@ mod tests {
         assert!(found.round_starts.is_empty());
     }
 
-    #[test]
-    fn reads_the_host_sit_out_of_the_last_match() {
-        let sat = |on, after_round| {
-            Some(SitOut {
-                match_key: "111".into(),
-                on,
-                after_round,
-            })
-        };
-        let start = "GBR|1|2|1.3.3R|111
-ROUND_START|2|1|0,1
-ROUND_END|3|WIN|1
+    fn sat(match_key: &str, after_round: u32, until: Option<u32>) -> SitOut {
+        SitOut {
+            match_key: match_key.into(),
+            after_round,
+            until,
+        }
+    }
+
+    /// The start of a match: the host (id 1) and two others join, and round 1 is played.
+    const HOSTED: &str = "GBR|1|2|1.3.3R|111
+MATCH_START|1|workshop-island-night|Standard|0|
+JOIN|1|1|Host|1
+JOIN|1|2|Ash|
+JOIN|1|3|Kenzo|
+ROUND_START|2|1|1,2,3
+ROUND_END|3|1|1|WIN
 ";
-        assert_eq!(scan(start).sit_out, None, "plays until a `SIT_OUT`");
-        let out = format!(
-            "{start}SIT_OUT|4|0|1
-ROUND_START|5|2|1,2
-"
-        );
-        assert_eq!(scan(&out).sit_out, sat(true, 1));
+
+    #[test]
+    fn reads_the_host_sit_out() {
+        assert_eq!(scan(HOSTED).sit_outs, [], "plays until a `SIT_OUT`");
+        let out = format!("{HOSTED}SIT_OUT|4|1|1\nROUND_START|5|2|2,3\n");
+        let found = scan(&out);
+        assert_eq!(found.sit_outs, [sat("111", 1, None)]);
+        assert_eq!(found.sitting_out(), Some(&sat("111", 1, None)));
         // Another `1` keeps the round it started after.
         assert_eq!(
-            scan(&format!(
-                "{out}SIT_OUT|6|0|1
-"
-            ))
-            .sit_out,
-            sat(true, 1)
+            scan(&format!("{out}SIT_OUT|6|1|1\n")).sit_outs,
+            [sat("111", 1, None)]
         );
+        // Played again from round 3, or the match ended after round 2.
+        for end in ["SIT_OUT|6|1|0", "MATCH_END|6|TIME"] {
+            let found = scan(&format!("{out}{end}\nROUND_START|7|3|1,2,3\n"));
+            assert_eq!(found.sit_outs, [sat("111", 1, Some(2))], "{end}");
+            assert_eq!(found.sitting_out(), None);
+        }
+        // Only complete lines, and only a valid `on` and id.
+        assert_eq!(scan(&format!("{HOSTED}SIT_OUT|4|1|1")).sit_outs, []);
+        for odd in ["SIT_OUT|4|1|yes", "SIT_OUT|4||1", "SIT_OUT|4|1"] {
+            assert_eq!(scan(&format!("{HOSTED}{odd}\n")).sit_outs, [], "{odd}");
+        }
+    }
+
+    #[test]
+    fn follows_only_the_lobby_host_sit_out() {
+        // Ash (2) is the game's host while the lobby host is in spectator: not the tool's user.
+        let other = format!("{HOSTED}SIT_OUT|4|2|1\nROUND_START|5|2|1,3\n");
+        assert_eq!(scan(&other).sit_outs, []);
+        // Nor before anyone's `JOIN`, nor a `JOIN` whose `host` isn't `1`.
+        let early = "GBR|1|2|1.3.3R|111\nSIT_OUT|2|1|1\nJOIN|3|1|Host|1\n";
+        assert_eq!(scan(early).sit_outs, []);
+        let not_host =
+            "GBR|1|2|1.3.3R|111\nJOIN|1|1|Host|0\nJOIN|1|2|Ash|\nSIT_OUT|2|1|1\nSIT_OUT|2|2|1\n";
+        assert_eq!(scan(not_host).sit_outs, []);
+        // Ids are per match: the host's id in the last match isn't the host's in this one.
+        let next =
+            format!("{HOSTED}MATCH_END|4|TIME\nGBR|5|2|1.3.3R|222\nJOIN|5|1|Ash|\nSIT_OUT|6|1|1\n");
+        assert_eq!(scan(&next).sit_outs, []);
+    }
+
+    #[test]
+    fn a_sit_out_ends_when_the_host_leaves() {
+        // The host sits out from round 2, then moves to spectator after round 3: no `0` is logged.
+        let out = format!(
+            "{HOSTED}SIT_OUT|4|1|1\nROUND_START|5|2|2,3\nROUND_END|6|2|2|WIN\n\
+             ROUND_START|7|3|2,3\nROUND_END|8|3|2|WIN\nLEAVE|9|1\n"
+        );
+        assert_eq!(scan(&out).sit_outs, [sat("111", 1, Some(3))]);
+        // Someone else's `LEAVE` doesn't end it.
+        let other = format!("{HOSTED}SIT_OUT|4|1|1\nROUND_START|5|2|2,3\nLEAVE|6|2\n");
+        assert_eq!(scan(&other).sit_outs, [sat("111", 1, None)]);
+        // Ash, the game's host now, sits out: not followed. The lobby host comes back with a new
+        // id, plays round 5, and sits out again from round 6.
+        let back = format!(
+            "{out}SIT_OUT|10|2|1\nROUND_START|11|4|3\nJOIN|12|4|Host|1\n\
+             ROUND_START|13|5|3,4\nSIT_OUT|14|4|1\nROUND_START|15|6|3\n"
+        );
+        assert_eq!(scan(&back).sit_outs, [sat("111", 5, None)]);
+        // The id they had before leaving is gone: its `0` would end nothing new.
+        let back_playing = format!("{out}JOIN|12|4|Host|1\nROUND_START|13|4|2,3,4\n");
+        assert_eq!(scan(&back_playing).sit_outs, [sat("111", 1, Some(3))]);
+        assert_eq!(scan(&back_playing).sitting_out(), None);
+    }
+
+    #[test]
+    fn keeps_the_last_sit_out_of_each_match() {
+        let first = format!("{HOSTED}SIT_OUT|4|1|1\nROUND_START|5|2|2,3\n");
+        // A match that stops without `MATCH_END` ends its sit-out at the next `GBR`.
+        let text = format!(
+            "{first}GBR|6|2|1.3.3R|222\nJOIN|6|1|Host|1\nJOIN|6|2|Ash|\nROUND_START|7|1|1,2\n\
+             SIT_OUT|8|1|1\nROUND_START|9|2|2\nSIT_OUT|10|1|0\nSIT_OUT|11|1|1\n"
+        );
+        let found = scan(&text);
         assert_eq!(
-            scan(&format!(
-                "{out}SIT_OUT|6|0|0
-"
-            ))
-            .sit_out,
-            sat(false, 2)
+            found.sit_outs,
+            [sat("111", 1, Some(2)), sat("222", 2, None)]
         );
-        assert_eq!(
-            scan(&format!(
-                "{out}MATCH_END|6|TIME
-"
-            ))
-            .sit_out,
-            sat(false, 2)
-        );
-        // The next match: the host plays.
-        assert_eq!(
-            scan(&format!(
-                "{out}MATCH_END|6|TIME
-GBR|7|2|1.3.3R|222
-"
-            ))
-            .sit_out,
-            None
-        );
-        // Only complete lines, and only a valid `on`.
-        assert_eq!(scan(&format!("{start}SIT_OUT|4|0|1")).sit_out, None);
-        assert_eq!(
-            scan(&format!(
-                "{start}SIT_OUT|4|0|yes
-"
-            ))
-            .sit_out,
-            None
-        );
+        assert_eq!(found.sitting_out(), Some(&sat("222", 2, None)));
     }
 
     #[test]

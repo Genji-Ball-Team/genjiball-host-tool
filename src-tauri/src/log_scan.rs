@@ -305,6 +305,15 @@ pub fn round_starts(text: &str) -> Vec<RoundStart> {
     starts
 }
 
+/// What's in the live log `text` read right now (the host's AFK switch): `scan`, with its round
+/// starts from `round_starts`, so a round whose `ROUND_START` is being written counts.
+pub fn live_scan(text: &str) -> Scan {
+    Scan {
+        round_starts: round_starts(text),
+        ..scan(text)
+    }
+}
+
 /// Whether Overwatch would have named a Workshop log this.
 pub fn is_log_file(name: &str) -> bool {
     name.starts_with(config::LOG_FILE_PREFIX) && name.ends_with(config::LOG_FILE_SUFFIX)

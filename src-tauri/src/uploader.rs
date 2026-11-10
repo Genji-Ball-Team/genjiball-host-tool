@@ -18,7 +18,7 @@ use crate::afk::{AfkStatus, AfkStore};
 use crate::debug::{Attempt, Outcome, Recent};
 use crate::history::{self, Page, QueueSnapshot};
 use crate::live_lobby::LiveLobby;
-use crate::log_scan::{RoundStart, Scan};
+use crate::log_scan::Scan;
 use crate::server::{self, Host, TokenCheck, TourneyLobby, UploadInfo, UploadOutcome};
 use crate::tourneys::Tourneys;
 use crate::uploads::{self, Answer, Record, Sent, SentTourney};
@@ -271,9 +271,15 @@ impl Uploader {
         self.afk.lock().unwrap().status()
     }
 
-    /// The host turned AFK on or off, with `started` the rounds in the live log now (`afk.rs`).
-    pub fn set_afk(&self, on: bool, started: &[RoundStart]) -> AfkStatus {
-        let status = self.afk.lock().unwrap().set(on, started, SystemTime::now());
+    /// The host switched AFK on or off, with `live` the live log read right at the click
+    /// (`AfkStore::set`: followed first, as a poll does, then switched).
+    pub fn set_afk(&self, on: bool, live: Live<'_>) -> AfkStatus {
+        let status = self.afk.lock().unwrap().set(
+            on,
+            live,
+            SystemTime::now(),
+            Duration::from_secs(config::AFK_KEEP_SECS),
+        );
         // The window hears it from the next status too.
         self.wake();
         status
@@ -1513,8 +1519,8 @@ Content-Length: 0
         assert!(!request.contains("x-host-afk"), "{request}");
 
         // Round 2 had started when the host turned AFK on, but wasn't read yet.
-        let started = log_scan::round_starts(&before_round(3));
-        assert!(uploader.set_afk(true, &started).on);
+        let live = log_scan::live_scan(&before_round(3));
+        assert!(uploader.set_afk(true, Live::Read(&live)).on);
         fs::write(&file.path, before_round(3)).unwrap();
         poll(&mut run);
         let request = sent_request(&mut run, &uploader, &file, &before_round(3));

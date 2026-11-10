@@ -458,7 +458,8 @@ fn get_upload_history(page: usize, store: State<Store>, uploader: State<Uploader
 }
 
 /// Turns host AFK on or off: from then on, rounds that start aren't rated for the host (`afk.rs`).
-/// The live log is read now, so a round already started (even one not read yet) still counts.
+/// The live log is read now, so a round already started (even one not read yet) still counts, and
+/// a sit-out that ended in it (even one not read yet) ends where the log shows before the switch.
 #[tauri::command]
 fn set_afk(
     on: bool,
@@ -467,11 +468,15 @@ fn set_afk(
     lobby: State<LiveLobby>,
 ) -> Result<AfkStatus, String> {
     let settings = store.get();
-    let started = match settings.existing_log_folder() {
-        Some(folder) => live_round_starts(&folder.path)?,
-        None => Vec::new(),
+    let scan = match settings.existing_log_folder() {
+        Some(folder) => live_scan(&folder.path)?,
+        None => None,
     };
-    let status = uploader.set_afk(on, &started);
+    let live = match &scan {
+        Some(scan) => watcher::Live::Read(scan),
+        None => watcher::Live::Gone,
+    };
+    let status = uploader.set_afk(on, live);
     // An AFK host is left off the live lobby's players.
     lobby.afk_changed();
     Ok(status)
@@ -490,17 +495,19 @@ pub(crate) fn toggle_afk(app: &tauri::AppHandle) -> Result<AfkStatus, String> {
     Ok(status)
 }
 
-/// The rounds started in the live log (the newest in `folder`), now.
-fn live_round_starts(folder: &Path) -> Result<Vec<log_scan::RoundStart>, String> {
+/// What's in the live log (the newest in `folder`) now. `None` when there's none, or it isn't a
+/// ranked log: no match is played in it, as a poll would find (`watcher::Live::Gone`).
+fn live_scan(folder: &Path) -> Result<Option<log_scan::Scan>, String> {
     let live =
         watcher::newest_log(folder).map_err(|e| format!("Couldn't read the log folder: {e}"))?;
     let Some(path) = live else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     // Locked for a moment while the game writes it: the host clicks again.
     let bytes = std::fs::read(&path)
         .map_err(|e| format!("Couldn't read the match log ({e}). Try again"))?;
-    Ok(log_scan::round_starts(&String::from_utf8_lossy(&bytes)))
+    let scan = log_scan::live_scan(&String::from_utf8_lossy(&bytes));
+    Ok(scan.ranked.then_some(scan))
 }
 
 /// The log folder in use, if it's there.

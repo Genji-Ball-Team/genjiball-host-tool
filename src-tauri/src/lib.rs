@@ -467,16 +467,12 @@ fn set_afk(
     uploader: State<Uploader>,
     lobby: State<LiveLobby>,
 ) -> Result<AfkStatus, String> {
-    let settings = store.get();
-    let scan = match settings.existing_log_folder() {
-        Some(folder) => live_scan(&folder.path)?,
-        None => None,
-    };
-    let live = match &scan {
-        Some(scan) => watcher::Live::Read(scan),
-        None => watcher::Live::Gone,
-    };
-    let status = uploader.set_afk(on, live);
+    let folder = store.get().existing_log_folder();
+    // Read while AFK is locked: a poll that read the log before the click can't overtake it.
+    let status = uploader.set_afk(on, || match &folder {
+        Some(folder) => watcher::read_live(&folder.path),
+        None => Ok(watcher::LiveNow::Gone),
+    })?;
     // An AFK host is left off the live lobby's players.
     lobby.afk_changed();
     Ok(status)
@@ -493,21 +489,6 @@ pub(crate) fn toggle_afk(app: &tauri::AppHandle) -> Result<AfkStatus, String> {
     )?;
     log::info!("AFK {} with its hotkey", if on { "on" } else { "off" });
     Ok(status)
-}
-
-/// What's in the live log (the newest in `folder`) now. `None` when there's none, or it isn't a
-/// ranked log: no match is played in it, as a poll would find (`watcher::Live::Gone`).
-fn live_scan(folder: &Path) -> Result<Option<log_scan::Scan>, String> {
-    let live =
-        watcher::newest_log(folder).map_err(|e| format!("Couldn't read the log folder: {e}"))?;
-    let Some(path) = live else {
-        return Ok(None);
-    };
-    // Locked for a moment while the game writes it: the host clicks again.
-    let bytes = std::fs::read(&path)
-        .map_err(|e| format!("Couldn't read the match log ({e}). Try again"))?;
-    let scan = log_scan::live_scan(&String::from_utf8_lossy(&bytes));
-    Ok(scan.ranked.then_some(scan))
 }
 
 /// The log folder in use, if it's there.

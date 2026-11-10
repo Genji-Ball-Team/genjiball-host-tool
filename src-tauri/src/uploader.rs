@@ -22,7 +22,7 @@ use crate::log_scan::Scan;
 use crate::server::{self, Host, TokenCheck, TourneyLobby, UploadInfo, UploadOutcome};
 use crate::tourneys::Tourneys;
 use crate::uploads::{self, Answer, Record, Sent, SentTourney};
-use crate::watcher::{self, Due, Live, LiveNow, LogAt, Queued, Timing, Tracker};
+use crate::watcher::{self, Due, Live, LiveNow, Observed, Queued, Seen, Timing, Tracker};
 use crate::{config, log_folder, log_scan, tourney, Store};
 
 /// The event the window listens to for `UploadStatus`.
@@ -273,10 +273,13 @@ impl Uploader {
 
     /// The host switched AFK on or off, with `read` reading the live log right at the click
     /// (`watcher::read_live`; `AfkStore::set`: followed first, as a poll does, then switched).
-    /// `read` runs while AFK is locked, so the click's read is newer than any poll's followed
-    /// before it, and a poll that read the log before it but comes after is too old to count
-    /// (`AfkStore::saw`). Nothing else is locked meanwhile, and it reads one file. A read that
-    /// fails changes nothing.
+    /// `read` runs while AFK is locked, and the click's observation number is taken once it's
+    /// read, still locked: every observation applied before had its number before that, and
+    /// every one that began before the read was done (and so may have found the log as it was
+    /// before) has a lower one, so it changes nothing if it comes after (`AfkStore::saw`). One
+    /// that begins after has a higher number, and finds the log at least as the click did.
+    /// Nothing else is locked meanwhile, and it reads one file, at most `MAX_UPLOAD_BYTES` of it.
+    /// A read that fails changes nothing.
     pub fn set_afk(
         &self,
         on: bool,
@@ -285,9 +288,13 @@ impl Uploader {
         let status = {
             let mut afk = self.afk.lock().unwrap();
             let live = read()?;
+            let seen = Seen::next();
             afk.set(
                 on,
-                live.live(),
+                Observed {
+                    seen,
+                    live: live.live(),
+                },
                 SystemTime::now(),
                 Duration::from_secs(config::AFK_KEEP_SECS),
             )
@@ -299,7 +306,7 @@ impl Uploader {
 
     /// Follows the lobby host's sit-out in the live log and notes the AFK rounds among its rounds
     /// (`AfkStore::saw`). `true` when that turned AFK on or off.
-    fn note_afk(&self, live: Live<'_>) -> bool {
+    fn note_afk(&self, live: Observed<'_>) -> bool {
         self.afk.lock().unwrap().saw(
             live,
             SystemTime::now(),
@@ -830,6 +837,15 @@ impl Run {
     /// writing the next one), and what's read from them. An error when it can't be read. A file
     /// over `MAX_UPLOAD_BYTES` is read only up to the limit (`watcher::read_capped`).
     fn prepare(&self, uploader: &Uploader, due: &Due) -> Result<(Vec<u8>, Prepared), String> {
+        // An observation of the live log only while the file is still the newest one, checked
+        // after its number is taken: a newer file the game started since the poll (the host
+        // moved to spectator) and the host's click may have followed already makes this one old.
+        let seen = Seen::next();
+        let live = self.tracker.live() == Some(due.name.as_str())
+            && watcher::newest_log(self.tracker.folder())
+                .ok()
+                .flatten()
+                .is_some_and(|newest| newest.file_name() == Some(due.name.as_ref()));
         let (mut bytes, len) = watcher::read_capped(&due.path)
             .map_err(|e| format!("Couldn't read {}: {e}", due.name))?;
         bytes.truncate(log_scan::complete_lines(&bytes).len());
@@ -841,15 +857,17 @@ impl Run {
         let scan = log_scan::scan(&String::from_utf8_lossy(&bytes));
         // The live log may have grown since the poll read it: a round that started meanwhile is
         // in what's sent, so it must be in `X-Host-Afk` too (the file may not grow again). Not a
-        // file too large to send: only its start is read. Older than the host's click read: it
-        // changes nothing (`AfkStore::saw`).
-        if self.tracker.live() == Some(due.name.as_str()) && len <= config::MAX_UPLOAD_BYTES {
-            let at = LogAt {
-                folder: self.tracker.folder(),
-                name: &due.name,
-                len: bytes.len() as u64,
-            };
-            uploader.note_afk(Live::Read(&scan, at));
+        // file too large to send: only its start is read. Begun before the host's click was
+        // read: it changes nothing (`AfkStore::saw`).
+        if live && len <= config::MAX_UPLOAD_BYTES {
+            uploader.note_afk(Observed {
+                seen,
+                live: if scan.ranked {
+                    Live::Read(&scan)
+                } else {
+                    Live::Unread
+                },
+            });
         }
         let host_afk = uploader.afk.lock().unwrap().header(&scan.match_keys);
         let prepared = Prepared {
@@ -1619,6 +1637,47 @@ ROUND_START|8|3|1,2
         let afk = uploader.afk();
         assert!(!afk.on);
         assert_eq!(afk.latest.unwrap().rounds, [2]);
+    }
+
+    #[test]
+    fn an_older_named_or_shorter_live_log_is_still_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        fs::create_dir(&logs).unwrap();
+        let uploader = Uploader::new(dir.path().join("uploads.json"));
+        let mut run = Run::default();
+        let poll = |run: &mut Run| {
+            run.tracker
+                .poll(
+                    &logs,
+                    Instant::now(),
+                    SystemTime::now(),
+                    SystemTime::UNIX_EPOCH,
+                    |_| None,
+                )
+                .unwrap();
+            uploader.note_afk(run.tracker.live_log())
+        };
+        // A future-dated file with the host sitting out is the live log.
+        let future = logs.join("Log-2027-01-01-00-00-00.txt");
+        fs::write(&future, format!("{SAT}ROUND_END|6|2|2|WIN\n")).unwrap();
+        poll(&mut run);
+        assert!(uploader.afk().sit_out);
+        // It's gone, and the newest is an older-named, shorter file showing the sit-out's end.
+        fs::remove_file(&future).unwrap();
+        let played = "GBR|1|2|1.3.3R|222\nJOIN|1|1|Host|1\nJOIN|1|2|Ash|\nSIT_OUT|7|1|0\n";
+        assert!(played.len() < SAT.len());
+        fs::write(logs.join("Log-2026-11-10-20-00-00.txt"), played).unwrap();
+        assert!(poll(&mut run));
+        assert!(!uploader.afk().on);
+        // The same file shortened in place (a shorter copy written over it): followed too.
+        fs::write(&future, format!("{SAT}ROUND_END|6|2|2|WIN\n")).unwrap();
+        poll(&mut run);
+        assert!(uploader.afk().sit_out);
+        fs::write(&future, played).unwrap();
+        assert!(poll(&mut run));
+        assert!(!uploader.afk().on);
+        assert_eq!(uploader.afk().latest.unwrap().rounds, [2]);
     }
 
     #[test]

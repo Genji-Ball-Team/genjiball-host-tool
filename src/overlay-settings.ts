@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { el, node } from "./dom";
 import { toast } from "./toast";
+import { gbButton, type GbButton } from "./ui";
 
 /**
  * Settings → Overlay (#49, #55): the overlay's switch, its widgets, look and hotkeys, and the
@@ -134,10 +135,14 @@ function widgetGroups(container: HTMLElement, on: string[], stream: boolean): vo
     const box = node("fieldset");
     box.append(node("legend", group));
     for (const widget of view!.widgets.filter((w) => w.group === group)) {
-      const label = node("label", "", "check");
-      label.title = widget.help;
+      const field = node("gb-field");
+      field.label = widget.label;
+      field.title = widget.help;
       const input = node("input");
       input.type = "checkbox";
+      const help = node("small", widget.help);
+      help.id = `${stream ? "stream" : "overlay"}-widget-${widget.key}-help`;
+      input.setAttribute("aria-describedby", help.id);
       input.checked = on.includes(widget.key);
       input.addEventListener("change", () => {
         const checked = input.checked;
@@ -147,8 +152,8 @@ function widgetGroups(container: HTMLElement, on: string[], stream: boolean): vo
           return stream ? { streamWidgets: map } : { widgets: map };
         });
       });
-      label.append(input, node("span", widget.label), node("small", widget.help));
-      box.append(label);
+      field.append(input, help);
+      box.append(field);
     }
     container.append(box);
   }
@@ -183,8 +188,8 @@ function hotkeyInputs(): void {
       input.value = keys;
       void save((current) => ({ hotkeys: hotkeysWith(current, hotkey.action, keys) }), keys ? `${hotkey.label}: ${keys}` : `${hotkey.label}: none`);
     });
-    const reset = node("button", "Default", "quiet");
-    reset.type = "button";
+    const reset = gbButton("Default");
+    reset.setAttribute("aria-label", `${hotkey.label}: back to ${hotkey.default}`);
     // Kept in the grid when hidden, so the rows stay lined up.
     reset.style.visibility = hotkey.keys === hotkey.default ? "hidden" : "";
     reset.addEventListener("click", () => {
@@ -211,7 +216,7 @@ export function renderOverlaySettings(next: OverlayView): void {
 function render(v: OverlayView): void {
   el<HTMLInputElement>("overlay-on").checked = v.on;
   el("overlay-layout-actions").hidden = !v.on;
-  const edit = el<HTMLButtonElement>("overlay-edit");
+  const edit = el<GbButton>("overlay-edit");
   edit.textContent = v.editing ? "Done editing" : "Edit layout";
   el("overlay-reset").hidden = Object.keys(v.settings.layout ?? {}).length === 0;
   widgetGroups(el("overlay-widgets"), v.widgetsOn, false);
@@ -226,7 +231,7 @@ function render(v: OverlayView): void {
   el<HTMLInputElement>("stream-on").checked = v.stream;
   el("stream-settings").hidden = !v.stream;
   el("stream-url").textContent = v.streamUrl ?? "Not served";
-  el<HTMLButtonElement>("stream-copy").hidden = !v.streamUrl;
+  el<GbButton>("stream-copy").hidden = !v.streamUrl;
   const streamError = el("stream-error");
   streamError.hidden = !v.streamError;
   streamError.textContent = v.streamError ?? "";

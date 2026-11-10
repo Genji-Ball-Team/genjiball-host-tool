@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { errorText, node } from "./dom";
 import { readLog, type LogView, type MatchView, type PlayerView, type Reason, type RoundView } from "./match-model";
+import { gbChip } from "./ui";
 
 /**
  * The match view (#16): a log's matches laid out like the site's match page (genjiball-ranked
@@ -239,10 +240,9 @@ function problems(m: MatchView): HTMLElement {
   return details;
 }
 
-function chip(label: string, kind: string, title = ""): HTMLElement {
-  const found = node("span", label, `chip ${kind}`);
-  if (title) found.title = title;
-  return found;
+/** The library's chip: "live" and "bad" in the warning colour, "plain" grey. */
+function chip(label: string, kind: "live" | "bad" | "plain", title = ""): HTMLElement {
+  return gbChip(label, `chip ${kind === "plain" ? "" : "down"}`.trim(), title);
 }
 
 function list(className: string, items: HTMLElement[]): HTMLUListElement {

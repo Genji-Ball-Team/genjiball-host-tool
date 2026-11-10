@@ -8,6 +8,7 @@ import { el, node } from "./dom";
 import { flash } from "./home-view";
 import { watchLog, type LogWatch } from "./match-view";
 import { tourneyLabel } from "./tourneys-view";
+import { gbButton, type GbButton } from "./ui";
 import { answerRegions, describeAnswer, describeQueued, describeUploads, onSite, type HistoryEntry, type HistoryPage, type UploadStatus } from "./uploads-model";
 import { markView } from "./views";
 
@@ -63,9 +64,8 @@ function span(text: string, className: string): HTMLSpanElement {
   return node("span", text, className);
 }
 
-function button(text: string, action: () => Promise<void>): HTMLButtonElement {
-  const found = node("button", text, "quiet");
-  found.type = "button";
+function button(text: string, action: () => Promise<void>): GbButton {
+  const found = gbButton(text);
   found.addEventListener("click", () => {
     el("uploads-error").hidden = true;
     void context().busy(action, showUploadsError);
@@ -109,10 +109,9 @@ function historyItem(entry: HistoryEntry): HTMLLIElement {
 const shownMatches = new Map<string, { box: HTMLElement; watch: LogWatch }>();
 
 /** "Show match": the file's matches as the server will read them, under its line. */
-function matchToggle(entry: HistoryEntry, item: HTMLLIElement): HTMLButtonElement {
+function matchToggle(entry: HistoryEntry, item: HTMLLIElement): GbButton {
   const open = shownMatches.has(entry.file);
-  const toggle = node("button", open ? "Hide match" : "Show match", "quiet");
-  toggle.type = "button";
+  const toggle = gbButton(open ? "Hide match" : "Show match");
   toggle.setAttribute("aria-expanded", String(open));
   toggle.addEventListener("click", () => {
     const shown = shownMatches.get(entry.file);
@@ -125,7 +124,7 @@ function matchToggle(entry: HistoryEntry, item: HTMLLIElement): HTMLButtonElemen
     }
     const next = historyItem(entry);
     item.replaceWith(next);
-    next.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
+    next.querySelector<HTMLElement>("gb-button[aria-expanded]")?.focus();
   });
   return toggle;
 }

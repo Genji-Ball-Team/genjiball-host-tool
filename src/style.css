@@ -1,20 +1,12 @@
-:root {
-  /* genjiball.us's palette, the same as the ranked site */
-  --bg: #090b10; --panel: #0e1117; --raised: #151922; --line: #1d222b; --border: #252a34;
-  --fg: #eef1f7; --soft: #b4bbc7; --muted: #858d9a; --faint: #5d6573; --good: #67d49a; --bad: #ef6b6b;
-  --gold: #f3cf6b;
-  --titlebar: 2.25rem;
-  color-scheme: dark;
-}
-* { box-sizing: border-box; }
+/* The window's own styles, on top of the UI library's tokens and base.css (imported first, in
+   main.ts). Colours, radii and type come from the library; what it has no component for stays here. */
+:root { --titlebar: 2.25rem; --mono: ui-monospace, Consolas, monospace; }
 [hidden] { display: none !important; }
 html, body { height: 100%; overscroll-behavior: none; }
 body {
-  margin: 0; overflow: hidden;
+  min-height: 0; overflow: hidden;
   /* An app, not a page (#36): text is selected only in fields and in values worth copying. */
   user-select: none; -webkit-user-select: none; cursor: default;
-  background: var(--bg); color: var(--fg);
-  font: 400 .9rem/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
 }
 
 /* The app shell (#33): the sidebar, then one view that fills the rest. Only a view's body scrolls. */
@@ -22,19 +14,22 @@ body {
 .sidebar { display: flex; flex-direction: column; min-height: 0; padding: .6rem .6rem .75rem; background: var(--panel); border-right: 1px solid var(--line); }
 .nav { position: relative; display: flex; flex-direction: column; gap: .15rem; }
 /* The marker of the view shown: one bar that slides between the buttons (views.ts moves it). */
-.nav-marker { position: absolute; top: 0; left: -.6rem; width: 3px; padding: .35rem 0; background-clip: content-box; border-radius: 0 2px 2px 0; background-color: var(--good); }
+.nav-marker { position: absolute; top: 0; left: -.6rem; width: 3px; padding: .35rem 0; background-clip: content-box; border-radius: 0 2px 2px 0; background-color: var(--green); }
 .nav-marker.ready { transition: transform .2s cubic-bezier(.3, .7, .2, 1), height .2s; }
 .nav button {
   position: relative; display: flex; align-items: center; gap: .65rem; width: 100%; padding: .45rem .55rem;
-  border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-weight: 500; text-align: left;
+  border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-weight: 500; text-align: left; cursor: pointer;
 }
 .nav button:hover { background: var(--raised); color: var(--fg); }
 .nav button[aria-current="page"] { background: var(--raised); color: var(--fg); }
-.nav svg { flex: none; width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+/* The library's icon style: a 1.75 outline over a faint fill. The view shown has a green icon. */
+.nav svg, .nav gb-icon { flex: none; width: 1.25rem; height: 1.25rem; font-size: 1.25rem; }
+.nav svg { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.nav svg .fill { fill: currentColor; fill-opacity: .22; stroke: none; }
+.nav button[aria-current="page"] :is(svg, gb-icon) { color: var(--green); }
 /* Something on that view needs the host. */
-.nav .dot { position: absolute; left: 1.55rem; top: .4rem; width: .45rem; height: .45rem; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 2px var(--panel); }
+.nav .dot { position: absolute; left: 1.6rem; top: .35rem; width: .45rem; height: .45rem; border-radius: 50%; background: var(--down); box-shadow: 0 0 0 2px var(--panel); }
 .sidebar-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: auto; padding: 0 .5rem; font-size: .8rem; }
-.sidebar-foot .tag { margin-left: 0; }
 
 main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .banners:not(:has(> :not([hidden]))) { display: none; }
@@ -42,9 +37,8 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .view-head { padding: 1.1rem 1.5rem .8rem; border-bottom: 1px solid var(--line); }
 .view-head p { margin: .3rem 0 0; }
-.view-head .muted { font-size: .85rem; max-width: 40rem; }
+.view-head .muted { font-size: var(--compact-size); max-width: 40rem; }
 .head-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.head-row button { padding: .2rem .65rem; font-size: .8rem; }
 .view-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 1.5rem 1.5rem; }
 .view-body > :first-child { margin-top: 1rem; }
 .view-body > * { max-width: 44rem; }
@@ -54,16 +48,18 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .titlebar { display: flex; align-items: center; gap: .6rem; height: var(--titlebar); padding-left: .75rem; background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: .5rem; min-width: 0; font-size: .8rem; font-weight: 600; color: var(--soft); }
 .brand-mark { flex: none; width: 1.1rem; height: 1.1rem; }
+.brand-mark circle { fill: var(--green); }
+.brand-mark path { fill: none; stroke: var(--bg); }
 .brand-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.titlebar .tag { margin-left: 0; font-size: .7rem; }
-.connection { --tone: var(--good); display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.connection { --tone: var(--green); display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--muted); font-size: var(--small-size); white-space: nowrap; }
 .connection[data-tone="neutral"] { --tone: var(--muted); }
 .connection[data-tone="warn"] { --tone: var(--gold); }
-.connection[data-tone="bad"] { --tone: var(--bad); }
+.connection[data-tone="bad"] { --tone: var(--down); }
 .connection i { flex: none; width: .45rem; height: .45rem; border-radius: 50%; background: var(--tone); }
 .window-controls { display: flex; align-self: stretch; margin-left: auto; }
-.window-controls button { display: grid; place-items: center; width: 2.9rem; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--soft); }
+.window-controls button { display: grid; place-items: center; width: 2.9rem; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--soft); cursor: pointer; }
 .window-controls button:hover { background: var(--raised); color: var(--fg); }
+/* Windows' own close red, as on every window's frame. */
 .window-controls .close:hover { background: #c42b1c; color: #fff; }
 .window-controls svg { width: .65rem; height: .65rem; fill: none; stroke: currentColor; stroke-width: 1; }
 .window-controls button:focus-visible { outline-offset: -2px; }
@@ -80,7 +76,8 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .brand-name { display: none; }
   .banners { padding-inline: 1rem; }
   .view-head, .view-foot { padding-inline: 1rem; }
-  .view-body { padding-inline: 1rem; }
+  .view-body, #settings-tabs > .pane { padding-inline: 1rem; }
+  #settings-tabs > .gb-tabs-list { padding-inline: 1rem; }
 }
 
 /* Short window: headers take less of it. */
@@ -90,25 +87,25 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .banner { padding-block: .4rem; }
 }
 
-h1 { margin: 0; font-size: 1.2rem; font-weight: 650; line-height: 1.25; }
+/* The window is dense: smaller headings than the library's page headings. */
+h1 { font-size: 1.2rem; font-weight: 650; line-height: 1.25; }
 h2 { margin: 0 0 .6rem; font-size: .95rem; font-weight: 600; color: var(--fg); }
+h3 { font-size: .9rem; font-weight: 600; }
 .group { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .view-body > .group:first-child, .view-body > [hidden]:first-child + .group,
 .pane > .group:first-child, .pane > [hidden]:first-child + .group { margin-top: 1rem; padding-top: 0; border-top: 0; }
-h2 label { display: inline; margin: 0; color: inherit; font-size: inherit; }
 
-/* Settings (#35): its panes, as tabs under the view's title. */
-.panes { display: flex; gap: .25rem; margin: .7rem 0 -.8rem; overflow-x: auto; scrollbar-width: none; }
-.panes button {
-  flex: none;
-  padding: .35rem .7rem .55rem; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
-  background: transparent; color: var(--muted); font-weight: 500;
-}
-.panes button:hover { color: var(--fg); }
-.panes button[aria-current="page"] { color: var(--fg); border-bottom-color: var(--good); }
+/* Settings (#35): its panes, as the library's tabs under the view's title. Only a pane scrolls. */
+#view-settings .view-head { padding-bottom: .5rem; border-bottom: 0; }
+#settings-tabs { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#settings-tabs > .gb-tabs-list { flex: none; margin: 0; padding: 4px 1.5rem 8px; border-bottom: 1px solid var(--line); }
+#settings-tabs > .pane { flex: 1; min-height: 0; margin-block-start: 0; overflow: auto; overscroll-behavior: contain; padding: 0 1.5rem 1.5rem; }
+#settings-tabs > .pane:focus-visible { outline-offset: -2px; border-radius: 0; }
+#settings-tabs > .pane > * { max-width: 44rem; }
+#settings-tabs > .pane > :first-child { margin-top: 1rem; }
 
 /* A one-line hint; its full text opens under it. */
-details.hint { margin-top: .4rem; color: var(--muted); font-size: .85rem; }
+details.hint { margin-top: .4rem; color: var(--muted); font-size: var(--compact-size); }
 details.hint > summary { width: auto; list-style: none; color: inherit; font-size: inherit; }
 details.hint > summary::-webkit-details-marker { display: none; }
 details.hint .more { margin-left: .2rem; color: var(--soft); text-decoration: underline dotted; text-underline-offset: .2em; }
@@ -116,75 +113,76 @@ details.hint[open] .more { display: none; }
 details.hint p { margin: .3rem 0 0; max-width: 40rem; }
 
 .lede { color: var(--soft); margin: 0; max-width: 36rem; }
-.note { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
+.note { color: var(--muted); font-size: var(--compact-size); margin: .5rem 0 0; }
 .muted { color: var(--muted); }
-.good { color: var(--good); }
-.bad { color: var(--bad); }
-.banner { margin: 0 0 .5rem; padding: .6rem .8rem; border-left: 3px solid var(--bad); background: #1c1012; }
-.path { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
+.soft { color: var(--soft); }
+.good { color: var(--green); }
+.bad { color: var(--down); }
+.warn { color: var(--gold); }
+.banner { margin: 0 0 .5rem; padding: .6rem .8rem; border-left: 3px solid var(--down); border-radius: 0 var(--r) var(--r) 0; background: color-mix(in srgb, var(--down) 10%, var(--panel)); }
+.path { margin: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--compact-size); }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.5rem; margin: 0 0 1rem; }
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
-.status { margin-left: .5rem; font-size: .85rem; }
-.tag {
-  margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--muted); border-radius: 3px;
-  color: var(--soft); font-size: .75rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
-}
+.status { margin-left: .5rem; font-size: var(--compact-size); }
 #host-trust-note { margin: -.5rem 0 1rem; }
 
-.tag.afk { align-self: center; border-color: var(--bad); color: var(--bad); }
+/* Chips (the library's gb-chip) in a colour: grey unless one of these. */
+gb-chip { vertical-align: .1em; }
+gb-chip.down { --chip: var(--down); }
+gb-chip.gold { --chip: var(--gold); }
+gb-chip.green { --chip: var(--green); }
+#afk-tag { align-self: center; }
 
-label { display: block; color: var(--soft); font-size: .85rem; margin-bottom: .35rem; }
-.row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.row { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; margin-top: .75rem; }
 form .row { margin-top: 0; }
-input {
-  flex: 1 1 16rem; min-width: 0; padding: .45rem .65rem;
-  border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--fg); font: inherit;
-}
-select {
-  padding: .3rem .5rem; border: 1px solid var(--border); border-radius: 4px;
-  background: var(--panel); color: var(--fg); font: inherit;
-}
-dt label { display: inline; margin: 0; color: inherit; font-size: inherit; }
-label.check { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; color: var(--fg); font-size: inherit; cursor: pointer; }
-label.check input { flex: none; width: 1rem; height: 1rem; margin: 0; padding: 0; accent-color: var(--good); }
+.row > gb-field { flex: 1 1 16rem; min-width: 0; }
+.row > gb-field.short { flex: 0 1 12rem; }
+.row > gb-field.port { flex: 0 0 7rem; }
 #lobby-state { margin: 0 0 .75rem; }
 #lobby-form-state { margin: .5rem 0 0; }
 #upload-region strong { font-weight: 650; }
 input, textarea, .path, pre, .events, .selectable { user-select: text; -webkit-user-select: text; }
 .path, pre, .events { cursor: text; }
-/* Focus shows for keys only, on everything that takes it. */
+/* Focus shows for keys only (base.css draws it), on everything that takes it. */
 :focus { outline: none; }
-:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
-.nav button:focus-visible, .panes button:focus-visible { outline-offset: -2px; }
-button {
-  padding: .45rem .9rem; border: 1px solid var(--good); border-radius: 4px;
-  background: var(--good); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer;
-}
-button.quiet { background: transparent; border-color: var(--border); color: var(--soft); font-weight: 500; }
-button.quiet:hover { border-color: var(--muted); color: var(--fg); }
-button:disabled { opacity: .55; cursor: default; }
+.nav button:focus-visible { outline-offset: -2px; }
+
+/* A field whose label is the group's heading: the label is there for screen readers only. */
+gb-field.bare > .gb-field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+gb-field.bare > :is(input, select), gb-field.bare > select + .gb-field-mark { grid-row: 1; }
+/* A checkbox field on its own line. */
+.group > gb-field:has(> [type="checkbox"]) { margin-top: .75rem; }
+.group > gb-field:has(> [type="checkbox"]):first-child { margin-top: 0; }
+gb-field.dry-run { margin-top: 1rem; }
+
+/* Buttons are the library's gb-button. Rows of small actions get a compact size, as before. */
+gb-button { flex: none; }
+:is(.head-row, .uploads, .problems, .hotkeys, .tourneys .row, .notice, .pager) gb-button::part(button),
+gb-button.compact::part(button) { block-size: 28px; padding-inline: 10px; font-size: .78rem; }
+gb-button.big::part(button) { block-size: 44px; padding-inline: 1.4rem; font-size: 1rem; }
+/* A text link that does something in the window. */
+gb-button.link { vertical-align: baseline; }
+gb-button.link::part(button) { block-size: auto; padding: 0; background: none; color: var(--soft); font-size: .8rem; font-weight: 500; text-decoration: underline; text-underline-offset: .2em; }
+gb-button.link:hover::part(button) { color: var(--fg); }
 
 details { margin-top: 1.25rem; }
-summary { cursor: pointer; color: var(--muted); font-size: .85rem; width: max-content; }
+summary { cursor: pointer; color: var(--muted); font-size: var(--compact-size); width: max-content; }
 summary:hover { color: var(--fg); }
 details form { margin-top: .75rem; }
 
-#ranked-code-state { margin: .75rem 0 0; }
 .uploads { list-style: none; margin: .5rem 0 0; padding: 0; }
 .uploads:empty { display: none; }
 .uploads li {
   display: grid; grid-template-columns: 1fr max-content; gap: .1rem 1rem;
-  padding: .5rem 0; border-top: 1px solid var(--line); font-size: .85rem;
+  padding: .5rem 0; border-top: 1px solid var(--line); font-size: var(--compact-size);
 }
 .uploads li:first-child { border-top: 0; }
 /* The file and its time on one line; players, status and buttons below. */
 .uploads li > :nth-child(n+3) { grid-column: 1 / -1; }
-.uploads .row { margin-top: .35rem; }
-.uploads button { padding: .2rem .65rem; font-size: .8rem; }
-.soft { color: var(--soft); }
-.pager { align-items: center; font-size: .85rem; }
+.uploads .row { align-items: center; margin-top: .35rem; }
+.pager { align-items: center; font-size: var(--compact-size); }
 
 /* Tourneys (#8, #9, #10): one block per assigned lobby. */
 .tourneys { list-style: none; margin: .5rem 0 0; padding: 0; }
@@ -192,66 +190,59 @@ details form { margin-top: .75rem; }
 .tourneys > li { padding: .75rem 0; border-top: 1px solid var(--line); font-size: .9rem; }
 .tourneys > li:first-child { border-top: 0; }
 .tourneys p { margin: .35rem 0 0; }
-.tourneys .headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .6rem; }
-.tourneys .headline .tag { margin-left: 0; }
-.tourneys .tag.live { border-color: var(--bad); color: var(--bad); }
+.tourneys .headline { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .6rem; }
 .tourneys .row { align-items: center; margin-top: .5rem; }
-.tourneys .row button { padding: .3rem .75rem; font-size: .85rem; }
 .tourneys .shot { margin-top: .5rem; padding: .5rem 0 .25rem .9rem; border-left: 2px solid var(--line); }
 .shot-preview {
   display: flex; align-items: center; justify-content: center; min-height: 6rem; padding: .5rem;
-  background: var(--panel); border: 1px dashed var(--border); border-radius: 4px;
+  background: var(--panel); border: 1px dashed var(--border); border-radius: var(--r);
 }
 .shot-preview img { display: block; max-width: 100%; max-height: 16rem; object-fit: contain; }
 
+/* Advanced → Timing: a field per tunable, its unit and default beside it. */
 .tunable { margin-top: 1rem; }
 .tunable:first-child { margin-top: 0; }
 .tunable .row { align-items: center; margin-top: 0; }
-.tunable input { flex: 0 0 7rem; }
+.tunable .row > gb-field { flex: 0 0 7rem; }
+/* The label runs on over the unit beside the field, as it did. */
+.tunable .gb-field-label { white-space: nowrap; overflow: visible; }
+.tunable .row:has(gb-field) { align-items: end; }
+.tunable .row > span { padding-bottom: .5rem; }
 .tunable .note { margin-top: .25rem; }
 #advanced-state { margin: .75rem 0 0; }
 #advanced-form > .row { margin-top: 1rem; }
 
 /* Dry run and the debug panel (Advanced → Debug). */
-label.check.dry-run { margin: 1rem 0 0; }
-#debug-panel h3 { margin: 1rem 0 .25rem; font-size: .85rem; font-weight: 600; color: var(--soft); }
+#debug-panel h3 { margin: 1rem 0 .25rem; font-size: var(--compact-size); font-weight: 600; color: var(--soft); }
 #debug-panel .note { margin-top: .25rem; }
-.debug-list { margin: 0; padding-left: 1.25rem; font-size: .85rem; overflow-wrap: anywhere; }
+.debug-list { margin: 0; padding-left: 1.25rem; font-size: var(--compact-size); overflow-wrap: anywhere; }
 .debug-list:empty, .events:empty { display: none; }
 pre.raw {
   margin: .35rem 0 0; padding: .4rem .6rem; max-height: 14rem; overflow: auto;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
-  font: .75rem/1.45 ui-monospace, Consolas, monospace; color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  font: .75rem/1.45 var(--mono); color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .events {
   margin: .35rem 0 0; padding: .4rem .6rem; max-height: 18rem; overflow: auto; list-style: none;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
-  font: .75rem/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  font: .75rem/1.5 var(--mono); overflow-wrap: anywhere;
 }
 .events li { display: flex; gap: .6rem; }
 .events b { color: var(--fg); font-weight: 600; }
 .events span:last-child { color: var(--soft); }
 
-/* Match view (#16): the ranked site's match page (genjiball-ranked public/style.css), its colours
-   and structure: facts, the winner, standings, then players down and rounds across. */
-.warn { color: var(--gold); }
+/* Match view (#16): the ranked site's match page, its colours and structure: facts, the winner,
+   standings, then players down and rounds across. */
 .uploads .match-view { margin-top: .5rem; padding: .25rem 0 .5rem .9rem; border-left: 2px solid var(--line); }
 .match-view .match + .match { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .match-view p { margin: 0; }
 .match-view h3 { margin: 0; font-size: 1.15rem; font-weight: 650; }
-.match-view h4 { margin: 1.25rem 0 0; font-size: .75rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.match-view h4 { margin: 1.25rem 0 0; font-size: var(--small-size); font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .match-view .headline { display: flex; align-items: center; gap: .4rem .75rem; flex-wrap: wrap; }
-.match-view .chip {
-  display: inline-block; padding: .05rem .5rem .1rem; border-radius: 4px; background: var(--raised); color: var(--soft);
-  font-size: .75rem; font-weight: 650; letter-spacing: .02em; line-height: 1.4; white-space: nowrap;
-}
-.match-view .chip.bad { background: #3a1517; color: #ffb3b3; }
-.match-view .chip.good { background: #10301f; color: var(--good); }
-.match-view .chip.live { background: var(--bad); color: var(--bg); }
-.match-view .player .chip { margin-left: .15rem; font-size: .7rem; vertical-align: .1em; }
+.match-view .player gb-chip { margin-left: .25rem; }
 .match-view .facts { display: flex; flex-wrap: wrap; gap: .15rem 1.25rem; margin: .5rem 0 0; padding: 0; list-style: none; color: var(--soft); }
 .match-view .outlook { margin: .6rem 0 0; padding: 0; list-style: none; }
-.match-view .live-round { margin-top: 1rem; padding: .5rem .75rem; border-left: 3px solid var(--bad); background: var(--panel); }
+.match-view .live-round { margin-top: 1rem; padding: .5rem .75rem; border-left: 3px solid var(--down); background: var(--panel); }
 .match-view .live-round h4 { margin: 0 0 .35rem; color: var(--fg); }
 .match-view .live-round dl { margin: 0; gap: .15rem 1rem; }
 .match-view .podium { display: flex; align-items: center; gap: .9rem; margin: 1rem 0 0; }
@@ -262,7 +253,7 @@ pre.raw {
 .match-view .num { font-variant-numeric: tabular-nums; }
 .match-view .standings { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 .match-view .standings th, .match-view .standings td { padding: .4rem .5rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.match-view thead th { color: var(--muted); font-weight: 400; font-size: .75rem; }
+.match-view thead th { color: var(--muted); font-weight: 400; font-size: var(--small-size); }
 .match-view .standings .place { width: 2.5rem; text-align: left; color: var(--muted); padding-left: 0; }
 .match-view .standings .name { text-align: left; width: 100%; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; }
 .match-view td.name { font-weight: 600; }
@@ -274,11 +265,11 @@ pre.raw {
   position: sticky; left: 0; z-index: 1; background: var(--bg); text-align: left;
   max-width: 10rem; overflow: hidden; text-overflow: ellipsis; padding-left: 0;
 }
-.match-view .grid .r { min-width: 2rem; padding: .4rem .15rem; color: var(--muted); font-size: .85rem; }
+.match-view .grid .r { min-width: 2rem; padding: .4rem .15rem; color: var(--muted); font-size: var(--compact-size); }
 .match-view .grid td.r.first { color: var(--bg); font-weight: 700; }
-.match-view .grid td.r.first span { display: inline-block; min-width: 1.5rem; border-radius: 3px; background: var(--good); }
-.match-view .grid td.r.left { color: var(--faint); }
-.match-view .grid .r.unrated { color: var(--faint); background: repeating-linear-gradient(135deg, transparent 0 4px, #ffffff06 4px 8px); }
+.match-view .grid td.r.first span { display: inline-block; min-width: 1.5rem; border-radius: var(--r-chip); background: var(--green); }
+.match-view .grid td.r.left { color: var(--control-border); }
+.match-view .grid .r.unrated { color: var(--control-border); background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--fg) 3%, transparent) 4px 8px); }
 .match-view .grid thead th.r.unrated { text-decoration: line-through; }
 .match-view .note { margin-top: .75rem; }
 .match-view .problems { margin-top: .5rem; }
@@ -287,58 +278,47 @@ pre.raw {
 /* Home (#34). The status card is the one loud thing: its edge and dot follow the state. */
 #home, #setup { margin-top: 1.25rem; }
 #home > * + * { margin-top: 1rem; }
-.status-card { --tone: var(--good); padding: .9rem 1rem 1rem; border: 1px solid var(--line); border-left: 3px solid var(--tone); border-radius: 4px; background: var(--panel); }
+.status-card { --tone: var(--green); padding: .9rem 1rem 1rem; border: 1px solid var(--line); border-left: 3px solid var(--tone); border-radius: var(--r); background: var(--panel); }
 .status-card[data-tone="neutral"] { --tone: var(--muted); }
 .status-card[data-tone="warn"] { --tone: var(--gold); }
-.status-card[data-tone="bad"] { --tone: var(--bad); }
+.status-card[data-tone="bad"] { --tone: var(--down); }
 .status-line { display: flex; align-items: center; gap: .55rem; margin: 0; font-size: 1.1rem; }
 .status-line b { font-weight: 650; }
 .status-dot { flex: none; width: .6rem; height: .6rem; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent); }
-.status-card > .muted { margin: .15rem 0 0 1.15rem; font-size: .85rem; }
-.facts { margin: .8rem 0 0; gap: .25rem 1.25rem; font-size: .85rem; }
+.status-card > .muted { margin: .15rem 0 0 1.15rem; font-size: var(--compact-size); }
+.facts { margin: .8rem 0 0; gap: .25rem 1.25rem; font-size: var(--compact-size); }
 .facts .status { margin-left: .35rem; }
-.facts .tag { margin-left: .2rem; }
-#home-log { font-family: ui-monospace, Consolas, monospace; font-size: .8rem; color: var(--soft); }
+#home-log { font-family: var(--mono); font-size: .8rem; color: var(--soft); }
 
 .problems { list-style: none; margin: 0; padding: 0; }
 .problems:empty { display: none; }
-.problems li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .75rem; border-left: 3px solid var(--bad); background: #1c1012; font-size: .85rem; }
+.problems li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .75rem; border-left: 3px solid var(--down); border-radius: 0 var(--r) var(--r) 0; background: color-mix(in srgb, var(--down) 10%, var(--panel)); font-size: var(--compact-size); }
 .problems li + li { margin-top: .35rem; }
-.problems button { flex: none; padding: .2rem .65rem; font-size: .8rem; }
 
 .home-code { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
 .home-code > div { flex: 1 1 12rem; min-width: 0; }
 .home-code details.hint { margin-top: 0; }
-#ranked-code-state { margin: 0 0 .2rem; font-size: .85rem; }
-button.big { padding: .7rem 1.4rem; font-size: 1rem; }
+#ranked-code-state { margin: 0 0 .2rem; font-size: var(--compact-size); }
+/* While the code is built the button shows the library's spinner, at full strength. */
+#ranked-code-copy[busy]::part(button) { opacity: 1; cursor: progress; }
 
 .switches { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
-.switch-card { padding: .7rem .9rem .8rem; border: 1px solid var(--line); border-radius: 4px; }
-.switch-card h2 { margin: 0; }
-.switch-card p { margin: .35rem 0 0; font-size: .85rem; }
+.switch-card { padding: .7rem .9rem .8rem; border: 1px solid var(--line); border-radius: var(--r); }
+.switch-card p { margin: .35rem 0 0; font-size: var(--compact-size); }
 .switch-card .status { margin-left: 0; }
-.switch-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
-/* AFK on: hard to miss, here and in the sidebar. */
-#afk.on { border-color: #4a2125; background: #1c1012; }
-#afk.on h2 { color: var(--bad); }
-
-/* A switch: a button (role="switch", aria-checked) or a checkbox. */
-.switch {
-  position: relative; flex: none; width: 2.5rem; height: 1.4rem; margin: 0; padding: 0;
-  border: 1px solid var(--border); border-radius: 999px; background: var(--raised); cursor: pointer; appearance: none;
-}
-.switch::after { content: ""; position: absolute; top: .15rem; left: .15rem; width: 1rem; height: 1rem; border-radius: 50%; background: var(--muted); transition: transform .15s, background-color .15s; }
-.switch[aria-checked="true"], .switch:checked { border-color: var(--good); background: #10301f; }
-.switch[aria-checked="true"]::after, .switch:checked::after { transform: translateX(1.1rem); background: var(--good); }
-#afk-toggle[aria-checked="true"] { border-color: var(--bad); background: #3a1517; }
-#afk-toggle[aria-checked="true"]::after { background: var(--bad); }
-input.switch:focus-visible { outline: 2px solid var(--good); outline-offset: 2px; }
+/* A switch card's head: its name as a heading, a chip after it, the library's switch on the right. */
+.switch-card gb-field.switch-field { grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: .5rem; }
+.switch-card gb-field.switch-field > .gb-field-label { grid-area: 1 / 1; color: var(--fg); font-size: .95rem; font-weight: 600; }
+.switch-card gb-field.switch-field > [role="switch"], .switch-card gb-field.switch-field > [role="switch"] + .gb-field-mark { grid-area: 1 / 3; }
+.switch-card gb-field.switch-field > gb-chip { grid-area: 1 / 2; justify-self: start; }
+/* AFK on: hard to miss, here and in the title bar. */
+#afk-toggle:checked { background: var(--down); border-color: var(--down); }
+#afk.on { border-color: color-mix(in srgb, var(--down) 35%, var(--line)); background: color-mix(in srgb, var(--down) 8%, var(--bg)); }
+#afk.on gb-field.switch-field > .gb-field-label { color: var(--down); }
 
 .last-upload h2 { margin: 0; }
-#home-last { display: flex; flex-wrap: wrap; gap: .1rem 1rem; margin: .35rem 0 0; font-size: .85rem; }
+#home-last { display: flex; flex-wrap: wrap; gap: .1rem 1rem; margin: .35rem 0 0; font-size: var(--compact-size); }
 #home-last .path { flex: 1 1 100%; }
-button.link { padding: 0; border: 0; background: none; color: var(--soft); font-weight: 500; font-size: .8rem; text-decoration: underline; text-underline-offset: .2em; }
-button.link:hover { color: var(--fg); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* First start: the setup. A real sequence, so numbered. */
@@ -347,27 +327,23 @@ button.link:hover { color: var(--fg); }
 .steps { margin: 1.25rem 0 0; padding: 0; list-style: none; counter-reset: step; }
 .steps li { display: flex; align-items: center; gap: .9rem; padding: .75rem 0; border-top: 1px solid var(--line); counter-increment: step; }
 .steps li::before { content: counter(step); flex: none; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border: 1px solid var(--border); border-radius: 50%; color: var(--soft); font-size: .8rem; font-weight: 600; }
-.steps li.done::before { content: "✓"; border-color: var(--good); color: var(--good); }
+.steps li.done::before { content: "✓"; border-color: var(--green); color: var(--green); }
 .steps li > div { flex: 1; min-width: 0; }
 .steps b { display: block; font-weight: 600; }
-.steps .muted { font-size: .85rem; }
+.steps .muted { font-size: var(--compact-size); }
 
-/* Toasts and the update notification (#36): bottom right, over the view. */
-.corner { position: fixed; right: 1rem; bottom: 1rem; z-index: 10; display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; width: min(22rem, calc(100vw - 2rem)); pointer-events: none; }
-.corner > * { pointer-events: auto; }
-.toasts { display: flex; flex-direction: column; align-items: flex-end; gap: .4rem; width: 100%; }
-.toasts:empty { display: none; }
-.toast, .notice {
-  display: flex; flex-direction: column; gap: .15rem; width: 100%; padding: .6rem .8rem;
-  border: 1px solid var(--border); border-left: 3px solid var(--good); border-radius: 4px;
-  background: var(--raised); box-shadow: 0 6px 20px #0008; font-size: .85rem;
+/* Toasts (#36) are the library's gb-toast, in its gb-toast-region at the bottom right. The update
+   notification sits in the same corner, styled like one, and stays until it's answered. */
+gb-toast .toast-detail { display: block; color: var(--soft); overflow-wrap: anywhere; }
+gb-toast-region { align-items: flex-end; }
+.notice {
+  display: flex; flex-direction: column; gap: .15rem; width: min(360px, 100%); padding: .7rem .9rem;
+  border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: var(--r);
+  background: var(--raised); box-shadow: var(--shadow-float); font-size: var(--compact-size);
 }
-.toast { cursor: pointer; animation: toast-in .18s ease-out; }
-.toast b, .notice b { font-weight: 600; }
-.toast span, .notice > span { color: var(--soft); overflow-wrap: anywhere; }
-.notice .row { margin-top: .5rem; }
-.notice button { padding: .3rem .75rem; font-size: .85rem; }
-@keyframes toast-in { from { opacity: 0; transform: translateY(.5rem); } }
+.notice b { font-weight: 600; }
+.notice > span { color: var(--soft); overflow-wrap: anywhere; }
+.notice .row { align-items: center; margin-top: .5rem; }
 
 /* Scrollbars that sit in the dark theme. */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
@@ -383,52 +359,41 @@ button.link:hover { color: var(--fg); }
   100% { box-shadow: 0 0 0 .45rem transparent; }
 }
 
-/* "Copy ranked code" while the code is built: a sweep runs across it. */
-button.big[data-mode="building"] { position: relative; overflow: hidden; }
-button.big[data-mode="building"]:disabled { opacity: 1; cursor: progress; }
-button.big[data-mode="building"]::after {
-  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, #ffffff55, transparent); animation: sweep 1.1s ease-in-out infinite;
-}
-@keyframes sweep { to { transform: translateX(100%); } }
-button.big[data-mode="copied"] { background: #10301f; color: var(--good); }
-
 /* Something new just came in (an upload): lit up once. The length is FRESH_MS in main.ts. */
 .fresh { animation: fresh 2s ease-out both; }
-@keyframes fresh { from { background-color: color-mix(in srgb, var(--good) 18%, transparent); } }
+@keyframes fresh { from { background-color: color-mix(in srgb, var(--green) 18%, transparent); } }
 
-/* AFK on: a red edge round the whole window, seen even with only a corner of it showing. */
-body.afk::after { content: ""; position: fixed; inset: 0; z-index: 30; border: 2px solid var(--bad); pointer-events: none; }
+/* AFK on: an edge round the whole window, seen even with only a corner of it showing. */
+body.afk::after { content: ""; position: fixed; inset: 0; z-index: 30; border: 2px solid var(--down); pointer-events: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { animation: none !important; transition: none !important; }
 }
 
-/* Settings → Game: a data center per region. */
-.data-centers .row { align-items: center; margin-top: .4rem; }
-.data-centers .row:first-child { margin-top: 0; }
-.data-centers label { width: 8.5rem; margin: 0; }
+/* Settings → Game: a data center per region, each the library's field. */
+.data-centers { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; }
 
 /* Settings → Overlay (#49, #55). */
-#pane-overlay .switch-card h2 { display: flex; align-items: center; gap: .5rem; }
-#pane-overlay .switch-card .tag { margin-left: 0; border-color: var(--gold); color: var(--gold); font-weight: 500; }
 #pane-overlay .switch-card + details.hint { margin-top: .6rem; }
-#pane-overlay h3 { margin: 1.1rem 0 .4rem; font-size: .9rem; font-weight: 600; }
+#pane-overlay h3 { margin: 1.1rem 0 .4rem; }
 .widget-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .75rem 1.5rem; }
-.widget-groups fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.widget-groups fieldset { display: grid; gap: .45rem; margin: 0; padding: 0; border: 0; min-width: 0; }
 .widget-groups legend { padding: 0; margin-bottom: .35rem; color: var(--muted); font-size: .8rem; }
-.widget-groups label.check { display: grid; grid-template-columns: 1rem 1fr; gap: 0 .5rem; margin-bottom: .45rem; }
-.widget-groups label.check small { grid-column: 2; color: var(--muted); font-size: .78rem; line-height: 1.35; }
+.widget-groups gb-field { row-gap: 0; }
+.widget-groups gb-field > small { grid-area: 2 / 2; color: var(--muted); font-size: .78rem; line-height: 1.35; }
+/* The look's sliders and the hotkey boxes: no library component, so on its tokens by hand. */
 .ranges { display: grid; grid-template-columns: 5rem minmax(8rem, 16rem) 3rem; align-items: center; gap: .4rem .75rem; margin-bottom: .9rem; }
-.ranges label { margin: 0; }
-.ranges input[type="range"] { width: 100%; padding: 0; accent-color: var(--good); }
-.ranges output { color: var(--soft); font-variant-numeric: tabular-nums; }
+.ranges label { font-size: var(--compact-size); color: var(--soft); }
+.ranges input[type="range"] { width: 100%; margin: 0; accent-color: var(--green); }
+.ranges output { color: var(--soft); }
 .hotkeys { display: grid; grid-template-columns: minmax(9rem, max-content) 10rem auto; align-items: center; gap: .4rem .75rem; justify-content: start; }
-.hotkeys label { margin: 0; }
-.hotkeys input.hotkey { width: 10rem; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; caret-color: transparent; }
-.hotkeys input.hotkey:focus { border-color: var(--good); }
-.hotkeys button { padding: .2rem .65rem; font-size: .8rem; }
+.hotkeys label { font-size: var(--compact-size); color: var(--soft); }
+.hotkeys input.hotkey {
+  width: 10rem; height: 32px; padding: 0 10px; border: 1px solid var(--control-border); border-radius: var(--r);
+  background: var(--raised); color: var(--fg); font-size: var(--compact-size); text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; caret-color: transparent;
+}
+.hotkeys input.hotkey:hover { border-color: var(--muted); }
+.hotkeys input.hotkey:focus { border-color: var(--green); }
 #stream-settings { margin-top: .5rem; }
 #stream-settings .row { align-items: center; }
-#stream-port-form label { margin: 0; }
-#stream-port { flex: none; width: 7rem; }
+#stream-settings .row:has(gb-field) { align-items: end; }

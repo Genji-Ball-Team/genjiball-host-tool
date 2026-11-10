@@ -17,7 +17,10 @@ describe("the sidebar", () => {
     localStorage.clear();
     document.body.innerHTML = [
       ...VIEWS.map((v) => `<button id="nav-${v}" title="${v}"><i id="nav-${v}-dot" hidden></i></button><section id="view-${v}"></section>`),
-      ...PANES.map((p) => `<button id="pane-${p}-tab"></button><div id="pane-${p}"></div>`),
+      `<gb-tabs id="settings-tabs" label="Settings">`,
+      ...PANES.map((p) => `<button id="pane-${p}-tab"></button>`),
+      ...PANES.map((p) => `<div id="pane-${p}"></div>`),
+      `</gb-tabs>`,
     ].join("");
   });
 
@@ -50,9 +53,23 @@ describe("the sidebar", () => {
     expect(document.getElementById("pane-account")?.hidden).toBe(true);
     expect(localStorage.getItem("settingsPane")).toBe("game");
 
+    expect(document.getElementById("pane-game-tab")?.getAttribute("aria-selected")).toBe("true");
+    expect(document.getElementById("pane-account-tab")?.getAttribute("aria-selected")).toBe("false");
+
     document.getElementById("pane-lobby-tab")?.click();
     expect(document.getElementById("pane-lobby")?.hidden).toBe(false);
     expect(document.getElementById("pane-game")?.hidden).toBe(true);
+    expect(localStorage.getItem("settingsPane")).toBe("lobby");
+
+    // The arrow keys move between the panes too, and the pane is kept.
+    document.getElementById("pane-lobby-tab")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.getElementById("pane-overlay")?.hidden).toBe(false);
+    expect(document.getElementById("pane-lobby")?.hidden).toBe(true);
+    expect(localStorage.getItem("settingsPane")).toBe("overlay");
+
+    // A change inside a pane (a select, a checkbox) doesn't switch panes.
+    document.getElementById("pane-overlay")?.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(localStorage.getItem("settingsPane")).toBe("overlay");
   });
 
   it("says when a view needs the host, in its dot and its name", () => {

@@ -1,22 +1,18 @@
 /**
  * Toasts (#36): short-lived messages ("Saved", "Copied") in a corner of the window, instead of a
- * status line in the page. Errors stay next to the setting they belong to.
+ * status line in the page. Errors stay next to the setting they belong to; one with no setting to
+ * stay by (a failed copy) is an error toast, which stays until it's closed. They're the UI library's
+ * `<gb-toast>`s, in the page's `<gb-toast-region>`.
  */
-import { el, node } from "./dom";
+import { node } from "./dom";
+import "./ui";
 
-/** How long a toast stays, in milliseconds; one with a detail stays longer. */
-const TOAST_MS = 3000;
-const TOAST_DETAIL_MS = 6000;
-
-export function toast(text: string, detail = ""): void {
-  const item = node("div", "", "toast");
+export function toast(text: string, detail = "", kind: "success" | "error" = "success"): void {
+  const item = document.createElement("gb-toast");
+  if (kind === "error") item.kind = kind;
   item.append(node("b", text));
-  if (detail) item.append(node("span", detail));
-  el("toasts").append(item);
-  const remove = () => item.remove();
-  let timer = setTimeout(remove, detail ? TOAST_DETAIL_MS : TOAST_MS);
-  // Kept while the pointer is on it, so a detail can be read.
-  item.addEventListener("pointerenter", () => clearTimeout(timer));
-  item.addEventListener("pointerleave", () => (timer = setTimeout(remove, TOAST_MS)));
-  item.addEventListener("click", remove);
+  // The space keeps the two apart in what screen readers hear (`GbToast.message`).
+  if (detail) item.append(" ", node("span", detail, "toast-detail"));
+  const region = document.querySelector("gb-toast-region") ?? document.body.appendChild(document.createElement("gb-toast-region"));
+  region.append(item);
 }

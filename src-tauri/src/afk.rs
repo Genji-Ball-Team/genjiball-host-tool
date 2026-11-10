@@ -11,11 +11,19 @@
 //!
 //! The lobby host's sit-out in the game (`log_scan::SitOut`, "Host sit-out") turns it on and off
 //! too (`follow`): on when the host starts sitting out, off when the sit-out ends (they play
-//! again, leave, or the match ends) or no match is played in the live log any more (`lost`). The
-//! switch still works by hand, and what happened last wins: a sit-out only acts when it changes.
-//! AFK switched on by hand is the host's own: only the switch turns it off, whatever the game
-//! does. The switch (`AfkStore::set`) follows the live log first, as a poll does, so AFK a
-//! sit-out turned on ends where the log shows, however long ago the last poll was.
+//! again, leave, or the match ends) or no match is played in the live log any more (`lost`: no
+//! log at all, or a newest one that isn't ranked). A live log the tool can't read now, or doesn't
+//! read (too large, from before uploads started), changes nothing; one uploaded as it is (the
+//! lobby went quiet) is still followed. The switch still works by hand, and what happened last
+//! wins: a sit-out only acts when it changes. AFK switched on by hand is the host's own: only the
+//! switch turns it off, whatever the game does. The switch (`AfkStore::set`) follows the live log
+//! first, as a poll does, so AFK a sit-out turned on ends where the log shows, however long ago
+//! the last poll was.
+//!
+//! Each read carries how far into which file it got (`LogAt`), and one older than the newest read
+//! followed changes nothing (`AfkStore::saw`). The click reads the log while it holds the store,
+//! so a poll that read the log before the click (the file the game left for a new one, or less of
+//! the same one) can't undo it, whichever is applied first.
 //!
 //! A round only counts for a sit-out when the log shows the host sat out for it: past the round
 //! the sit-out started after, and up to where it ended. A sit-out that started and ended between
@@ -33,7 +41,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::log_scan::{RoundStart, SitOut};
 use crate::settings;
-use crate::watcher::Live;
+use crate::watcher::{Live, LogAt};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -161,9 +169,10 @@ impl Afk {
         true
     }
 
-    /// No match is played in the live log any more (`Live::Gone`): AFK that a sit-out turned on
-    /// ends, without noting more rounds (the log was read in full before it was uploaded). AFK
-    /// switched on or off by hand stays as it is. `true` when it ended.
+    /// No match is played in the live log any more (`Live::Gone`: no log, or a newest one that
+    /// isn't ranked): AFK that a sit-out turned on ends, without noting more rounds (none can start
+    /// in a log that isn't ranked). AFK switched on or off by hand stays as it is. `true` when it
+    /// ended.
     fn lost(&mut self) -> bool {
         if !(self.on && self.sit_out) {
             return false;
@@ -235,6 +244,12 @@ pub struct AfkStore {
     dirty: bool,
     unreadable: bool,
     error: Option<String>,
+    /// The newest read of the live log followed (folder, file, bytes; memory only). A read older
+    /// than it (a poll that read the log before the host's click, or the file before the one the
+    /// click read) changes nothing.
+    read_at: Option<(PathBuf, String, u64)>,
+    /// The rounds started in that read: they had started before anything that comes after it.
+    read_starts: Vec<RoundStart>,
 }
 
 impl AfkStore {
@@ -249,6 +264,8 @@ impl AfkStore {
             dirty: false,
             unreadable: error.is_some(),
             error,
+            read_at: None,
+            read_starts: Vec::new(),
         }
     }
 
@@ -272,14 +289,20 @@ impl AfkStore {
     /// was. Only then the switch: on, AFK is the host's own (no sit-out or lost log turns it off)
     /// from the next round start; off, the rounds started while it was on are noted already.
     /// Written at once, even over a file that couldn't be read.
+    ///
+    /// `live` must be read while the caller holds this store (`Uploader::set_afk`), so it's at
+    /// least as new as any read followed before; a poll that read the log before it is then too
+    /// old to change anything (`saw`), whichever order they come in.
     pub fn set(&mut self, on: bool, live: Live<'_>, now: SystemTime, keep: Duration) -> AfkStatus {
         self.saw(live, now, keep);
         let changed = if on {
-            let started = match live {
-                Live::Read(scan) => scan.round_starts.as_slice(),
-                Live::Unread | Live::Gone => &[],
-            };
-            self.afk.turn_on(started)
+            // Already started: the rounds in the log now, and in the newest read before it (a
+            // new file the click found empty, or not ranked yet, repeats them once it's written).
+            let mut started = self.read_starts.clone();
+            if let Live::Read(scan, _) = live {
+                started.extend(scan.round_starts.iter().cloned());
+            }
+            self.afk.turn_on(&started)
         } else {
             self.afk.turn_off()
         };
@@ -297,14 +320,23 @@ impl AfkStore {
     /// off.
     pub fn saw(&mut self, live: Live<'_>, now: SystemTime, keep: Duration) -> bool {
         let was = self.afk.on;
+        // Older than a read followed already: as if this one couldn't read the log.
+        let live = match live {
+            Live::Read(_, at) if self.is_old(&at) => Live::Unread,
+            live => live,
+        };
+        if let Live::Read(scan, at) = live {
+            self.read_at = Some((at.folder.to_path_buf(), at.name.to_string(), at.len));
+            self.read_starts.clone_from(&scan.round_starts);
+        }
         let started = match live {
-            Live::Read(scan) => scan.round_starts.as_slice(),
+            Live::Read(scan, _) => scan.round_starts.as_slice(),
             Live::Unread | Live::Gone => &[],
         };
         // Not over a file that couldn't be read: AFK stays off until the host switches it.
         let followed = !self.unreadable
             && match live {
-                Live::Read(scan) => self.afk.follow(&scan.sit_outs, started, now),
+                Live::Read(scan, _) => self.afk.follow(&scan.sit_outs, started, now),
                 Live::Unread => false,
                 Live::Gone => self.afk.lost(),
             };
@@ -313,6 +345,17 @@ impl AfkStore {
         self.dirty |= followed || saw || pruned;
         self.save();
         self.afk.on != was
+    }
+
+    /// Whether `at` is an older read of the live log than the newest one followed.
+    fn is_old(&self, at: &LogAt<'_>) -> bool {
+        self.read_at.as_ref().is_some_and(|(folder, name, len)| {
+            at.is_before(&LogAt {
+                folder,
+                name,
+                len: *len,
+            })
+        })
     }
 
     /// Writes what changed. One that fails is tried again at the next change or poll.
@@ -447,6 +490,25 @@ mod tests {
         }
     }
 
+    const FOLDER: &str = "logs";
+    const FILE: &str = "Log-2026-11-10-20-00-00.txt";
+    /// The file the game starts after `FILE` (the host moved to or from spectator).
+    const NEXT_FILE: &str = "Log-2026-11-10-20-30-00.txt";
+
+    /// A read `len` bytes into `name`.
+    fn at(name: &str, len: usize) -> LogAt<'_> {
+        LogAt {
+            folder: Path::new(FOLDER),
+            name,
+            len: len as u64,
+        }
+    }
+
+    /// `scan` read from the live log, always as far as the last read (never older).
+    fn read(scan: &Scan) -> Live<'_> {
+        Live::Read(scan, at(FILE, 0))
+    }
+
     #[test]
     fn follows_the_host_sit_out() {
         let mut afk = Afk::default();
@@ -547,22 +609,22 @@ mod tests {
         let path = dir.path().join("afk.json");
         let mut store = AfkStore::open(path.clone());
         let out = log(starts(KEY, [1, 2]), vec![sat(KEY, 1, None)]);
-        assert!(store.saw(Live::Read(&out), now(), DAY));
+        assert!(store.saw(read(&out), now(), DAY));
         assert!(store.status().sit_out);
         // A poll that couldn't read the log changes nothing, nor does reading it again.
         assert!(!store.saw(Live::Unread, now(), DAY));
         assert!(store.status().sit_out);
-        assert!(!store.saw(Live::Read(&out), now(), DAY));
+        assert!(!store.saw(read(&out), now(), DAY));
         assert!(store.status().sit_out);
 
         // Kept across a restart while the log can't be read yet, or still says so.
         let mut store = AfkStore::open(path.clone());
         assert!(store.status().sit_out);
         assert!(!store.saw(Live::Unread, now(), DAY));
-        assert!(!store.saw(Live::Read(&out), now(), DAY));
+        assert!(!store.saw(read(&out), now(), DAY));
         assert!(store.status().sit_out);
 
-        // The match stopped without `MATCH_END`, and the log was uploaded once it went quiet.
+        // The match stopped without `MATCH_END`, and the next game started a log that isn't ranked.
         assert!(store.saw(Live::Gone, now(), DAY));
         assert!(!store.status().on);
         assert_eq!(
@@ -572,14 +634,14 @@ mod tests {
         assert!(!store.saw(Live::Gone, now(), DAY));
         // The match goes on in it after all, the host still sitting out: followed again.
         let more = log(starts(KEY, [1, 2, 3]), vec![sat(KEY, 1, None)]);
-        assert!(store.saw(Live::Read(&more), now(), DAY));
+        assert!(store.saw(read(&more), now(), DAY));
         assert!(store.status().sit_out);
         assert_eq!(
             store.header(&[KEY.into()]).as_deref(),
             Some("482913507226:2,3")
         );
 
-        // A restart with no match played in the live log (no log, or it was uploaded since).
+        // A restart with no match played in the live log (no log, or a newer one that isn't ranked).
         let mut store = AfkStore::open(path.clone());
         assert!(store.status().sit_out);
         assert!(store.saw(Live::Gone, now(), DAY));
@@ -643,7 +705,7 @@ MATCH_END|31|TIME
     /// The uploader reading the live log with `text` in it.
     fn read_log(store: &mut AfkStore, text: &str) {
         let scan = log_scan::scan(text);
-        store.saw(Live::Read(&scan), now(), DAY);
+        store.saw(Live::Read(&scan, at(FILE, text.len())), now(), DAY);
     }
 
     #[test]
@@ -691,8 +753,9 @@ MATCH_END|31|TIME
 
     /// The host switching AFK with `TRANSFER`'s first `n` lines in the live log, read at the click.
     fn switch(store: &mut AfkStore, on: bool, n: usize) -> AfkStatus {
-        let scan = log_scan::live_scan(&transfer_until(n));
-        store.set(on, Live::Read(&scan), now(), DAY)
+        let text = transfer_until(n);
+        let scan = log_scan::live_scan(&text);
+        store.set(on, Live::Read(&scan, at(FILE, text.len())), now(), DAY)
     }
 
     /// Reads `TRANSFER` from line `from` to the end a line at a time, then finds the live log
@@ -815,6 +878,121 @@ MATCH_END|31|TIME
         assert_eq!(store.header(&keys).as_deref(), Some("222:2,3,4"));
     }
 
+    /// A poll's read of `TRANSFER`'s first `n` lines in the file `name`, applied now.
+    fn poll_in(store: &mut AfkStore, name: &str, n: usize) -> bool {
+        let text = transfer_until(n);
+        let scan = log_scan::scan(&text);
+        store.saw(Live::Read(&scan, at(name, text.len())), now(), DAY)
+    }
+
+    /// The host's click with `TRANSFER`'s first `n` lines in the file `name`.
+    fn click_in(store: &mut AfkStore, on: bool, name: &str, n: usize) -> AfkStatus {
+        let text = transfer_until(n);
+        let scan = log_scan::live_scan(&text);
+        store.set(on, Live::Read(&scan, at(name, text.len())), now(), DAY)
+    }
+
+    #[test]
+    fn a_poll_that_read_the_log_before_the_click_cant_overtake_it() {
+        // AFK follows the host's sit-out in match 222. The host moves to spectator: the game
+        // starts `NEXT_FILE`, repeating the match, and the host comes back and plays round 4.
+        // A poll read `FILE` (sit-out still on) just before the host switched AFK off, and
+        // applies its read after the click.
+        let keys = ["222".to_string()];
+        let sat = transfer_line("ROUND_START|24|2|2,3");
+        let polled = transfer_line("ROUND_START|26|3|2,3");
+        let played = transfer_line("ROUND_START|29|4|1,2,3");
+        let outcomes: Vec<(bool, Option<String>)> = [true, false]
+            .into_iter()
+            .map(|click_first| {
+                let dir = tempfile::tempdir().unwrap();
+                let mut store = AfkStore::open(dir.path().join("afk.json"));
+                poll_in(&mut store, FILE, sat);
+                assert!(store.status().sit_out);
+                if click_first {
+                    click_in(&mut store, false, NEXT_FILE, played);
+                    // Too old: as if it couldn't read the log. AFK doesn't come back on.
+                    assert!(!poll_in(&mut store, FILE, polled));
+                } else {
+                    poll_in(&mut store, FILE, polled);
+                    click_in(&mut store, false, NEXT_FILE, played);
+                }
+                assert!(!store.status().on, "click first: {click_first}");
+                // The next poll reads the new file: nothing more.
+                poll_in(&mut store, NEXT_FILE, TRANSFER.lines().count());
+                (store.status().on, store.header(&keys))
+            })
+            .collect();
+        assert_eq!(outcomes[0], (false, Some("222:2,3".to_string())));
+        assert_eq!(outcomes[0], outcomes[1]);
+
+        // Switched on by hand in the new file, with a poll of the old one after: still the host's,
+        // and the rounds already started in the new file aren't AFK rounds.
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = AfkStore::open(dir.path().join("afk.json"));
+        let first = transfer_line("ROUND_START|21|1|1,2,3");
+        poll_in(&mut store, FILE, first);
+        let status = click_in(&mut store, true, NEXT_FILE, first);
+        assert!(status.on && !status.sit_out);
+        assert!(!poll_in(&mut store, FILE, first));
+        assert!(store.status().on && !store.status().sit_out);
+        poll_in(&mut store, NEXT_FILE, played);
+        assert!(store.status().on && !store.status().sit_out);
+        assert_eq!(store.header(&keys).as_deref(), Some("222:2,3,4"));
+    }
+
+    #[test]
+    fn an_older_read_of_the_same_file_changes_nothing() {
+        // Read to the sit-out's end (AFK off), then a read from before it applied late.
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = AfkStore::open(dir.path().join("afk.json"));
+        poll_in(&mut store, FILE, transfer_line("ROUND_START|24|2|2,3"));
+        assert!(store.status().sit_out);
+        poll_in(&mut store, FILE, transfer_line("ROUND_START|29|4|1,2,3"));
+        assert!(!store.status().on);
+        assert!(!poll_in(
+            &mut store,
+            FILE,
+            transfer_line("ROUND_START|26|3|2,3")
+        ));
+        assert!(!store.status().on);
+        // The same read again is fine (nothing new in it).
+        assert!(!poll_in(
+            &mut store,
+            FILE,
+            transfer_line("ROUND_START|29|4|1,2,3")
+        ));
+        assert_eq!(
+            store.header(&["222".to_string()]).as_deref(),
+            Some("222:2,3")
+        );
+
+        // A read of another folder (the setting changed) is never older.
+        let text = transfer_until(transfer_line("ROUND_START|24|2|2,3"));
+        let scan = log_scan::scan(&text);
+        let other = LogAt {
+            folder: Path::new("other"),
+            name: FILE,
+            len: text.len() as u64,
+        };
+        assert!(store.saw(Live::Read(&scan, other), now(), DAY));
+        assert!(store.status().sit_out);
+    }
+
+    #[test]
+    fn switched_on_with_the_new_file_still_empty() {
+        // Round 1 of match 111 read; the host moves to spectator and switches AFK on while the
+        // new file has nothing in it yet. Once it's written, round 1 repeated isn't an AFK round.
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = AfkStore::open(dir.path().join("afk.json"));
+        poll_in(&mut store, FILE, transfer_line("ROUND_START|2|1|1,2,3"));
+        let status = store.set(true, Live::Unread, now(), DAY);
+        assert!(status.on && !status.sit_out);
+        poll_in(&mut store, NEXT_FILE, transfer_line("ROUND_START|5|2|2,3"));
+        assert!(store.status().on && !store.status().sit_out);
+        assert_eq!(store.header(&["111".to_string()]).as_deref(), Some("111:2"));
+    }
+
     #[test]
     fn forgets_old_matches() {
         let mut afk = Afk::default();
@@ -852,15 +1030,10 @@ MATCH_END|31|TIME
         let mut store = AfkStore::open(path.clone());
         assert!(
             store
-                .set(
-                    true,
-                    Live::Read(&log(starts(KEY, [1]), vec![])),
-                    now(),
-                    keep
-                )
+                .set(true, read(&log(starts(KEY, [1]), vec![])), now(), keep)
                 .on
         );
-        store.saw(Live::Read(&log(starts(KEY, [1, 2]), vec![])), now(), keep);
+        store.saw(read(&log(starts(KEY, [1, 2]), vec![])), now(), keep);
 
         let mut store = AfkStore::open(path.clone());
         assert!(store.status().on);
@@ -869,7 +1042,7 @@ MATCH_END|31|TIME
             Some("482913507226:2")
         );
         // What was seen when it was turned on is kept too.
-        store.saw(Live::Read(&log(starts(KEY, [1, 2]), vec![])), now(), keep);
+        store.saw(read(&log(starts(KEY, [1, 2]), vec![])), now(), keep);
         assert_eq!(
             store.header(&[KEY.into()]).as_deref(),
             Some("482913507226:2")
@@ -894,7 +1067,7 @@ MATCH_END|31|TIME
         assert!(!status.on);
         assert!(status.error.unwrap().contains("isn't a valid AFK record"));
         // A poll doesn't write over it.
-        store.saw(Live::Read(&log(starts(KEY, [1]), vec![])), now(), DAY);
+        store.saw(read(&log(starts(KEY, [1]), vec![])), now(), DAY);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ broken");
         // The host turning it on (or off) does.
         let status = store.set(true, Live::Gone, now(), DAY);

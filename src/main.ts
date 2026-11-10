@@ -1,3 +1,5 @@
+import "@genji-ball-team/ui/base.css";
+import "./style.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,6 +13,7 @@ import { homeFolderChanged, renderHome, setupHome } from "./home-view";
 import { renderTourneys, screenshotsDue, setupTourneys, tourneyContextChanged } from "./tourneys-view";
 import { setupTitlebar } from "./titlebar";
 import { toast } from "./toast";
+import type { GbButton } from "./ui";
 import { renderOverlaySettings, setupOverlaySettings, type OverlayView } from "./overlay-settings";
 import { closeMatchViews, renderUploads, setupUploads, showHistoryPage } from "./uploads-view";
 import { describeAnswer, describeQueued, type AfkStatus, type Host, type UploadStatus } from "./uploads-model";
@@ -192,8 +195,8 @@ function renderDataCenters(): void {
   if (!box.childElementCount) {
     box.replaceChildren(
       ...state.dataCenters.map((d) => {
-        const label = node("label", regionLabel(d.region));
-        label.htmlFor = `data-center-${d.region}`;
+        const field = node("gb-field");
+        field.label = regionLabel(d.region);
         const select = node("select");
         select.id = `data-center-${d.region}`;
         fillSelect(
@@ -213,14 +216,13 @@ function renderDataCenters(): void {
               toast(`${regionLabel(d.region)}: ${select.value === state.bestAvailable ? "the game picks the data center" : `lobbies on ${select.value}`}`);
             },
             (m) => {
-              toast(`Couldn't save the data center`, m);
+              toast(`Couldn't save the data center`, m, "error");
               renderDataCenters();
             },
           );
         });
-        const row = node("div", "", "row");
-        row.append(label, select);
-        return row;
+        field.append(select);
+        return field;
       }),
     );
   }
@@ -381,8 +383,8 @@ function renderAdvanced(): void {
     list.replaceChildren(
       ...state.advanced.map((t) => {
         const item = node("div", "", "tunable");
-        const label = node("label", t.label);
-        label.htmlFor = `tunable-${t.key}`;
+        const field = node("gb-field");
+        field.label = t.label;
         const input = node("input");
         input.id = `tunable-${t.key}`;
         input.type = "number";
@@ -390,9 +392,10 @@ function renderAdvanced(): void {
         input.max = String(t.max);
         input.step = "1";
         input.placeholder = String(t.default);
+        field.append(input);
         const row = node("div", "", "row");
-        row.append(input, node("span", `seconds (default ${t.default})`, "muted"));
-        item.append(label, row, node("p", t.help, "note"));
+        row.append(field, node("span", `seconds (default ${t.default})`, "muted"));
+        item.append(row, node("p", t.help, "note"));
         return item;
       }),
     );
@@ -424,7 +427,7 @@ function renderAfk(afk: AfkStatus): void {
   el("afk").classList.toggle("on", afk.on);
   document.body.classList.toggle("afk", afk.on);
   el("afk-tag").hidden = !afk.on;
-  el("afk-toggle").setAttribute("aria-checked", String(afk.on));
+  el<HTMLInputElement>("afk-toggle").checked = afk.on;
   const line = el("afk-state");
   const rounds = afk.latest?.rounds ?? [];
   const skipped = rounds.length ? ` Not rated for you so far: round${rounds.length === 1 ? "" : "s"} ${rounds.join(", ")} of the latest match.` : "";
@@ -579,7 +582,9 @@ let running = 0;
 
 function setButtonsDisabled(disabled: boolean): void {
   // A button marked `data-off` (a tourney code before its window) stays disabled. The sidebar stays usable.
-  document.querySelectorAll<HTMLButtonElement>("main button, #update-banner button").forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
+  document
+    .querySelectorAll<HTMLButtonElement | GbButton>("main button, main gb-button, #update-banner gb-button")
+    .forEach((b) => (b.disabled = disabled || b.dataset.off === "true"));
 }
 
 /** Runs a button's action with the buttons disabled, and shows its error next to its setting. */
@@ -848,13 +853,16 @@ function takeUncopied(): { built: RankedCode; at: number } | null {
 const COPIED_MS = 1600;
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** The ranked code button's look: at rest, building (a sweep runs across it), or just copied. */
+/** The ranked code button's look: at rest, building (the library's spinner), or just copied. */
 function setCodeButton(mode: "idle" | "building" | "copied"): void {
   clearTimeout(copiedTimer);
-  const copy = el("ranked-code-copy");
+  const copy = el<GbButton>("ranked-code-copy");
   copy.dataset.mode = mode;
-  copy.textContent = mode === "building" ? "Building the code…" : mode === "copied" ? "Copied ✓" : "Copy ranked code";
-  if (mode === "copied") copiedTimer = setTimeout(() => setCodeButton("idle"), COPIED_MS);
+  copy.busy = mode === "building";
+  if (mode === "copied") {
+    copy.flash("Copied ✓", COPIED_MS);
+    copiedTimer = setTimeout(() => setCodeButton("idle"), COPIED_MS);
+  }
 }
 
 async function copyRankedCode(): Promise<void> {
@@ -894,7 +902,7 @@ el("ranked-code-copy").addEventListener("click", () =>
   void busy(copyRankedCode, (m) => {
     setLine("ranked-code-state", m, "bad");
     // Copied with Ctrl+Shift+C from another view: the line on Home isn't in sight.
-    if (currentView() !== "home") toast("Couldn't copy the ranked code", m);
+    if (currentView() !== "home") toast("Couldn't copy the ranked code", m, "error");
   }).then(() => {
     // Failed, or a newer click took over: back at rest.
     if (el("ranked-code-copy").dataset.mode === "building") setCodeButton("idle");
@@ -912,10 +920,12 @@ el("update-later").addEventListener("click", () => {
   el("update-banner").hidden = true;
 });
 
-el("afk-toggle").addEventListener("click", () => {
+el("afk-toggle").addEventListener("change", () => {
   void busy(
-    async () => renderAfk(await invoke<AfkStatus>("set_afk", { on: !afkOn })),
+    async () => renderAfk(await invoke<AfkStatus>("set_afk", { on: el<HTMLInputElement>("afk-toggle").checked })),
     (m) => {
+      // Not saved: the switch goes back to what AFK is.
+      el<HTMLInputElement>("afk-toggle").checked = afkOn;
       const error = el("afk-error");
       error.hidden = false;
       error.textContent = m;
@@ -1025,7 +1035,7 @@ function homeFix(target: Fix): void {
         // Under the switch in Settings, and in a toast: Home has no line for it.
         (m) => {
           setLine("debug-state", m, "bad");
-          toast("Couldn't turn the dry run off", m);
+          toast("Couldn't turn the dry run off", m, "error");
         },
       );
       break;
@@ -1043,8 +1053,8 @@ el("setup-folder-choose").addEventListener("click", () => showPane("game"));
 setupDesktop({
   showView,
   copyRankedCode: () => {
-    const copy = el<HTMLButtonElement>("ranked-code-copy");
-    if (state?.hasToken && !copy.disabled) copy.click();
+    const copy = el<GbButton>("ranked-code-copy");
+    if (state?.hasToken && !copy.disabled && !copy.busy) copy.click();
   },
 });
 

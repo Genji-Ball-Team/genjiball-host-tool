@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { el, errorText, node, type Tone } from "./dom";
 import { watchLog, type LogWatch } from "./match-view";
+import { gbButton } from "./ui";
 
 /**
  * The debug panel (Settings → Advanced → Debug panel): the files waiting to upload, the latest uploads and dry
@@ -104,8 +105,7 @@ function attemptItem(attempt: Attempt, pollSecs: () => number): HTMLLIElement {
 
   const key = attemptKey(attempt);
   const shown = shownMatches.get(key);
-  const toggle = node("button", shown ? "Hide match" : "Show match", "quiet");
-  toggle.type = "button";
+  const toggle = gbButton(shown ? "Hide match" : "Show match");
   toggle.setAttribute("aria-expanded", String(Boolean(shown)));
   toggle.addEventListener("click", () => {
     const open = shownMatches.get(key);
@@ -118,7 +118,7 @@ function attemptItem(attempt: Attempt, pollSecs: () => number): HTMLLIElement {
     }
     const next = attemptItem(attempt, pollSecs);
     item.replaceWith(next);
-    next.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
+    next.querySelector<HTMLElement>("gb-button[aria-expanded]")?.focus();
   });
   const actions = node("div", "", "row");
   actions.append(toggle);

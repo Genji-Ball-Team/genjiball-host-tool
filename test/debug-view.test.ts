@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+// (debug-view.ts defines the library's custom elements when it loads.)
 import { describe, expect, it } from "vitest";
 import { describeOutcome, eventParts, prettyBody } from "../src/debug-view";
 

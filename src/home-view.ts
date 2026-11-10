@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { el, errorText, node, type Tone } from "./dom";
 import { ago, headline, matchInProgress, problems, type Fix, type HomeInput } from "./home-model";
 import { setTitlebarState } from "./titlebar";
+import { gbButton } from "./ui";
 import { markView, onViewChange } from "./views";
 
 /** Mirrors `LiveFile` in src-tauri/src/match_log.rs: what `get_live_file` returns. */
@@ -86,8 +87,7 @@ export function renderHome(): void {
       item.append(node("span", p.text));
       if (p.fix) {
         const target = p.fix;
-        const button = node("button", target.label, "quiet");
-        button.type = "button";
+        const button = gbButton(target.label);
         button.addEventListener("click", () => fix(target));
         item.append(button);
       }

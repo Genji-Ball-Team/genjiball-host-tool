@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+// (desktop.ts, through views.ts, defines the library's custom elements when it loads.)
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyBuilt, shortcut, type Keys } from "../src/desktop";
 

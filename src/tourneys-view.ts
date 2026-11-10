@@ -8,6 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { gbButton, gbChip, type GbButton } from "./ui";
 import {
   checkScreenshot,
   codeState,
@@ -80,9 +81,9 @@ function showError(message: string): void {
   error.textContent = message;
 }
 
-function button(text: string, quiet: boolean, action: () => Promise<void>, onError: (m: string) => void = showError): HTMLButtonElement {
-  const found = node("button", text, quiet ? "quiet" : "");
-  found.type = "button";
+/** A button that runs `action`: a lobby's main actions are primary, the `quiet` ones secondary. */
+function button(text: string, quiet: boolean, action: () => Promise<void>, onError: (m: string) => void = showError): GbButton {
+  const found = gbButton(text, quiet ? "secondary" : "primary");
   found.disabled = context().isBusy();
   found.addEventListener("click", () => {
     showError("");
@@ -192,9 +193,9 @@ function lobbyItem(lobby: LobbyView, now: Date): HTMLLIElement {
   const ctx = context();
   const item = node("li");
   const head = node("div", "", "headline");
-  head.append(node("b", lobby.tourney.name), node("span", lobby.label), node("span", lobby.region.toUpperCase(), "tag"));
-  if (lobby.tourney.status === "live") head.append(node("span", "Live", "tag live"));
-  if (lobby.tourney.status === "cancelled") head.append(node("span", "Cancelled", "tag"));
+  head.append(node("b", lobby.tourney.name), node("span", lobby.label), gbChip(lobby.region.toUpperCase()));
+  if (lobby.tourney.status === "live") head.append(gbChip("Live", "down"));
+  if (lobby.tourney.status === "cancelled") head.append(gbChip("Cancelled"));
   item.append(head);
 
   const facts = node("p", "", "soft");
@@ -237,7 +238,7 @@ function lobbyItem(lobby: LobbyView, now: Date): HTMLLIElement {
 }
 
 /** A button that stays disabled (`data-off`) until it's drawn again, whatever other actions do. */
-function off(target: HTMLButtonElement, isOff: boolean): void {
+function off(target: GbButton, isOff: boolean): void {
   target.dataset.off = String(isOff);
   if (isOff) target.disabled = true;
 }

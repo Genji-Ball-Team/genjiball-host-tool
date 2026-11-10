@@ -4,16 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Genji Ball Host Tool</title>
-    <link rel="stylesheet" href="/src/style.css" />
     <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
     <header class="titlebar" data-tauri-drag-region>
       <div class="brand" data-tauri-drag-region>
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" data-tauri-drag-region><circle cx="16" cy="16" r="13" fill="#67d49a" /><path d="M6 23 26 9" stroke="#090b10" stroke-width="3.5" stroke-linecap="round" /></svg>
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" data-tauri-drag-region><circle cx="16" cy="16" r="13" /><path d="M6 23 26 9" stroke-width="3.5" stroke-linecap="round" /></svg>
         <span class="brand-name" data-tauri-drag-region>Genji Ball Host Tool</span>
       </div>
-      <span class="tag afk" id="afk-tag" hidden>AFK</span>
+      <gb-chip class="down" id="afk-tag" hidden>AFK</gb-chip>
       <span class="connection" id="titlebar-state" data-tone="good" data-tauri-drag-region hidden><i aria-hidden="true"></i><span id="titlebar-state-text"></span></span>
       <div class="window-controls">
         <button type="button" id="window-minimize" aria-label="Minimise" title="Minimise"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8" /></svg></button>
@@ -26,23 +25,23 @@
         <div class="nav">
           <i class="nav-marker" id="nav-marker" aria-hidden="true"></i>
           <button type="button" id="nav-home" data-view="home" aria-controls="view-home" aria-label="Home" title="Home">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 9.5 10 4l7 5.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-5V17H4a1 1 0 0 1-1-1Z" /></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M4.5 10.5 12 4.5l7.5 6V19a1 1 0 0 1-1 1h-4v-5.5h-5V20h-4a1 1 0 0 1-1-1Z" /><path d="M4.5 10.5 12 4.5l7.5 6V19a1 1 0 0 1-1 1h-4v-5.5h-5V20h-4a1 1 0 0 1-1-1Z" /></svg>
             <span>Home</span><i class="dot" id="nav-home-dot" hidden></i>
           </button>
           <button type="button" id="nav-match" data-view="match" aria-controls="view-match" aria-label="Match" title="Match">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" /><path d="M10 6.5V10l2.5 1.5" /></svg>
+            <gb-icon name="live"></gb-icon>
             <span>Match</span>
           </button>
           <button type="button" id="nav-uploads" data-view="uploads" aria-controls="view-uploads" aria-label="Uploads" title="Uploads">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V3.5M6 7.5l4-4 4 4M4 13v3h12v-3" /></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M4.5 15v4a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-4Z" /><path d="M12 15.5V4M7.5 8.5 12 4l4.5 4.5M4.5 15v4a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-4" /></svg>
             <span>Uploads</span><i class="dot" id="nav-uploads-dot" hidden></i>
           </button>
           <button type="button" id="nav-tourneys" data-view="tourneys" aria-controls="view-tourneys" aria-label="Tourneys" title="Tourneys">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5h8v4a4 4 0 0 1-8 0ZM6 5H3.5v1.5A2.5 2.5 0 0 0 6 9M14 5h2.5v1.5A2.5 2.5 0 0 1 14 9M10 11.5V14M7 16.5h6" /></svg>
+            <gb-icon name="tourney"></gb-icon>
             <span>Tourneys</span><i class="dot" id="nav-tourneys-dot" hidden></i>
           </button>
           <button type="button" id="nav-settings" data-view="settings" aria-controls="view-settings" aria-label="Settings" title="Settings">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M4 14h12" /><circle cx="7.5" cy="6" r="2" /><circle cx="12.5" cy="14" r="2" /></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="fill" cx="9" cy="7" r="2.5" /><circle class="fill" cx="15" cy="17" r="2.5" /><path d="M4 7h2.5M11.5 7H20M4 17h8.5M17.5 17H20" /><circle cx="9" cy="7" r="2.5" /><circle cx="15" cy="17" r="2.5" /></svg>
             <span>Settings</span>
           </button>
         </div>
@@ -64,11 +63,11 @@
               <ol class="steps">
                 <li>
                   <div><b>Host token</b><span class="muted">From an admin. Kept on this PC, encrypted.</span></div>
-                  <button type="button" id="setup-token-add">Add token</button>
+                  <gb-button variant="primary" id="setup-token-add">Add token</gb-button>
                 </li>
                 <li id="setup-folder">
                   <div><b>Workshop log folder</b><span class="muted" id="setup-folder-state"></span></div>
-                  <button type="button" class="quiet" id="setup-folder-choose">Choose folder</button>
+                  <gb-button id="setup-folder-choose">Choose folder</gb-button>
                 </li>
                 <li>
                   <div><b>Log files on in the game</b><span class="muted">Overwatch options → Gameplay → General → Enable Workshop Inspector Log File.</span></div>
@@ -82,9 +81,9 @@
                 <p class="muted" id="home-detail"></p>
                 <dl class="facts">
                   <dt>Host</dt>
-                  <dd><span id="home-host"></span> <span class="tag" id="home-host-trust" hidden>Untrusted</span> <span class="status" id="home-token"></span></dd>
+                  <dd><span id="home-host"></span> <gb-chip class="down" id="home-host-trust" hidden>Untrusted</gb-chip> <span class="status" id="home-token"></span></dd>
                   <dt>Region</dt>
-                  <dd><span id="home-region"></span> <button type="button" class="link" id="home-region-change">Change</button></dd>
+                  <dd><span id="home-region"></span> <gb-button variant="ghost" class="link" id="home-region-change">Change</gb-button></dd>
                   <dt>Workshop log</dt>
                   <dd id="home-log"></dd>
                 </dl>
@@ -93,7 +92,7 @@
               <ul class="problems" id="home-problems"></ul>
 
               <div class="home-code">
-                <button type="button" class="big" id="ranked-code-copy">Copy ranked code</button>
+                <gb-button variant="primary" class="big" id="ranked-code-copy">Copy ranked code</gb-button>
                 <div>
                   <p id="ranked-code-state" role="status" hidden></p>
                   <details class="hint">
@@ -105,10 +104,7 @@
 
               <div class="switches">
                 <div class="switch-card" id="afk">
-                  <div class="switch-head">
-                    <h2>AFK</h2>
-                    <button type="button" class="switch" id="afk-toggle" role="switch" aria-checked="false" aria-describedby="afk-note"><span class="visually-hidden">AFK</span></button>
-                  </div>
+                  <gb-field class="switch-field" label="AFK"><input type="checkbox" id="afk-toggle" role="switch" aria-describedby="afk-note" /></gb-field>
                   <p class="status" id="afk-state" role="status"></p>
                   <details class="hint" id="afk-note">
                     <summary>Rounds that start while you're AFK aren't rated for you. <span class="more">More</span></summary>
@@ -118,10 +114,7 @@
                 </div>
 
                 <div class="switch-card" id="lobby">
-                  <div class="switch-head">
-                    <h2><label for="lobby-on">Live lobby</label></h2>
-                    <input type="checkbox" class="switch" id="lobby-on" role="switch" />
-                  </div>
+                  <gb-field class="switch-field" label="Live lobby"><input type="checkbox" id="lobby-on" role="switch" /></gb-field>
                   <p id="lobby-state" role="status"></p>
                   <p id="lobby-error" role="status" hidden></p>
                 </div>
@@ -130,7 +123,7 @@
               <div class="last-upload">
                 <div class="head-row">
                   <h2>Last upload</h2>
-                  <button type="button" class="link" id="home-uploads">All uploads</button>
+                  <gb-button variant="ghost" class="link" id="home-uploads">All uploads</gb-button>
                 </div>
                 <p id="home-last"></p>
               </div>
@@ -161,9 +154,9 @@
             <p class="note">Ranked matches are uploaded when they end, or when the log stops growing. A failed upload is retried automatically. Only matches played since you saved a token for this server are uploaded. Closing this window keeps the tool uploading from the tray; quit it there.</p>
           </div>
           <div class="row pager view-foot" id="uploads-pager" hidden>
-            <button type="button" class="quiet" id="uploads-newer">Newer</button>
+            <gb-button class="compact" id="uploads-newer">Newer</gb-button>
             <span class="muted" id="uploads-range"></span>
-            <button type="button" class="quiet" id="uploads-older">Older</button>
+            <gb-button class="compact" id="uploads-older">Older</gb-button>
           </div>
         </section>
 
@@ -171,7 +164,7 @@
           <header class="view-head">
             <div class="head-row">
               <h1>Tourneys</h1>
-              <button type="button" class="quiet" id="tourneys-check">Check again</button>
+              <gb-button class="compact" id="tourneys-check">Check again</gb-button>
             </div>
             <p id="tourneys-state" role="status"></p>
           </header>
@@ -184,8 +177,8 @@
               <p class="path" id="screenshot-folder"></p>
               <p class="note" id="screenshot-folder-note"></p>
               <div class="row">
-                <button type="button" id="screenshot-folder-choose">Choose folder…</button>
-                <button type="button" class="quiet" id="screenshot-folder-reset" hidden>Use the detected folder</button>
+                <gb-button id="screenshot-folder-choose">Choose folder…</gb-button>
+                <gb-button variant="ghost" id="screenshot-folder-reset" hidden>Use the detected folder</gb-button>
               </div>
               <p id="screenshot-folder-state" role="status" hidden></p>
               <p class="note">Where the tool looks for your newest screenshot of the final standings. Overwatch saves screenshots to Documents\Overwatch\ScreenShots\Overwatch.</p>
@@ -196,16 +189,15 @@
         <section class="view" id="view-settings" hidden>
           <header class="view-head">
             <h1>Settings</h1>
-            <div class="panes" aria-label="Settings">
-              <button type="button" id="pane-account-tab" aria-controls="pane-account">Account</button>
-              <button type="button" id="pane-game-tab" aria-controls="pane-game">Game</button>
-              <button type="button" id="pane-lobby-tab" aria-controls="pane-lobby">Lobby</button>
-              <button type="button" id="pane-overlay-tab" aria-controls="pane-overlay">Overlay</button>
-              <button type="button" id="pane-updates-tab" aria-controls="pane-updates">Updates</button>
-              <button type="button" id="pane-advanced-tab" aria-controls="pane-advanced">Advanced</button>
-            </div>
           </header>
-          <div class="view-body">
+          <gb-tabs class="panes" id="settings-tabs" label="Settings" selected="0">
+            <button type="button" id="pane-account-tab">Account</button>
+            <button type="button" id="pane-game-tab">Game</button>
+            <button type="button" id="pane-lobby-tab">Lobby</button>
+            <button type="button" id="pane-overlay-tab">Overlay</button>
+            <button type="button" id="pane-updates-tab">Updates</button>
+            <button type="button" id="pane-advanced-tab">Advanced</button>
+
             <div class="pane" id="pane-account">
               <div class="group" id="welcome" hidden>
                 <p class="lede">Paste the host token an admin gave you to start uploading your ranked matches.</p>
@@ -217,16 +209,15 @@
                   <dt>Server</dt>
                   <dd id="server"></dd>
                   <dt>Host</dt>
-                  <dd><span id="host"></span> <span class="tag" id="host-trust" hidden>Untrusted</span> <span class="status" id="token-status" role="status"></span></dd>
+                  <dd><span id="host"></span> <gb-chip class="down" id="host-trust" hidden>Untrusted</gb-chip> <span class="status" id="token-status" role="status"></span></dd>
                 </dl>
                 <p class="note" id="host-trust-note" hidden>An admin checks each of your matches before it counts for the ratings. Ask an admin to make you a trusted host.</p>
 
                 <form id="token-form" hidden>
-                  <label for="token">Host token</label>
                   <div class="row">
-                    <input id="token" type="password" autocomplete="off" spellcheck="false" />
-                    <button type="submit">Check and save</button>
-                    <button type="button" class="quiet" id="token-cancel" hidden>Cancel</button>
+                    <gb-field label="Host token"><input id="token" type="password" autocomplete="off" spellcheck="false" /></gb-field>
+                    <gb-button variant="primary" type="submit">Check and save</gb-button>
+                    <gb-button variant="ghost" id="token-cancel" hidden>Cancel</gb-button>
                   </div>
                   <details class="hint">
                     <summary>Checked with the server, then kept on this PC. <span class="more">More</span></summary>
@@ -235,19 +226,18 @@
                 </form>
 
                 <div class="row" id="token-actions" hidden>
-                  <button type="button" id="token-check">Check again</button>
-                  <button type="button" class="quiet" id="token-change">Change token</button>
-                  <button type="button" class="quiet" id="token-forget">Forget token</button>
+                  <gb-button id="token-check">Check again</gb-button>
+                  <gb-button id="token-change">Change token</gb-button>
+                  <gb-button id="token-forget">Forget token</gb-button>
                 </div>
               </div>
 
               <div class="group">
                 <h2>Server</h2>
                 <form id="server-form">
-                  <label for="server-url">Server URL</label>
                   <div class="row">
-                    <input id="server-url" type="text" inputmode="url" spellcheck="false" placeholder="https://…" />
-                    <button type="submit">Save</button>
+                    <gb-field label="Server URL"><input id="server-url" type="text" inputmode="url" spellcheck="false" placeholder="https://…" /></gb-field>
+                    <gb-button type="submit">Save</gb-button>
                   </div>
                   <p id="server-state" role="status" hidden></p>
                   <p class="note">Leave empty for <span id="default-server"></span>. Each server keeps its own token.</p>
@@ -257,9 +247,9 @@
 
             <div class="pane" id="pane-game" hidden>
               <div class="group">
-                <h2><label for="region">Region</label></h2>
+                <h2 aria-hidden="true">Region</h2>
                 <div class="row">
-                  <select id="region"></select>
+                  <gb-field class="bare" label="Region"><select id="region"></select></gb-field>
                   <span class="status" id="region-status" role="status"></span>
                 </div>
                 <details class="hint">
@@ -282,8 +272,8 @@
                 <p class="path" id="log-folder"></p>
                 <p class="note" id="log-folder-note"></p>
                 <div class="row">
-                  <button type="button" id="log-folder-choose">Choose folder…</button>
-                  <button type="button" class="quiet" id="log-folder-reset" hidden>Use the detected folder</button>
+                  <gb-button id="log-folder-choose">Choose folder…</gb-button>
+                  <gb-button variant="ghost" id="log-folder-reset" hidden>Use the detected folder</gb-button>
                 </div>
                 <p id="log-folder-state" role="status" hidden></p>
               </div>
@@ -291,11 +281,11 @@
 
             <div class="pane" id="pane-lobby" hidden>
               <div class="group">
-                <h2><label for="lobby-name">Lobby name</label></h2>
+                <h2 aria-hidden="true">Lobby name</h2>
                 <form id="lobby-form">
                   <div class="row">
-                    <input id="lobby-name" type="text" autocomplete="off" placeholder="Shown on the site next to your host name" />
-                    <button type="submit">Save</button>
+                    <gb-field class="bare" label="Lobby name"><input id="lobby-name" type="text" autocomplete="off" placeholder="Shown on the site next to your host name" /></gb-field>
+                    <gb-button type="submit">Save</gb-button>
                   </div>
                   <p id="lobby-form-state" role="status" hidden></p>
                 </form>
@@ -309,10 +299,7 @@
             <div class="pane" id="pane-overlay" hidden>
               <div class="group">
                 <div class="switch-card">
-                  <div class="switch-head">
-                    <h2><label for="overlay-on">Overlay over Overwatch</label> <span class="tag">Experimental</span></h2>
-                    <input type="checkbox" class="switch" id="overlay-on" role="switch" />
-                  </div>
+                  <gb-field class="switch-field" label="Overlay over Overwatch"><input type="checkbox" id="overlay-on" role="switch" /><gb-chip class="gold">Experimental</gb-chip></gb-field>
                   <p class="muted">Your upload status, the lobby's ranks and the match, drawn over the game.</p>
                 </div>
                 <details class="hint">
@@ -320,8 +307,8 @@
                   <p>The overlay is a separate see-through window that Windows draws over Overwatch. It lets every click through, never takes the focus, and only reads your Workshop logs and the ranked site, like the rest of the tool. It doesn't inject into the game, read its memory or send it keys. Play in borderless windowed: exclusive fullscreen hides other windows. Use the stream page below for OBS instead.</p>
                 </details>
                 <div class="row" id="overlay-layout-actions">
-                  <button type="button" id="overlay-edit">Edit layout</button>
-                  <button type="button" class="quiet" id="overlay-reset">Put the widgets back</button>
+                  <gb-button id="overlay-edit">Edit layout</gb-button>
+                  <gb-button variant="ghost" id="overlay-reset">Put the widgets back</gb-button>
                 </div>
                 <p id="overlay-state" role="status" hidden></p>
               </div>
@@ -341,7 +328,7 @@
                   <input type="range" id="overlay-scale" />
                   <output id="overlay-scale-value" for="overlay-scale"></output>
                 </div>
-                <label class="check"><input id="overlay-with-game" type="checkbox" /> Only while Overwatch is in front</label>
+                <gb-field label="Only while Overwatch is in front"><input id="overlay-with-game" type="checkbox" /></gb-field>
               </div>
 
               <div class="group">
@@ -356,22 +343,18 @@
 
               <div class="group">
                 <div class="switch-card">
-                  <div class="switch-head">
-                    <h2><label for="stream-on">Stream page for OBS</label></h2>
-                    <input type="checkbox" class="switch" id="stream-on" role="switch" />
-                  </div>
+                  <gb-field class="switch-field" label="Stream page for OBS"><input type="checkbox" id="stream-on" role="switch" /></gb-field>
                   <p class="muted">The same widgets as a page on this PC: add it to OBS as a browser source.</p>
                 </div>
                 <div id="stream-settings">
                   <div class="row">
                     <span class="path selectable" id="stream-url"></span>
-                    <button type="button" class="quiet" id="stream-copy">Copy</button>
+                    <gb-button class="compact" id="stream-copy">Copy</gb-button>
                   </div>
                   <p class="note bad" id="stream-error" hidden></p>
                   <form id="stream-port-form" class="row">
-                    <label for="stream-port">Port</label>
-                    <input id="stream-port" type="number" inputmode="numeric" />
-                    <button type="submit">Save</button>
+                    <gb-field class="port" label="Port"><input id="stream-port" type="number" inputmode="numeric" /></gb-field>
+                    <gb-button type="submit">Save</gb-button>
                   </form>
                   <details class="hint">
                     <summary>Only this PC can open it. <span class="more">More</span></summary>
@@ -387,7 +370,7 @@
               <div class="group">
                 <h2>Updates</h2>
                 <div class="row">
-                  <button type="button" id="update-check">Check for updates</button>
+                  <gb-button id="update-check">Check for updates</gb-button>
                   <span class="status muted" id="update-state" role="status"></span>
                 </div>
                 <details class="hint">
@@ -397,10 +380,9 @@
               </div>
 
               <div class="group" id="updates">
-                <label class="check"><input id="update-auto" type="checkbox" /> Look for new versions by itself</label>
-                <label for="update-channel">Channel</label>
+                <gb-field label="Look for new versions by itself"><input id="update-auto" type="checkbox" /></gb-field>
                 <div class="row">
-                  <select id="update-channel"></select>
+                  <gb-field class="short" label="Channel"><select id="update-channel"></select></gb-field>
                 </div>
                 <p id="updates-state" role="status" hidden></p>
                 <details class="hint">
@@ -418,8 +400,8 @@
                 <form id="advanced-form" novalidate>
                   <div id="tunables"></div>
                   <div class="row">
-                    <button type="submit">Save</button>
-                    <button type="button" class="quiet" id="advanced-reset">Use the defaults</button>
+                    <gb-button type="submit">Save</gb-button>
+                    <gb-button variant="ghost" id="advanced-reset">Use the defaults</gb-button>
                   </div>
                   <p id="advanced-state" role="status" hidden></p>
                 </form>
@@ -429,10 +411,9 @@
               <div class="group">
                 <h2>Ranked code release</h2>
                 <form id="release-form">
-                  <label for="release-tag">Genji Ball release</label>
                   <div class="row">
-                    <input id="release-tag" type="text" spellcheck="false" placeholder="Latest ranked release" />
-                    <button type="submit">Save</button>
+                    <gb-field label="Genji Ball release"><input id="release-tag" type="text" spellcheck="false" placeholder="Latest ranked release" /></gb-field>
+                    <gb-button type="submit">Save</gb-button>
                   </div>
                   <p id="release-state" role="status" hidden></p>
                 </form>
@@ -444,24 +425,23 @@
 
               <div class="group" id="debug">
                 <h2>Debug</h2>
-                <label for="log-level">Log level</label>
                 <div class="row">
-                  <select id="log-level"></select>
-                  <button type="button" class="quiet" id="log-open">Open log folder</button>
+                  <gb-field class="short" label="Log level"><select id="log-level"></select></gb-field>
+                  <gb-button id="log-open">Open log folder</gb-button>
                 </div>
                 <details class="hint">
                   <summary>How much the tool writes to its log. <span class="more">More</span></summary>
                   <p>"debug" adds every token check and each answer's status; turn it on while you look into a problem.</p>
                 </details>
                 <div class="row">
-                  <button type="button" id="diagnostics-export">Export diagnostics…</button>
+                  <gb-button id="diagnostics-export">Export diagnostics…</gb-button>
                 </div>
                 <p id="debug-state" role="status" hidden></p>
                 <details class="hint">
                   <summary>One file to send with a bug report, never your token. <span class="more">More</span></summary>
                   <p>It holds the tool's version, its settings, what was uploaded, the recent log and the names of the files in your log folder. Never your host token.</p>
                 </details>
-                <label class="check dry-run"><input id="dry-run" type="checkbox" /> Dry run: send nothing, only show what would be uploaded</label>
+                <gb-field class="dry-run" label="Dry run: send nothing, only show what would be uploaded"><input id="dry-run" type="checkbox" /></gb-field>
                 <details class="hint">
                   <summary>Logs are picked as usual, but none is sent. <span class="more">More</span></summary>
                   <p>The debug panel lists each log with what its upload would send, and "Show match" shows it as the server will read it. They're uploaded once you turn the dry run off.</p>
@@ -485,21 +465,20 @@
                 </details>
               </div>
             </div>
-          </div>
+          </gb-tabs>
         </section>
       </main>
     </div>
 
-    <div class="corner">
+    <gb-toast-region>
       <div class="notice" id="update-banner" role="status" hidden>
         <b>Update available</b>
         <span id="update-banner-text"></span>
         <div class="row">
-          <button type="button" id="update-install">Install and restart</button>
-          <button type="button" class="quiet" id="update-later">Later</button>
+          <gb-button class="compact" id="update-install">Install and restart</gb-button>
+          <gb-button variant="ghost" class="compact" id="update-later">Later</gb-button>
         </div>
       </div>
-      <div class="toasts" id="toasts" aria-live="polite"></div>
-    </div>
+    </gb-toast-region>
   </body>
 </html>

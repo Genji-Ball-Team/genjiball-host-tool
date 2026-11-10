@@ -5,6 +5,8 @@
  */
 
 import { el } from "./dom";
+import type { GbTabs } from "./ui";
+import "./ui";
 
 export const VIEWS = ["home", "match", "uploads", "tourneys", "settings"] as const;
 export type View = (typeof VIEWS)[number];
@@ -83,10 +85,11 @@ export function showView(view: View): void {
   for (const listener of listeners) listener(view);
 }
 
+/** Shows a Settings pane: the library's tabs (`#settings-tabs`) show its panel and mark its tab. */
 function choosePane(pane: Pane): void {
   if (pane === currentPane) return;
   currentPane = pane;
-  mark(PANES, pane, (p) => `pane-${p}`, (p) => `pane-${p}-tab`);
+  el<GbTabs>("settings-tabs").selected = PANES.indexOf(pane);
   store(PANE_KEY, pane);
 }
 
@@ -103,7 +106,11 @@ export function setupViews(): void {
     if (current) moveMarker(el(`nav-${current}`));
   });
   for (const v of VIEWS) el(`nav-${v}`).addEventListener("click", () => showView(v));
-  for (const p of PANES) el(`pane-${p}-tab`).addEventListener("click", () => choosePane(p));
+  // A tab picked by click or arrow key.
+  const tabs = el<GbTabs>("settings-tabs");
+  tabs.addEventListener("change", (e) => {
+    if (e.target === tabs) choosePane(PANES[tabs.selected] ?? "account");
+  });
   choosePane(savedPane(stored(PANE_KEY)));
   showView(savedView(stored(VIEW_KEY)));
 }

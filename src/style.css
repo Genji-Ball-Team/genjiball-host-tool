@@ -8,9 +8,6 @@ body {
   /* An app, not a page (#36): text is selected only in fields and in values worth copying. */
   user-select: none; -webkit-user-select: none; cursor: default;
 }
-/* gb-button's hidden status line is absolutely placed: without this it escapes a view's scrolling
-   body and makes the whole page scrollable (focus or scrollIntoView then moves the title bar away). */
-gb-button { position: relative; }
 
 /* The app shell (#33): the sidebar, then one view that fills the rest. Only a view's body scrolls. */
 .app { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); height: calc(100vh - var(--titlebar)); }
@@ -40,7 +37,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .view-head { padding: 1.1rem 1.5rem .8rem; border-bottom: 1px solid var(--line); }
 .view-head p { margin: .3rem 0 0; }
-.view-head .muted { font-size: .85rem; max-width: 40rem; }
+.view-head .muted { font-size: var(--compact-size); max-width: 40rem; }
 .head-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .view-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 1.5rem 1.5rem; }
 .view-body > :first-child { margin-top: 1rem; }
@@ -54,7 +51,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .brand-mark circle { fill: var(--green); }
 .brand-mark path { fill: none; stroke: var(--bg); }
 .brand-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.connection { --tone: var(--green); display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.connection { --tone: var(--green); display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--muted); font-size: var(--small-size); white-space: nowrap; }
 .connection[data-tone="neutral"] { --tone: var(--muted); }
 .connection[data-tone="warn"] { --tone: var(--gold); }
 .connection[data-tone="bad"] { --tone: var(--down); }
@@ -108,7 +105,7 @@ h3 { font-size: .9rem; font-weight: 600; }
 #settings-tabs > .pane > :first-child { margin-top: 1rem; }
 
 /* A one-line hint; its full text opens under it. */
-details.hint { margin-top: .4rem; color: var(--muted); font-size: .85rem; }
+details.hint { margin-top: .4rem; color: var(--muted); font-size: var(--compact-size); }
 details.hint > summary { width: auto; list-style: none; color: inherit; font-size: inherit; }
 details.hint > summary::-webkit-details-marker { display: none; }
 details.hint .more { margin-left: .2rem; color: var(--soft); text-decoration: underline dotted; text-underline-offset: .2em; }
@@ -116,19 +113,19 @@ details.hint[open] .more { display: none; }
 details.hint p { margin: .3rem 0 0; max-width: 40rem; }
 
 .lede { color: var(--soft); margin: 0; max-width: 36rem; }
-.note { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
+.note { color: var(--muted); font-size: var(--compact-size); margin: .5rem 0 0; }
 .muted { color: var(--muted); }
 .soft { color: var(--soft); }
 .good { color: var(--green); }
 .bad { color: var(--down); }
 .warn { color: var(--gold); }
 .banner { margin: 0 0 .5rem; padding: .6rem .8rem; border-left: 3px solid var(--down); border-radius: 0 var(--r) var(--r) 0; background: color-mix(in srgb, var(--down) 10%, var(--panel)); }
-.path { margin: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: .85rem; }
+.path { margin: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--compact-size); }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.5rem; margin: 0 0 1rem; }
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
-.status { margin-left: .5rem; font-size: .85rem; }
+.status { margin-left: .5rem; font-size: var(--compact-size); }
 #host-trust-note { margin: -.5rem 0 1rem; }
 
 /* Chips (the library's gb-chip) in a colour: grey unless one of these. */
@@ -171,7 +168,7 @@ gb-button.link::part(button) { block-size: auto; padding: 0; background: none; c
 gb-button.link:hover::part(button) { color: var(--fg); }
 
 details { margin-top: 1.25rem; }
-summary { cursor: pointer; color: var(--muted); font-size: .85rem; width: max-content; }
+summary { cursor: pointer; color: var(--muted); font-size: var(--compact-size); width: max-content; }
 summary:hover { color: var(--fg); }
 details form { margin-top: .75rem; }
 
@@ -179,13 +176,13 @@ details form { margin-top: .75rem; }
 .uploads:empty { display: none; }
 .uploads li {
   display: grid; grid-template-columns: 1fr max-content; gap: .1rem 1rem;
-  padding: .5rem 0; border-top: 1px solid var(--line); font-size: .85rem;
+  padding: .5rem 0; border-top: 1px solid var(--line); font-size: var(--compact-size);
 }
 .uploads li:first-child { border-top: 0; }
 /* The file and its time on one line; players, status and buttons below. */
 .uploads li > :nth-child(n+3) { grid-column: 1 / -1; }
 .uploads .row { align-items: center; margin-top: .35rem; }
-.pager { align-items: center; font-size: .85rem; }
+.pager { align-items: center; font-size: var(--compact-size); }
 
 /* Tourneys (#8, #9, #10): one block per assigned lobby. */
 .tourneys { list-style: none; margin: .5rem 0 0; padding: 0; }
@@ -216,9 +213,9 @@ details form { margin-top: .75rem; }
 #advanced-form > .row { margin-top: 1rem; }
 
 /* Dry run and the debug panel (Advanced → Debug). */
-#debug-panel h3 { margin: 1rem 0 .25rem; font-size: .85rem; font-weight: 600; color: var(--soft); }
+#debug-panel h3 { margin: 1rem 0 .25rem; font-size: var(--compact-size); font-weight: 600; color: var(--soft); }
 #debug-panel .note { margin-top: .25rem; }
-.debug-list { margin: 0; padding-left: 1.25rem; font-size: .85rem; overflow-wrap: anywhere; }
+.debug-list { margin: 0; padding-left: 1.25rem; font-size: var(--compact-size); overflow-wrap: anywhere; }
 .debug-list:empty, .events:empty { display: none; }
 pre.raw {
   margin: .35rem 0 0; padding: .4rem .6rem; max-height: 14rem; overflow: auto;
@@ -240,7 +237,7 @@ pre.raw {
 .match-view .match + .match { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .match-view p { margin: 0; }
 .match-view h3 { margin: 0; font-size: 1.15rem; font-weight: 650; }
-.match-view h4 { margin: 1.25rem 0 0; font-size: .75rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.match-view h4 { margin: 1.25rem 0 0; font-size: var(--small-size); font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .match-view .headline { display: flex; align-items: center; gap: .4rem .75rem; flex-wrap: wrap; }
 .match-view .player gb-chip { margin-left: .25rem; }
 .match-view .facts { display: flex; flex-wrap: wrap; gap: .15rem 1.25rem; margin: .5rem 0 0; padding: 0; list-style: none; color: var(--soft); }
@@ -256,7 +253,7 @@ pre.raw {
 .match-view .num { font-variant-numeric: tabular-nums; }
 .match-view .standings { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 .match-view .standings th, .match-view .standings td { padding: .4rem .5rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.match-view thead th { color: var(--muted); font-weight: 400; font-size: .75rem; }
+.match-view thead th { color: var(--muted); font-weight: 400; font-size: var(--small-size); }
 .match-view .standings .place { width: 2.5rem; text-align: left; color: var(--muted); padding-left: 0; }
 .match-view .standings .name { text-align: left; width: 100%; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; }
 .match-view td.name { font-weight: 600; }
@@ -268,7 +265,7 @@ pre.raw {
   position: sticky; left: 0; z-index: 1; background: var(--bg); text-align: left;
   max-width: 10rem; overflow: hidden; text-overflow: ellipsis; padding-left: 0;
 }
-.match-view .grid .r { min-width: 2rem; padding: .4rem .15rem; color: var(--muted); font-size: .85rem; }
+.match-view .grid .r { min-width: 2rem; padding: .4rem .15rem; color: var(--muted); font-size: var(--compact-size); }
 .match-view .grid td.r.first { color: var(--bg); font-weight: 700; }
 .match-view .grid td.r.first span { display: inline-block; min-width: 1.5rem; border-radius: var(--r-chip); background: var(--green); }
 .match-view .grid td.r.left { color: var(--control-border); }
@@ -288,26 +285,26 @@ pre.raw {
 .status-line { display: flex; align-items: center; gap: .55rem; margin: 0; font-size: 1.1rem; }
 .status-line b { font-weight: 650; }
 .status-dot { flex: none; width: .6rem; height: .6rem; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent); }
-.status-card > .muted { margin: .15rem 0 0 1.15rem; font-size: .85rem; }
-.facts { margin: .8rem 0 0; gap: .25rem 1.25rem; font-size: .85rem; }
+.status-card > .muted { margin: .15rem 0 0 1.15rem; font-size: var(--compact-size); }
+.facts { margin: .8rem 0 0; gap: .25rem 1.25rem; font-size: var(--compact-size); }
 .facts .status { margin-left: .35rem; }
 #home-log { font-family: var(--mono); font-size: .8rem; color: var(--soft); }
 
 .problems { list-style: none; margin: 0; padding: 0; }
 .problems:empty { display: none; }
-.problems li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .75rem; border-left: 3px solid var(--down); border-radius: 0 var(--r) var(--r) 0; background: color-mix(in srgb, var(--down) 10%, var(--panel)); font-size: .85rem; }
+.problems li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .75rem; border-left: 3px solid var(--down); border-radius: 0 var(--r) var(--r) 0; background: color-mix(in srgb, var(--down) 10%, var(--panel)); font-size: var(--compact-size); }
 .problems li + li { margin-top: .35rem; }
 
 .home-code { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
 .home-code > div { flex: 1 1 12rem; min-width: 0; }
 .home-code details.hint { margin-top: 0; }
-#ranked-code-state { margin: 0 0 .2rem; font-size: .85rem; }
+#ranked-code-state { margin: 0 0 .2rem; font-size: var(--compact-size); }
 /* While the code is built the button shows the library's spinner, at full strength. */
 #ranked-code-copy[busy]::part(button) { opacity: 1; cursor: progress; }
 
 .switches { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
 .switch-card { padding: .7rem .9rem .8rem; border: 1px solid var(--line); border-radius: var(--r); }
-.switch-card p { margin: .35rem 0 0; font-size: .85rem; }
+.switch-card p { margin: .35rem 0 0; font-size: var(--compact-size); }
 .switch-card .status { margin-left: 0; }
 /* A switch card's head: its name as a heading, a chip after it, the library's switch on the right. */
 .switch-card gb-field.switch-field { grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: .5rem; }
@@ -320,7 +317,7 @@ pre.raw {
 #afk.on gb-field.switch-field > .gb-field-label { color: var(--down); }
 
 .last-upload h2 { margin: 0; }
-#home-last { display: flex; flex-wrap: wrap; gap: .1rem 1rem; margin: .35rem 0 0; font-size: .85rem; }
+#home-last { display: flex; flex-wrap: wrap; gap: .1rem 1rem; margin: .35rem 0 0; font-size: var(--compact-size); }
 #home-last .path { flex: 1 1 100%; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -333,7 +330,7 @@ pre.raw {
 .steps li.done::before { content: "✓"; border-color: var(--green); color: var(--green); }
 .steps li > div { flex: 1; min-width: 0; }
 .steps b { display: block; font-weight: 600; }
-.steps .muted { font-size: .85rem; }
+.steps .muted { font-size: var(--compact-size); }
 
 /* Toasts (#36) are the library's gb-toast, in its gb-toast-region at the bottom right. The update
    notification sits in the same corner, styled like one, and stays until it's answered. */
@@ -342,7 +339,7 @@ gb-toast-region { align-items: flex-end; }
 .notice {
   display: flex; flex-direction: column; gap: .15rem; width: min(360px, 100%); padding: .7rem .9rem;
   border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: var(--r);
-  background: var(--raised); box-shadow: var(--shadow-float); font-size: .85rem;
+  background: var(--raised); box-shadow: var(--shadow-float); font-size: var(--compact-size);
 }
 .notice b { font-weight: 600; }
 .notice > span { color: var(--soft); overflow-wrap: anywhere; }
@@ -386,14 +383,14 @@ body.afk::after { content: ""; position: fixed; inset: 0; z-index: 30; border: 2
 .widget-groups gb-field > small { grid-area: 2 / 2; color: var(--muted); font-size: .78rem; line-height: 1.35; }
 /* The look's sliders and the hotkey boxes: no library component, so on its tokens by hand. */
 .ranges { display: grid; grid-template-columns: 5rem minmax(8rem, 16rem) 3rem; align-items: center; gap: .4rem .75rem; margin-bottom: .9rem; }
-.ranges label { font-size: .86rem; color: var(--soft); }
+.ranges label { font-size: var(--compact-size); color: var(--soft); }
 .ranges input[type="range"] { width: 100%; margin: 0; accent-color: var(--green); }
 .ranges output { color: var(--soft); }
 .hotkeys { display: grid; grid-template-columns: minmax(9rem, max-content) 10rem auto; align-items: center; gap: .4rem .75rem; justify-content: start; }
-.hotkeys label { font-size: .86rem; color: var(--soft); }
+.hotkeys label { font-size: var(--compact-size); color: var(--soft); }
 .hotkeys input.hotkey {
   width: 10rem; height: 32px; padding: 0 10px; border: 1px solid var(--control-border); border-radius: var(--r);
-  background: var(--raised); color: var(--fg); font-size: .86rem; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; caret-color: transparent;
+  background: var(--raised); color: var(--fg); font-size: var(--compact-size); text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; caret-color: transparent;
 }
 .hotkeys input.hotkey:hover { border-color: var(--muted); }
 .hotkeys input.hotkey:focus { border-color: var(--green); }

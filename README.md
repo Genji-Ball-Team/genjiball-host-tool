@@ -10,7 +10,7 @@ How ranked works end to end:
 
 **Status:** in use by hosts. The app checks and saves your host token, watches the log folder, uploads ranked matches from the tray as the region you host in (EU or NA), lists what it uploaded, shows the current match and each uploaded one the way the site will (and why one won't count), lets the host go AFK without their rating changing, builds the ranked code, lists the host's lobby on the site while a match is played, and for tourneys lists the lobbies the host is assigned to, builds each lobby's tourney code and uploads the verify screenshot of its final standings. An experimental overlay shows the match over the game (see the [issues](https://github.com/Genji-Ball-Team/genjiball-host-tool/issues) for what's next). Releases are built by CI (see [Install](#install)).
 
-- **Discord:** [discord.gg/sv9VVjh5pT](https://discord.gg/sv9VVjh5pT), the Genji Ball Ranked server
+- **Discord:** [discord.gg/genjiball](https://discord.gg/genjiball), the Genji Ball Ranked server
 
 ## Install
 

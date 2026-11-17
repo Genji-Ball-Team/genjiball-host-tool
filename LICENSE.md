@@ -12,7 +12,7 @@ Genji Ball Host Tool does **not** currently have an open-source license, the sam
 - Publishing your own build of the host tool.
 - Copying significant parts of the code into another project.
 
-If you want to do either of those, ask on the [Discord](https://discord.gg/sv9VVjh5pT).
+If you want to do either of those, ask on the [Discord](https://discord.gg/genjiball).
 
 ## Contributions
 

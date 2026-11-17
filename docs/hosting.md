@@ -117,7 +117,7 @@ At the top of the Uploads view. Home lists the same problems, each with a button
 | Can't read the log folder: ... | Check the folder exists and your Windows account can open it, or choose another |
 | Waiting for the Workshop log folder | Choose the log folder, or turn on the log file in Overwatch and play a game |
 
-If something else is wrong, ask in the [Discord](https://discord.gg/sv9VVjh5pT).
+If something else is wrong, ask in the [Discord](https://discord.gg/genjiball).
 
 ## Reporting a problem
 
